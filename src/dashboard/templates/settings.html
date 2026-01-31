@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="ko" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Trader v2 - 설정</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: { extend: { colors: { dark: { 800: '#1e1e2e', 900: '#11111b', 700: '#313244', 600: '#45475a' }, profit: '#34d399', loss: '#f87171' } } }
+        }
+    </script>
+    <style>
+        :root {
+            --bg-base: #0b0b14;
+            --bg-surface: #12121e;
+            --bg-elevated: #1a1a2e;
+            --border-subtle: rgba(99, 102, 241, 0.08);
+            --border-accent: rgba(99, 102, 241, 0.2);
+            --text-primary: #e2e8f0;
+            --text-secondary: #8892b0;
+            --text-muted: #5a6480;
+            --accent-blue: #6366f1;
+            --accent-cyan: #22d3ee;
+            --accent-green: #34d399;
+            --accent-red: #f87171;
+            --accent-amber: #fbbf24;
+            --accent-purple: #a78bfa;
+        }
+        * { box-sizing: border-box; }
+        body {
+            background: var(--bg-base); color: var(--text-primary);
+            font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            margin: 0; min-height: 100vh; position: relative;
+        }
+        body::before {
+            content: ''; position: fixed; inset: 0;
+            background: linear-gradient(rgba(99,102,241,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(99,102,241,0.03) 1px, transparent 1px);
+            background-size: 60px 60px; pointer-events: none; z-index: 0;
+        }
+        body::after {
+            content: ''; position: fixed; top: 0; left: 0; right: 0; height: 280px;
+            background: radial-gradient(ellipse 70% 50% at 50% 0%, rgba(99,102,241,0.06), transparent);
+            pointer-events: none; z-index: 0;
+        }
+        body > * { position: relative; z-index: 1; }
+        .mono { font-family: 'JetBrains Mono', 'SF Mono', monospace; font-feature-settings: 'tnum' on, 'lnum' on; }
+        .card {
+            background: var(--bg-surface); border: 1px solid var(--border-subtle);
+            border-radius: 16px; position: relative; overflow: hidden; backdrop-filter: blur(10px);
+        }
+        .card::before {
+            content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(99,102,241,0.15), transparent);
+        }
+        .card-header {
+            font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.12em;
+            color: var(--text-muted); padding-bottom: 14px; border-bottom: 1px solid var(--border-subtle);
+            margin-bottom: 16px; display: flex; align-items: center; gap: 8px;
+        }
+        .card-header .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-blue); box-shadow: 0 0 8px var(--accent-blue); }
+        .nav-pill {
+            padding: 7px 16px; border-radius: 10px; font-size: 0.8rem; font-weight: 500;
+            color: var(--text-muted); text-decoration: none; transition: all 0.2s cubic-bezier(0.4,0,0.2,1); border: 1px solid transparent;
+        }
+        .nav-pill:hover { color: var(--text-secondary); background: rgba(99,102,241,0.06); border-color: var(--border-subtle); }
+        .nav-pill.active { color: #fff; background: linear-gradient(135deg, var(--accent-blue), #818cf8); box-shadow: 0 2px 12px rgba(99,102,241,0.3), inset 0 1px 0 rgba(255,255,255,0.1); font-weight: 600; }
+        .status-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; vertical-align: middle; }
+        .status-dot.green { background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); animation: pulse-green 2s infinite; }
+        .status-dot.red { background: var(--accent-red); box-shadow: 0 0 8px var(--accent-red); }
+        .status-dot.yellow { background: var(--accent-amber); box-shadow: 0 0 6px var(--accent-amber); animation: pulse-amber 1.5s infinite; }
+        @keyframes pulse-green { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+        @keyframes pulse-amber { 0%,100% { opacity:1; } 50% { opacity:0.6; } }
+        ::-webkit-scrollbar { width: 5px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.15); border-radius: 10px; }
+        .config-row {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 9px 0; border-bottom: 1px solid var(--border-subtle);
+        }
+        .config-row:last-child { border-bottom: none; }
+        .config-label { color: var(--text-secondary); font-size: 0.82rem; }
+        .config-value { font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; font-weight: 500; color: var(--text-primary); }
+        .readonly-badge {
+            font-size: 0.68rem; color: var(--text-muted); background: var(--bg-elevated);
+            padding: 4px 12px; border-radius: 8px; border: 1px solid var(--border-subtle);
+            font-family: 'DM Sans', sans-serif; letter-spacing: 0.02em;
+        }
+        @keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-in { animation: fadeUp 0.45s cubic-bezier(0.16,1,0.3,1) both; }
+        .delay-1 { animation-delay: 0.06s; }
+        .delay-2 { animation-delay: 0.12s; }
+        .delay-3 { animation-delay: 0.18s; }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav style="border-bottom: 1px solid var(--border-subtle); background: rgba(11,11,20,0.85); backdrop-filter: blur(12px); position: sticky; top: 0; z-index: 50;">
+        <div style="max-width: 1280px; margin: 0 auto; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between;">
+            <div style="display: flex; align-items: center; gap: 32px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div style="width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple)); display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 10px rgba(99,102,241,0.25);">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+                    </div>
+                    <span style="font-weight: 700; font-size: 0.95rem; color: #fff;">AI Trader <span style="color: var(--text-muted); font-weight: 400;">v2</span></span>
+                </div>
+                <div style="display: flex; gap: 4px;">
+                    <a href="/" class="nav-pill" data-page="index">실시간</a>
+                    <a href="/trades" class="nav-pill" data-page="trades">거래</a>
+                    <a href="/performance" class="nav-pill" data-page="performance">성과</a>
+                    <a href="/themes" class="nav-pill" data-page="themes">테마</a>
+                    <a href="/evolution" class="nav-pill" data-page="evolution">진화</a>
+                    <a href="/settings" class="nav-pill active" data-page="settings">설정</a>
+                </div>
+            </div>
+            <div id="status-bar" style="display: flex; align-items: center; gap: 20px; font-size: 0.78rem; color: var(--text-muted);">
+                <span id="sb-status" style="display: flex; align-items: center; gap: 6px;"><span class="status-dot yellow"></span> 연결 중...</span>
+                <span id="sb-session" class="mono" style="color: var(--text-secondary); font-size: 0.75rem;">--</span>
+                <span id="sb-uptime" class="mono" style="color: var(--text-muted); font-size: 0.72rem;">--</span>
+            </div>
+        </div>
+    </nav>
+
+    <main style="max-width: 1280px; margin: 0 auto; padding: 24px;">
+        <div class="animate-in" style="display: flex; align-items: center; gap: 16px; margin-bottom: 24px;">
+            <h2 style="font-size: 1.25rem; font-weight: 700; color: #fff; margin: 0;">설정</h2>
+            <span class="readonly-badge">읽기 전용 &mdash; config/default.yml 참조</span>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+            <!-- Trading -->
+            <div class="card animate-in delay-1" style="padding: 24px;">
+                <div class="card-header">
+                    <span class="dot"></span>
+                    트레이딩 기본
+                </div>
+                <div id="cfg-trading">
+                    <div style="color: var(--text-muted); font-size: 0.85rem;">로딩 중...</div>
+                </div>
+            </div>
+
+            <!-- Risk -->
+            <div class="card animate-in delay-1" style="padding: 24px;">
+                <div class="card-header">
+                    <span class="dot" style="background: var(--accent-amber); box-shadow: 0 0 8px var(--accent-amber);"></span>
+                    리스크 관리
+                </div>
+                <div id="cfg-risk">
+                    <div style="color: var(--text-muted); font-size: 0.85rem;">로딩 중...</div>
+                </div>
+            </div>
+
+            <!-- Exit Manager -->
+            <div class="card animate-in delay-2" style="padding: 24px;">
+                <div class="card-header">
+                    <span class="dot" style="background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green);"></span>
+                    분할 익절
+                </div>
+                <div id="cfg-exit">
+                    <div style="color: var(--text-muted); font-size: 0.85rem;">로딩 중...</div>
+                </div>
+            </div>
+
+            <!-- Strategies -->
+            <div class="card animate-in delay-2" style="padding: 24px;">
+                <div class="card-header">
+                    <span class="dot" style="background: var(--accent-purple); box-shadow: 0 0 8px var(--accent-purple);"></span>
+                    전략 설정
+                </div>
+                <div id="cfg-strategies">
+                    <div style="color: var(--text-muted); font-size: 0.85rem;">로딩 중...</div>
+                </div>
+            </div>
+
+            <!-- US Market -->
+            <div class="card animate-in delay-3" style="padding: 24px; grid-column: 1 / -1;">
+                <div class="card-header">
+                    <span class="dot" style="background: var(--accent-cyan); box-shadow: 0 0 8px var(--accent-cyan);"></span>
+                    US 오버나이트 시그널
+                </div>
+                <div id="cfg-us-market">
+                    <div style="color: var(--text-muted); font-size: 0.85rem;">로딩 중...</div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/static/js/common.js"></script>
+    <script>
+        const configLabels = {
+            initial_capital: '초기 자본금', market: '시장',
+            enable_pre_market: '프리장 활성화', enable_next_market: '넥스트장 활성화',
+            buy_fee_rate: '매수 수수료율', sell_fee_rate: '매도 수수료율',
+            daily_max_loss_pct: '일일 최대 손실', daily_max_trades: '일일 최대 거래',
+            base_position_pct: '기본 포지션 비율', max_position_pct: '최대 포지션 비율',
+            max_positions: '최대 포지션 수', min_cash_reserve_pct: '최소 현금 보유',
+            default_stop_loss_pct: '기본 손절', default_take_profit_pct: '기본 익절',
+            trailing_stop_pct: '트레일링 스탑',
+            enable_partial_exit: '분할 익절', first_exit_pct: '1차 익절 목표',
+            first_exit_ratio: '1차 익절 비율', second_exit_pct: '2차 익절 목표',
+            second_exit_ratio: '2차 익절 비율', stop_loss_pct: '손절',
+            trailing_activate_pct: '트레일링 활성화',
+            enabled: '활성화', fetch_time: '조회 시간', cache_ttl_hours: '캐시 유효 시간(h)',
+        };
+
+        function formatVal(key, val) {
+            if (typeof val === 'boolean') return val ? 'Yes' : 'No';
+            if (key.includes('pct') || key.includes('rate'))
+                return typeof val === 'number' ? (key.includes('rate') ? (val * 100).toFixed(3) + '%' : val + '%') : val;
+            if (key === 'initial_capital') return formatNumber(val) + '원';
+            return String(val);
+        }
+
+        function renderConfigSection(elementId, data) {
+            const el = document.getElementById(elementId);
+            if (!data || Object.keys(data).length === 0) {
+                el.innerHTML = '<div style="color:var(--text-muted);font-size:0.85rem;">데이터 없음</div>';
+                return;
+            }
+            const rows = Object.entries(data).map(([key, val]) => {
+                if (typeof val === 'object' && val !== null) return '';
+                const label = configLabels[key] || key;
+                return `<div class="config-row">
+                    <span class="config-label">${label}</span>
+                    <span class="config-value">${formatVal(key, val)}</span>
+                </div>`;
+            }).filter(Boolean).join('');
+            el.innerHTML = rows || '<div style="color:var(--text-muted);font-size:0.85rem;">데이터 없음</div>';
+        }
+
+        function renderStrategies(data) {
+            const el = document.getElementById('cfg-strategies');
+            if (!data || Object.keys(data).length === 0) {
+                el.innerHTML = '<div style="color:var(--text-muted);font-size:0.85rem;">등록된 전략 없음</div>';
+                return;
+            }
+            const strategyNames = {
+                momentum_breakout: '모멘텀 브레이크아웃', theme_chasing: '테마 추종',
+                gap_and_go: '갭상승 추종', mean_reversion: '평균 회귀',
+            };
+            let html = '';
+            for (const [name, cfg] of Object.entries(data)) {
+                const label = strategyNames[name] || name;
+                const enabled = cfg.enabled;
+                const badge = enabled
+                    ? '<span style="font-size:0.68rem;padding:2px 8px;border-radius:6px;background:rgba(52,211,153,0.12);color:var(--accent-green);border:1px solid rgba(52,211,153,0.15);font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">활성</span>'
+                    : '<span style="font-size:0.68rem;padding:2px 8px;border-radius:6px;background:rgba(248,113,113,0.12);color:var(--accent-red);border:1px solid rgba(248,113,113,0.15);font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">비활성</span>';
+                html += `<div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border-subtle);">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <span style="font-weight:600;color:#fff;font-size:0.85rem;">${label}</span>
+                        ${badge}
+                    </div>`;
+                for (const [k, v] of Object.entries(cfg)) {
+                    if (k === 'enabled' || k === 'type' || typeof v === 'object') continue;
+                    const lbl = configLabels[k] || k.replace(/_/g, ' ');
+                    html += `<div class="config-row">
+                        <span class="config-label" style="font-size:0.78rem;">${lbl}</span>
+                        <span class="config-value" style="font-size:0.78rem;">${formatVal(k, v)}</span>
+                    </div>`;
+                }
+                html += '</div>';
+            }
+            el.innerHTML = html;
+        }
+
+        async function loadConfig() {
+            try {
+                const cfg = await api('/api/config');
+                renderConfigSection('cfg-trading', cfg.trading);
+                renderConfigSection('cfg-risk', cfg.risk);
+                renderConfigSection('cfg-exit', cfg.exit_manager);
+                renderStrategies(cfg.strategies);
+                renderConfigSection('cfg-us-market', cfg.us_market);
+            } catch (e) {
+                console.error('설정 로드 오류:', e);
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadConfig();
+            sse.connect();
+        });
+    </script>
+</body>
+</html>

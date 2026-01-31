@@ -1,0 +1,35 @@
+# AI Trading Bot v2 - systemd 서비스 파일
+#
+# 설치 방법:
+# 1. sudo cp scripts/ai-trader.service /etc/systemd/system/
+# 2. sudo systemctl daemon-reload
+# 3. sudo systemctl enable ai-trader
+# 4. sudo systemctl start ai-trader
+#
+# 로그 확인:
+# journalctl -u ai-trader -f
+#
+
+[Unit]
+Description=AI Trading Bot v2
+After=network.target
+
+[Service]
+Type=simple
+User=user
+WorkingDirectory=/home/user/projects/ai-trader-v2
+Environment="PATH=/home/user/projects/ai-trader-v2/venv/bin"
+ExecStart=/home/user/projects/ai-trader-v2/venv/bin/python scripts/run_trader.py
+Restart=always
+RestartSec=10
+
+# 로그
+StandardOutput=append:/home/user/projects/ai-trader-v2/logs/service.log
+StandardError=append:/home/user/projects/ai-trader-v2/logs/service_error.log
+
+# 리소스 제한
+MemoryLimit=1G
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

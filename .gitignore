@@ -1,0 +1,31 @@
+# 환경변수 (API 키, 비밀번호)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# 가상환경
+venv/
+.venv/
+
+# 로그
+logs/
+
+# 캐시 데이터
+data/*.json
+data/*.csv
+*.cache
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

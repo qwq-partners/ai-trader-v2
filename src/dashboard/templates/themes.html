@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="ko" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Trader v2 - 테마/스크리닝</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: { extend: { colors: { dark: { 800: '#1e1e2e', 900: '#11111b', 700: '#313244', 600: '#45475a' }, profit: '#34d399', loss: '#f87171' } } }
+        }
+    </script>
+    <style>
+        :root {
+            --bg-base: #0b0b14;
+            --bg-surface: #12121e;
+            --bg-elevated: #1a1a2e;
+            --border-subtle: rgba(99, 102, 241, 0.08);
+            --border-accent: rgba(99, 102, 241, 0.2);
+            --text-primary: #e2e8f0;
+            --text-secondary: #8892b0;
+            --text-muted: #5a6480;
+            --accent-blue: #6366f1;
+            --accent-cyan: #22d3ee;
+            --accent-green: #34d399;
+            --accent-red: #f87171;
+            --accent-amber: #fbbf24;
+            --accent-purple: #a78bfa;
+        }
+        * { box-sizing: border-box; }
+        body {
+            background: var(--bg-base); color: var(--text-primary);
+            font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            margin: 0; min-height: 100vh; position: relative;
+        }
+        body::before {
+            content: ''; position: fixed; inset: 0;
+            background: linear-gradient(rgba(99,102,241,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(99,102,241,0.03) 1px, transparent 1px);
+            background-size: 60px 60px; pointer-events: none; z-index: 0;
+        }
+        body::after {
+            content: ''; position: fixed; top: 0; left: 0; right: 0; height: 280px;
+            background: radial-gradient(ellipse 70% 50% at 50% 0%, rgba(99,102,241,0.06), transparent);
+            pointer-events: none; z-index: 0;
+        }
+        body > * { position: relative; z-index: 1; }
+        .mono { font-family: 'JetBrains Mono', 'SF Mono', monospace; font-feature-settings: 'tnum' on, 'lnum' on; }
+        .card {
+            background: var(--bg-surface); border: 1px solid var(--border-subtle);
+            border-radius: 16px; position: relative; overflow: hidden; backdrop-filter: blur(10px);
+        }
+        .card::before {
+            content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(99,102,241,0.15), transparent);
+        }
+        .card-header {
+            font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.12em;
+            color: var(--text-muted); padding-bottom: 14px; border-bottom: 1px solid var(--border-subtle);
+            margin-bottom: 16px; display: flex; align-items: center; gap: 8px;
+        }
+        .card-header .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-blue); box-shadow: 0 0 8px var(--accent-blue); }
+        .badge { padding: 3px 10px; border-radius: 6px; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; font-family: 'DM Sans', sans-serif; }
+        .badge-green { background: rgba(52,211,153,0.12); color: var(--accent-green); border: 1px solid rgba(52,211,153,0.15); }
+        .badge-red { background: rgba(248,113,113,0.12); color: var(--accent-red); border: 1px solid rgba(248,113,113,0.15); }
+        .badge-yellow { background: rgba(251,191,36,0.12); color: var(--accent-amber); border: 1px solid rgba(251,191,36,0.15); }
+        .badge-blue { background: rgba(99,102,241,0.12); color: var(--accent-blue); border: 1px solid rgba(99,102,241,0.15); }
+        .badge-purple { background: rgba(167,139,250,0.12); color: var(--accent-purple); border: 1px solid rgba(167,139,250,0.15); }
+        .nav-pill {
+            padding: 7px 16px; border-radius: 10px; font-size: 0.8rem; font-weight: 500;
+            color: var(--text-muted); text-decoration: none; transition: all 0.2s cubic-bezier(0.4,0,0.2,1); border: 1px solid transparent;
+        }
+        .nav-pill:hover { color: var(--text-secondary); background: rgba(99,102,241,0.06); border-color: var(--border-subtle); }
+        .nav-pill.active { color: #fff; background: linear-gradient(135deg, var(--accent-blue), #818cf8); box-shadow: 0 2px 12px rgba(99,102,241,0.3), inset 0 1px 0 rgba(255,255,255,0.1); font-weight: 600; }
+        .status-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; vertical-align: middle; }
+        .status-dot.green { background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); animation: pulse-green 2s infinite; }
+        .status-dot.red { background: var(--accent-red); box-shadow: 0 0 8px var(--accent-red); }
+        .status-dot.yellow { background: var(--accent-amber); box-shadow: 0 0 6px var(--accent-amber); animation: pulse-amber 1.5s infinite; }
+        @keyframes pulse-green { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+        @keyframes pulse-amber { 0%,100% { opacity:1; } 50% { opacity:0.6; } }
+        .text-profit { color: var(--accent-green); }
+        .text-loss { color: var(--accent-red); }
+        table th { color: var(--text-muted); font-weight: 500; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; padding-bottom: 10px; }
+        table td { font-size: 0.85rem; }
+        table tbody tr { transition: background 0.15s; }
+        table tbody tr:hover { background: rgba(99,102,241,0.04); }
+        ::-webkit-scrollbar { width: 5px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.15); border-radius: 10px; }
+        .btn-ghost {
+            padding: 6px 14px; border-radius: 8px; font-size: 0.78rem; font-weight: 500;
+            color: var(--text-muted); background: var(--bg-elevated); border: 1px solid var(--border-subtle);
+            cursor: pointer; transition: all 0.2s; font-family: 'DM Sans', sans-serif;
+        }
+        .btn-ghost:hover { color: var(--text-secondary); border-color: var(--border-accent); }
+        /* Theme card */
+        .theme-card {
+            background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 16px;
+            padding: 20px; position: relative; overflow: hidden; transition: transform 0.2s, border-color 0.2s;
+        }
+        .theme-card::before {
+            content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(99,102,241,0.15), transparent);
+        }
+        .theme-card:hover { transform: translateY(-2px); border-color: var(--border-accent); }
+        .score-bar { height: 5px; border-radius: 99px; background: rgba(99,102,241,0.06); border: 1px solid var(--border-subtle); overflow: hidden; }
+        .score-fill { height: 100%; border-radius: 99px; }
+        @keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-in { animation: fadeUp 0.45s cubic-bezier(0.16,1,0.3,1) both; }
+        .delay-1 { animation-delay: 0.06s; }
+        .delay-2 { animation-delay: 0.12s; }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav style="border-bottom: 1px solid var(--border-subtle); background: rgba(11,11,20,0.85); backdrop-filter: blur(12px); position: sticky; top: 0; z-index: 50;">
+        <div style="max-width: 1280px; margin: 0 auto; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between;">
+            <div style="display: flex; align-items: center; gap: 32px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div style="width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple)); display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 10px rgba(99,102,241,0.25);">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+                    </div>
+                    <span style="font-weight: 700; font-size: 0.95rem; color: #fff;">AI Trader <span style="color: var(--text-muted); font-weight: 400;">v2</span></span>
+                </div>
+                <div style="display: flex; gap: 4px;">
+                    <a href="/" class="nav-pill" data-page="index">실시간</a>
+                    <a href="/trades" class="nav-pill" data-page="trades">거래</a>
+                    <a href="/performance" class="nav-pill" data-page="performance">성과</a>
+                    <a href="/themes" class="nav-pill active" data-page="themes">테마</a>
+                    <a href="/evolution" class="nav-pill" data-page="evolution">진화</a>
+                    <a href="/settings" class="nav-pill" data-page="settings">설정</a>
+                </div>
+            </div>
+            <div id="status-bar" style="display: flex; align-items: center; gap: 20px; font-size: 0.78rem; color: var(--text-muted);">
+                <span id="sb-status" style="display: flex; align-items: center; gap: 6px;"><span class="status-dot yellow"></span> 연결 중...</span>
+                <span id="sb-session" class="mono" style="color: var(--text-secondary); font-size: 0.75rem;">--</span>
+                <span id="sb-uptime" class="mono" style="color: var(--text-muted); font-size: 0.72rem;">--</span>
+            </div>
+        </div>
+    </nav>
+
+    <main style="max-width: 1280px; margin: 0 auto; padding: 24px;">
+        <!-- Active themes -->
+        <div class="animate-in" style="margin-bottom: 24px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+                <h2 style="font-size: 1.25rem; font-weight: 700; color: #fff; margin: 0;">활성 테마</h2>
+                <button id="btn-refresh-themes" class="btn-ghost">새로고침</button>
+            </div>
+            <div id="themes-grid" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;">
+                <div class="theme-card" style="text-align: center; color: var(--text-muted); padding: 40px 20px; grid-column: 1 / -1;">테마 데이터 로딩 중...</div>
+            </div>
+        </div>
+
+        <!-- Screening results -->
+        <div class="card animate-in delay-1" style="padding: 24px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+                <div class="card-header" style="border: none; padding: 0; margin: 0;">
+                    <span class="dot" style="background: var(--accent-cyan); box-shadow: 0 0 8px var(--accent-cyan);"></span>
+                    스크리닝 결과
+                </div>
+                <button id="btn-refresh-screening" class="btn-ghost" style="font-size: 0.72rem; padding: 4px 12px;">새로고침</button>
+            </div>
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; text-align: left; border-collapse: collapse;">
+                    <thead>
+                        <tr style="border-bottom: 1px solid var(--border-subtle);">
+                            <th style="padding: 0 12px 10px 0;">종목</th>
+                            <th style="padding: 0 12px 10px 0; text-align: right;">현재가</th>
+                            <th style="padding: 0 12px 10px 0; text-align: right;">등락률</th>
+                            <th style="padding: 0 12px 10px 0; text-align: right;">거래량비</th>
+                            <th style="padding: 0 12px 10px 0; text-align: right;">점수</th>
+                            <th style="padding: 0 0 10px 0;">선정 사유</th>
+                        </tr>
+                    </thead>
+                    <tbody id="screening-body">
+                        <tr><td colspan="6" style="padding: 40px 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">스크리닝 데이터 로딩 중...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <script src="/static/js/common.js"></script>
+    <script src="/static/js/themes.js"></script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+/* AI Trader v2 Dashboard - 추가 스타일 */
+
+/* 스크롤바 */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.15); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(99,102,241,0.25); }
+
+/* 로그 영역 */
+#event-log { max-height: 300px; overflow-y: auto; }
+#event-log .log-entry:last-child { border-bottom: none; }
+
+/* 차트 컨테이너 */
+.chart-container { min-height: 200px; }
+
+/* 로딩 */
+.skeleton { background: linear-gradient(90deg, #12121e 25%, #1a1a2e 50%, #12121e 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 0.5rem; }
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* 트랜지션 */
+.fade-in { animation: fadeIn 0.3s ease-in; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* 포지션 테이블 호버 */
+#positions-table tbody tr:hover { background: rgba(99,102,241,0.04); }
+
+/* 반응형 */
+@media (max-width: 768px) {
+    .grid-cols-2 { grid-template-columns: 1fr !important; }
+    nav .flex { flex-wrap: wrap; }
+}
