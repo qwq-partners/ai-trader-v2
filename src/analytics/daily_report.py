@@ -487,38 +487,54 @@ class DailyReportGenerator:
             await asyncio.sleep(0.2)
 
     async def _update_results(self):
-        """추천 종목 결과 업데이트 (네이버 금융에서 현재가 조회)"""
+        """추천 종목 결과 업데이트 (KIS API 우선, 네이버 금융 폴백)"""
         import aiohttp
 
-        async with aiohttp.ClientSession() as session:
-            for rec in self._today_recommendations:
-                try:
-                    # 네이버 금융 시세 조회
-                    url = f"https://finance.naver.com/item/main.nhn?code={rec.symbol}"
-                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                        if resp.status != 200:
-                            continue
-                        html = await resp.text()
+        for rec in self._today_recommendations:
+            try:
+                price = None
 
-                        # 현재가 파싱 (정규식)
-                        # <dd><span class="blind">현재가</span>XX,XXX</dd> 패턴
-                        price_match = re.search(r'<span class="blind">현재가</span>([0-9,]+)', html)
-                        if price_match:
-                            price_str = price_match.group(1).replace(",", "")
-                            rec.result_price = float(price_str)
+                # 1차: KIS API (정확하고 안정적)
+                if hasattr(self, '_bot') and hasattr(self._bot, 'broker') and self._bot.broker:
+                    try:
+                        quote = await self._bot.broker.get_quote(rec.symbol)
+                        if quote and quote.get("price", 0) > 0:
+                            price = quote["price"]
+                    except Exception:
+                        pass
 
-                            # 수익률 계산 (전일 종가 대비)
-                            if rec.prev_close > 0:
-                                rec.result_pct = (rec.result_price - rec.prev_close) / rec.prev_close * 100
-                            else:
-                                rec.result_pct = 0.0
+                # 2차: 네이버 금융 폴백 (HTML 파싱, 다중 패턴)
+                if price is None:
+                    async with aiohttp.ClientSession() as session:
+                        url = f"https://finance.naver.com/item/main.nhn?code={rec.symbol}"
+                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                            if resp.status == 200:
+                                html = await resp.text()
+                                # 패턴 1: <span class="blind">현재가</span>XX,XXX
+                                price_match = re.search(r'<span class="blind">현재가</span>([0-9,]+)', html)
+                                if not price_match:
+                                    # 패턴 2: no_today 영역의 현재가
+                                    price_match = re.search(r'class="no_today"[^>]*>.*?<span[^>]*>([0-9,]+)', html, re.DOTALL)
+                                if not price_match:
+                                    # 패턴 3: sise_last 등의 시세 영역
+                                    price_match = re.search(r'id="chart_area".*?([0-9]{2,}(?:,[0-9]{3})*)', html, re.DOTALL)
+                                if price_match:
+                                    price = float(price_match.group(1).replace(",", ""))
+                                else:
+                                    logger.warning(f"[결과] {rec.symbol} 네이버 금융 파싱 실패 (HTML 구조 변경 가능)")
 
-                            logger.debug(f"[결과] {rec.symbol}: {rec.result_price:,.0f}원 ({rec.result_pct:+.1f}%)")
+                if price and price > 0:
+                    rec.result_price = price
+                    if rec.prev_close > 0:
+                        rec.result_pct = (rec.result_price - rec.prev_close) / rec.prev_close * 100
+                    else:
+                        rec.result_pct = 0.0
+                    logger.debug(f"[결과] {rec.symbol}: {rec.result_price:,.0f}원 ({rec.result_pct:+.1f}%)")
 
-                except Exception as e:
-                    logger.warning(f"현재가 조회 실패 ({rec.symbol}): {e}")
-                    rec.result_price = None
-                    rec.result_pct = None
+            except Exception as e:
+                logger.warning(f"현재가 조회 실패 ({rec.symbol}): {e}")
+                rec.result_price = None
+                rec.result_pct = None
 
     async def _fetch_sector_summary(self) -> List[str]:
         """업종지수 상승/하락 TOP 5 요약"""
@@ -734,12 +750,13 @@ class DailyReportGenerator:
                 )
 
         # 요약
+        evaluated = sum(1 for r in recommendations if r.result_pct is not None)
         lines.extend([
             "",
             "─" * 20,
             f"<b>성과 요약</b>",
-            f"• 적중률: {wins}/{len(recommendations)} ({wins/len(recommendations)*100:.0f}%)",
-            f"• 평균 수익률: {total_pct/len(recommendations):+.1f}%",
+            f"• 적중률: {wins}/{evaluated} ({wins/evaluated*100:.0f}%)" if evaluated > 0 else f"• 적중률: 0/0 (결과 없음)",
+            f"• 평균 수익률: {total_pct/evaluated:+.1f}%" if evaluated > 0 else "• 평균 수익률: N/A",
         ])
 
         return "\n".join(lines)

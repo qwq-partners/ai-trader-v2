@@ -187,6 +187,10 @@ class TradingEngine:
             ))
         finally:
             heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
             await self._shutdown()
 
     async def _get_next_event(self) -> Optional[Event]:
@@ -411,8 +415,9 @@ class TradingEngine:
         risk = self.config.risk
         _pending = pending_symbols or set()
 
-        # 1. 일일 손실 제한 체크
-        daily_loss_pct = float(self.portfolio.daily_pnl / self.portfolio.initial_capital * 100)
+        # 1. 일일 손실 제한 체크 (현재 자산 기준)
+        _equity = self.portfolio.total_equity
+        daily_loss_pct = float(self.portfolio.daily_pnl / _equity * 100) if _equity > 0 else 0.0
         if daily_loss_pct <= -risk.daily_max_loss_pct:
             return False, f"일일 손실 한도 도달 ({daily_loss_pct:.1f}%)"
 
@@ -431,7 +436,8 @@ class TradingEngine:
                 equity_f = float(self.portfolio.total_equity)
                 investable = equity_f * (1 - risk.min_cash_reserve_pct / 100)
                 per_pos = max(equity_f * risk.base_position_pct / 100, risk.min_position_value)
-                max_pos = min(max(3, int(investable / per_pos)), risk.max_positions)
+                calculated = int(investable / per_pos) if per_pos > 0 else 0
+                max_pos = min(max(1, calculated), risk.max_positions)
             if effective_positions >= max_pos:
                 return False, f"최대 포지션 수 도달 ({effective_positions}/{max_pos}개, pending 포함)"
 
@@ -577,6 +583,10 @@ class RiskManager:
         # 중복 주문 방지: 주문 진행 중인 종목
         self._pending_orders: Set[str] = set()
 
+        # pending 등록 시각 (stale pending 정리용)
+        self._pending_timestamps: Dict[str, datetime] = {}
+        self._PENDING_TIMEOUT_SECONDS = 600  # 10분 타임아웃
+
         # 부분 체결 추적: 종목별 미체결 수량
         self._pending_quantities: Dict[str, int] = {}
 
@@ -594,6 +604,28 @@ class RiskManager:
     async def on_signal(self, event: SignalEvent) -> Optional[List[Event]]:
         """신호 검증 및 주문 생성"""
         logger.info(f"[리스크] 신호 수신: {event.symbol} {event.side.value} 가격={event.price} 점수={event.score:.1f}")
+
+        # 만료된 쿨다운 항목 정리
+        now = datetime.now()
+        expired = [s for s, t in self._order_fail_cooldown.items()
+                   if (now - t).total_seconds() >= self._COOLDOWN_SECONDS]
+        for s in expired:
+            del self._order_fail_cooldown[s]
+
+        # stale pending 주문 정리 (10분 이상 미체결 → 거래소 거부 등)
+        stale_pending = [s for s, t in self._pending_timestamps.items()
+                         if (now - t).total_seconds() >= self._PENDING_TIMEOUT_SECONDS]
+        for s in stale_pending:
+            amount = Decimal("0")
+            qty = self._pending_quantities.get(s, 0)
+            # 예약 현금 환원 추정 (정확한 금액 없으므로 보수적 추정)
+            if qty > 0 and s in self._pending_orders:
+                pos = self.engine.portfolio.positions.get(s)
+                if pos and pos.avg_price:
+                    amount = pos.avg_price * qty
+            self.clear_pending(s, amount)
+            self._pending_timestamps.pop(s, None)
+            logger.warning(f"[리스크] stale pending 정리: {s} ({self._PENDING_TIMEOUT_SECONDS}초 초과)")
 
         # 거래 가능 여부 체크
         if not self.engine.is_trading_hours():
@@ -672,6 +704,7 @@ class RiskManager:
         # 중복 주문 방지: pending 등록 + 미체결 수량 추적
         self._pending_orders.add(order.symbol)
         self._pending_quantities[order.symbol] = order.quantity
+        self._pending_timestamps[order.symbol] = datetime.now()
 
         # 현금 예약 (매수 주문 금액만큼)
         if order.side == OrderSide.BUY and order.price and order.quantity:
@@ -683,6 +716,7 @@ class RiskManager:
         """주문 완료/실패 시 pending 해제 (외부에서 호출)"""
         self._pending_orders.discard(symbol)
         self._pending_quantities.pop(symbol, None)
+        self._pending_timestamps.pop(symbol, None)
         self._reserved_cash = max(self._reserved_cash - amount, Decimal("0"))
 
     async def on_fill(self, event: FillEvent) -> Optional[List[Event]]:
@@ -701,10 +735,11 @@ class RiskManager:
             self._pending_quantities[event.symbol] = remaining
             logger.info(f"[리스크] 부분 체결: {event.symbol} 잔여 {remaining}주")
 
-        # 일일 손실 체크
+        # 일일 손실 체크 (현재 자산 기준)
+        _equity = self.engine.portfolio.total_equity
         daily_loss_pct = float(
-            self.engine.portfolio.daily_pnl / self.engine.portfolio.initial_capital * 100
-        )
+            self.engine.portfolio.daily_pnl / _equity * 100
+        ) if _equity > 0 else 0.0
 
         if daily_loss_pct <= -self.config.daily_max_loss_pct:
             return [RiskAlertEvent(
@@ -752,7 +787,8 @@ class RiskManager:
             equity_f = float(equity)
             investable = equity_f * (1 - self.config.min_cash_reserve_pct / 100)
             per_pos = max(equity_f * self.config.base_position_pct / 100, self.config.min_position_value)
-            max_pos = min(max(3, int(investable / per_pos)), self.config.max_positions)
+            calculated = int(investable / per_pos) if per_pos > 0 else 0
+            max_pos = min(max(1, calculated), self.config.max_positions)
 
         # 남은 슬롯 기반 균등 배분 (유휴 자본 방지)
         current_count = len(self.engine.portfolio.positions) + len(self._pending_orders)

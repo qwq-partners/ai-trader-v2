@@ -11,6 +11,7 @@ PostgreSQL을 사용하여 뉴스 기사와 테마 히스토리를 저장합니�
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
@@ -69,6 +70,7 @@ class NewsStorage:
             "postgresql://postgres:postgres@localhost:5432/ai_db"
         )
         self._pool: Optional[asyncpg.Pool] = None
+        self._connect_lock = asyncio.Lock()
 
     async def connect(self) -> bool:
         """DB 연결"""
@@ -101,9 +103,12 @@ class NewsStorage:
             logger.info("[NewsStorage] PostgreSQL 연결 해제")
 
     async def _ensure_connected(self):
-        """연결 보장"""
-        if not self._pool:
-            await self.connect()
+        """연결 보장 (동시 호출 경합 방지)"""
+        if self._pool:
+            return
+        async with self._connect_lock:
+            if not self._pool:
+                await self.connect()
 
     # ============================================================
     # 뉴스 저장/조회

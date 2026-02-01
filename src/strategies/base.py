@@ -6,7 +6,7 @@ AI Trading Bot v2 - 전략 베이스 클래스
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Dict, List, Optional, Any
 from loguru import logger
@@ -59,9 +59,14 @@ class BaseStrategy(ABC):
         self._signals_generated: int = 0
         self._last_signal_time: Optional[datetime] = None
 
-        # 데이터 캐시
+        # 데이터 캐시 (최대 500 종목 - 오래된 항목 자동 제거)
         self._price_history: Dict[str, List[Price]] = {}
         self._indicators: Dict[str, Dict[str, float]] = {}
+        self._max_cache_symbols = 500
+
+        # 지표 재계산 방지용: 종목별 마지막 캔들 타임스탬프 / 마지막 계산 시각
+        self._last_candle_ts: Dict[str, datetime] = {}
+        self._last_calc_time: Dict[str, datetime] = {}
 
         logger.info(f"전략 초기화: {self.name} (type={config.strategy_type.value})")
 
@@ -117,8 +122,23 @@ class BaseStrategy(ABC):
         # 가격 히스토리 업데이트
         self._update_price_history(event)
 
-        # 지표 계산
-        self._calculate_indicators(symbol)
+        # 지표 계산 (캔들 변경 또는 30초 경과 시에만 재계산)
+        now = datetime.now()
+        candle_ts = event.timestamp if hasattr(event, 'timestamp') else now
+        prev_candle_ts = self._last_candle_ts.get(symbol)
+        prev_calc_time = self._last_calc_time.get(symbol)
+
+        need_recalc = (
+            prev_candle_ts is None
+            or candle_ts != prev_candle_ts
+            or prev_calc_time is None
+            or (now - prev_calc_time) >= timedelta(seconds=30)
+        )
+
+        if need_recalc:
+            self._calculate_indicators(symbol)
+            self._last_candle_ts[symbol] = candle_ts
+            self._last_calc_time[symbol] = now
 
         # 신호 생성
         signal = await self.generate_signal(symbol, current_price)
@@ -197,10 +217,11 @@ class BaseStrategy(ABC):
 
     def _get_elapsed_trading_fraction(self) -> float:
         """
-        정규장 경과 비율 (0.1 ~ 1.0)
+        정규장 경과 비율 (0.2 ~ 1.0)
 
         정규장 09:00~15:30 기준, 현재까지 경과 비율 반환.
-        장 시작 직후 과도한 정규화 방지를 위해 최소 0.1 반환.
+        장 시작 직후 과도한 거래량 추정 방지를 위해 최소 0.2 반환
+        (20% 미만 경과 시 거래량 추정 정확도가 너무 낮음).
         """
         now = datetime.now()
         current_minutes = now.hour * 60 + now.minute
@@ -210,12 +231,12 @@ class BaseStrategy(ABC):
         total_minutes = market_close - market_open  # 390분
 
         if current_minutes < market_open:
-            return 0.1
+            return 0.2
         elif current_minutes >= market_close:
             return 1.0
         else:
             elapsed = (current_minutes - market_open) / total_minutes
-            return max(elapsed, 0.1)
+            return max(elapsed, 0.2)
 
     def _calculate_indicators(self, symbol: str):
         """기술적 지표 계산"""
@@ -316,7 +337,16 @@ class BaseStrategy(ABC):
         all_highs = [float(p.high) for p in history]
         indicators["high_52w"] = max(all_highs) if all_highs else closes[-1]
 
+        # LRU 갱신: 삭제 후 재삽입으로 맨 끝(최신)으로 이동
+        self._indicators.pop(symbol, None)
         self._indicators[symbol] = indicators
+
+        # 캐시 크기 제한 (LRU: 가장 오래 미접근 종목부터 제거)
+        if len(self._indicators) > self._max_cache_symbols:
+            excess = len(self._indicators) - self._max_cache_symbols
+            for key in list(self._indicators.keys())[:excess]:
+                del self._indicators[key]
+                self._price_history.pop(key, None)
 
     def _calculate_rsi(self, prices: List[float], period: int = 14) -> float:
         """
@@ -342,6 +372,9 @@ class BaseStrategy(ABC):
             loss = max(-c, 0)
             avg_gain = (avg_gain * (period - 1) + gain) / period
             avg_loss = (avg_loss * (period - 1) + loss) / period
+
+        if avg_gain == 0 and avg_loss == 0:
+            return 50.0  # 중립 (가격 변동 없음)
 
         if avg_loss == 0:
             return 100.0

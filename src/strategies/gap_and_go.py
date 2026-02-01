@@ -167,10 +167,16 @@ class GapAndGoStrategy(BaseStrategy):
 
         # VWAP 지지 확인 (있는 경우)
         vwap = indicators.get("vwap", 0)
+        vwap_bonus = 0.0
         if vwap > 0:
             vwap_distance = (price - vwap) / vwap * 100
             if vwap_distance < -self.gap_config.vwap_support_tolerance:
                 return None  # VWAP 아래로 이탈
+            # VWAP 위에서 지지받는 경우 점수 보너스
+            if 0 <= vwap_distance <= 1.0:
+                vwap_bonus = 10.0  # VWAP 근접 지지 (최적)
+            elif vwap_distance > 1.0:
+                vwap_bonus = 5.0   # VWAP 위 (양호)
 
         # 신호 강도 결정
         if gap_pct >= 5:
@@ -181,13 +187,19 @@ class GapAndGoStrategy(BaseStrategy):
             strength = SignalStrength.NORMAL
 
         # 점수 계산
-        score = self._calculate_entry_score(gap_pct, pullback_pct, vol_ratio)
+        score = self._calculate_entry_score(gap_pct, pullback_pct, vol_ratio) + vwap_bonus
 
-        # 손절가: 갭 시작점 또는 고정 %
+        # 손절가: 갭 시작점, VWAP, 또는 고정 % 중 현재가 미만인 후보 중 가장 높은 값
         gap_start = float(gap_info["open_price"])
         stop_by_gap = gap_start * 0.995  # 갭 시작점 -0.5%
         stop_by_pct = price * (1 - self.gap_config.stop_loss_pct / 100)
-        stop_price = Decimal(str(max(stop_by_gap, stop_by_pct)))
+        stop_candidates = [stop_by_pct]  # 고정 %는 항상 현재가 미만
+        if stop_by_gap < price:  # 갭 시작점이 현재가 미만일 때만 후보
+            stop_candidates.append(stop_by_gap)
+        if vwap > 0 and vwap < price:
+            stop_by_vwap = vwap * 0.995  # VWAP -0.5%
+            stop_candidates.append(stop_by_vwap)
+        stop_price = Decimal(str(max(stop_candidates)))
 
         # 목표가
         target_price = Decimal(str(price * (1 + self.gap_config.take_profit_pct / 100)))

@@ -14,7 +14,7 @@ AI Trading Bot v2 - 테마 추종 전략
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Dict, List, Optional, Set, Any
 from loguru import logger
@@ -93,6 +93,7 @@ class ThemeChasingStrategy(BaseStrategy):
         # 테마 추적
         self._active_themes: Dict[str, ThemeInfo] = {}
         self._theme_entries: Dict[str, int] = {}  # 테마별 진입 횟수
+        self._entries_date: Optional[date] = None  # 진입 횟수 기준 날짜
 
         # 포지션별 테마 매핑
         self._position_themes: Dict[str, str] = {}  # symbol -> theme_name
@@ -136,6 +137,13 @@ class ThemeChasingStrategy(BaseStrategy):
         position: Optional[Position] = None
     ) -> Optional[Signal]:
         """매매 신호 생성"""
+        # 일일 진입 횟수 및 활성 테마 자동 리셋
+        today = date.today()
+        if self._entries_date != today:
+            self._theme_entries.clear()
+            self._active_themes.clear()
+            self._entries_date = today
+
         indicators = self.get_indicators(symbol)
 
         if not indicators:
@@ -248,7 +256,7 @@ class ThemeChasingStrategy(BaseStrategy):
 
         # 점수 계산
         score = self._calculate_entry_score(hot_theme_score, change_pct, vol_ratio)
-        score = min(score + news_bonus + supply_bonus, 100.0)
+        score = max(0.0, min(score + news_bonus + supply_bonus, 100.0))
 
         # 목표가 & 손절가
         target_price = Decimal(str(price * (1 + self.theme_config.take_profit_pct / 100)))
@@ -395,8 +403,8 @@ class ThemeChasingStrategy(BaseStrategy):
 
         try:
             # 외국인 순매수 (코스피 + 코스닥)
-            foreign_kospi = await self._kis_market_data.fetch_foreign_institution(market="0001", investor="1")
-            foreign_kosdaq = await self._kis_market_data.fetch_foreign_institution(market="0002", investor="1")
+            foreign_kospi = await self._kis_market_data.fetch_foreign_institution(market="0001", investor="1") or []
+            foreign_kosdaq = await self._kis_market_data.fetch_foreign_institution(market="0002", investor="1") or []
             self._foreign_cache.clear()
             for item in foreign_kospi + foreign_kosdaq:
                 sym = item.get("symbol", "")
@@ -405,8 +413,8 @@ class ThemeChasingStrategy(BaseStrategy):
                     self._foreign_cache[sym] = {"net_buy": net_buy, "updated": now}
 
             # 기관 순매수 (코스피 + 코스닥)
-            inst_kospi = await self._kis_market_data.fetch_foreign_institution(market="0001", investor="2")
-            inst_kosdaq = await self._kis_market_data.fetch_foreign_institution(market="0002", investor="2")
+            inst_kospi = await self._kis_market_data.fetch_foreign_institution(market="0001", investor="2") or []
+            inst_kosdaq = await self._kis_market_data.fetch_foreign_institution(market="0002", investor="2") or []
             self._institution_cache.clear()
             for item in inst_kospi + inst_kosdaq:
                 sym = item.get("symbol", "")

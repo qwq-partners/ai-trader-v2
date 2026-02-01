@@ -183,6 +183,7 @@ class KISWebSocketFeed:
             self._ws = await self._session.ws_connect(
                 self.config.ws_url,
                 heartbeat=self.config.ping_interval,
+                timeout=aiohttp.ClientTimeout(total=15),
             )
 
             self._connected = True
@@ -499,6 +500,8 @@ class KISWebSocketFeed:
     async def _unsubscribe_symbol(self, symbol: str):
         """단일 종목 구독 해제"""
         if not self._ws or self._ws.closed:
+            logger.debug(f"[WS] 구독 해제 스킵 ({symbol}): 연결 없음")
+            self._subscribed_symbols.discard(symbol)
             return
 
         try:
@@ -611,6 +614,12 @@ class KISWebSocketFeed:
                 msg1 = body.get("msg1", "")
                 if rt_cd or msg_cd:
                     logger.debug(f"[WS 응답] rt_cd={rt_cd}, msg_cd={msg_cd}, msg={msg1}")
+                # 승인키 만료/오류 감지 → 재연결 트리거
+                if msg_cd in ("EGW00123", "EGW00121", "EGW00201"):
+                    logger.warning(f"[WS] 승인키 오류 감지 ({msg_cd}: {msg1}), 재연결 시도")
+                    self._connected = False
+                    if self._ws and not self._ws.closed:
+                        await self._ws.close()
                 return
 
             # 파이프 구분 데이터 (실시간 시세)
@@ -622,7 +631,11 @@ class KISWebSocketFeed:
             # 암호화 여부, TR ID, 데이터 건수, 데이터
             encrypted = parts[0]
             tr_id = parts[1]
-            count = int(parts[2])
+            try:
+                count = int(parts[2])
+            except ValueError:
+                logger.warning(f"[WS] 데이터 건수 파싱 실패 (숫자 아님): parts[2]='{parts[2]}'")
+                return
             raw_data = parts[3]
 
             # 수신 통계 로깅 (5000건마다)

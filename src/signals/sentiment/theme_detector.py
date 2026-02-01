@@ -384,7 +384,7 @@ class ThemeDetector:
             # 2-2. 종목별 센티멘트 파싱 (themes[].stocks + stock_impacts)
             now = datetime.now()
 
-            # stock_impacts에서 파싱
+            # stock_impacts에서 파싱 (기존 엔트리보다 impact가 높으면 덮어쓰기)
             for item in stock_impacts:
                 symbol = self._resolve_stock_symbol(
                     item.get("symbol", ""), item.get("name", "")
@@ -393,14 +393,16 @@ class ThemeDetector:
                     continue
                 impact = item.get("impact", 0)
                 direction = item.get("direction", "bullish")
-                self._stock_sentiments[symbol] = {
-                    "sentiment": 1.0 if direction == "bullish" else -1.0,
-                    "impact": impact,
-                    "direction": direction,
-                    "theme": "",
-                    "reason": item.get("reason", ""),
-                    "updated_at": now,
-                }
+                existing = self._stock_sentiments.get(symbol)
+                if not existing or impact > existing.get("impact", 0):
+                    self._stock_sentiments[symbol] = {
+                        "sentiment": 1.0 if direction == "bullish" else -1.0,
+                        "impact": impact,
+                        "direction": direction,
+                        "theme": "",
+                        "reason": item.get("reason", ""),
+                        "updated_at": now,
+                    }
 
             # 3. 테마 정보 업데이트
             for theme_data in detected_themes:
@@ -471,6 +473,16 @@ class ThemeDetector:
                 for name, theme in self._themes.items()
                 if theme.last_updated > cutoff
             }
+
+            # 4-1. 오래된 종목 센티멘트 제거 (1시간 이상)
+            stale_symbols = [
+                sym for sym, data in self._stock_sentiments.items()
+                if data.get("updated_at", datetime.min) < cutoff
+            ]
+            for sym in stale_symbols:
+                del self._stock_sentiments[sym]
+            if stale_symbols:
+                logger.debug(f"[ThemeDetector] 스테일 센티멘트 {len(stale_symbols)}개 제거")
 
             # 5. 테마 히스토리를 DB에 저장
             if self._storage and self._themes:

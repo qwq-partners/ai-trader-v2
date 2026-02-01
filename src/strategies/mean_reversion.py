@@ -87,8 +87,9 @@ class MeanReversionStrategy(BaseStrategy):
         self._oversold_stocks: Dict[str, Dict[str, Any]] = {}
         # symbol -> {"rsi": float, "decline_pct": float, "detected_at": datetime}
 
-        # 블랙리스트 (펀더멘털 문제 종목)
-        self._blacklist: Set[str] = set()
+        # 블랙리스트 (펀더멘털 문제 종목, TTL 24시간)
+        self._blacklist: Dict[str, datetime] = {}  # symbol -> added_at
+        self._blacklist_ttl_hours: int = 24
 
     async def generate_signal(
         self,
@@ -97,9 +98,13 @@ class MeanReversionStrategy(BaseStrategy):
         position: Optional[Position] = None
     ) -> Optional[Signal]:
         """매매 신호 생성"""
-        # 블랙리스트 체크
+        # 블랙리스트 체크 (TTL 만료 항목 자동 정리)
         if symbol in self._blacklist:
-            return None
+            added_at = self._blacklist[symbol]
+            if (datetime.now() - added_at).total_seconds() < self._blacklist_ttl_hours * 3600:
+                return None
+            else:
+                del self._blacklist[symbol]  # TTL 만료
 
         indicators = self.get_indicators(symbol)
 
@@ -125,11 +130,13 @@ class MeanReversionStrategy(BaseStrategy):
             return None
 
         price = float(current_price)
-        rsi = indicators.get("rsi_14", 50)
+        rsi = indicators.get("rsi_14")
+        if rsi is None:
+            return None  # RSI 미계산 시 진입하지 않음
         change_3d = indicators.get("change_3d", 0)
         change_1d = indicators.get("change_1d", 0)
         vol_ratio = indicators.get("vol_ratio", 1)
-        high_52w = indicators.get("high_52w", price)
+        high_52w = indicators.get("high_52w", 0)
 
         # 1. RSI 과매도 체크
         if rsi > self.mr_config.max_rsi:
@@ -139,8 +146,8 @@ class MeanReversionStrategy(BaseStrategy):
         if change_3d > self.mr_config.min_decline_pct:
             return None
 
-        # 3. 고점 대비 낙폭 체크
-        if high_52w > 0:
+        # 3. 고점 대비 낙폭 체크 (52주 고가 미계산 시 스킵)
+        if high_52w and high_52w > 0:
             drawdown = (price - high_52w) / high_52w * 100
             if drawdown < -self.mr_config.max_drawdown_from_high:
                 logger.debug(f"[MeanReversion] {symbol} 낙폭 과대 ({drawdown:.1f}%)")
@@ -290,7 +297,9 @@ class MeanReversionStrategy(BaseStrategy):
         if not indicators:
             return 0.0
 
-        rsi = indicators.get("rsi_14", 50)
+        rsi = indicators.get("rsi_14")
+        if rsi is None:
+            return 0.0  # RSI 미계산 시 점수 0
         change_3d = indicators.get("change_3d", 0)
         vol_ratio = indicators.get("vol_ratio", 1)
         change_1d = indicators.get("change_1d", 0)
@@ -302,13 +311,13 @@ class MeanReversionStrategy(BaseStrategy):
         return self._calculate_entry_score(rsi, change_3d, vol_ratio, change_1d)
 
     def add_to_blacklist(self, symbol: str, reason: str = ""):
-        """블랙리스트에 추가 (펀더멘털 문제 종목)"""
-        self._blacklist.add(symbol)
-        logger.info(f"[MeanReversion] 블랙리스트 추가: {symbol} - {reason}")
+        """블랙리스트에 추가 (펀더멘털 문제 종목, TTL 적용)"""
+        self._blacklist[symbol] = datetime.now()
+        logger.info(f"[MeanReversion] 블랙리스트 추가: {symbol} - {reason} (TTL: {self._blacklist_ttl_hours}h)")
 
     def remove_from_blacklist(self, symbol: str):
         """블랙리스트에서 제거"""
-        self._blacklist.discard(symbol)
+        self._blacklist.pop(symbol, None)
 
     def get_oversold_stocks(self) -> Dict[str, Dict[str, Any]]:
         """현재 추적 중인 과매도 종목"""

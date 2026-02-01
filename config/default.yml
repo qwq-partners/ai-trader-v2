@@ -191,24 +191,27 @@ evolution:
   analysis_days: 7                # 분석 기간 (일)
   min_trades_for_evolution: 5     # 진화에 필요한 최소 거래 수
   min_confidence_to_apply: 0.6    # 파라미터 적용 최소 신뢰도
-  auto_rollback_threshold: -5.0   # 자동 롤백 임계값 (승률 감소%)
+  auto_rollback_threshold: -2.0   # 자동 롤백 임계값 (승률 감소%)
   evaluation_period_days: 7       # 변경 효과 평가 기간 (일)
   send_telegram: false            # 진화 결과 텔레그램 알림 (비활성)
 
 
 # 스케줄러 설정
 scheduler:
-  # 장 시작 전 준비
-  pre_market_prep: "08:00"
+  # 아침 레포트 시간 (HH:MM)
+  morning_report_time: "08:00"
 
-  # 일일 리셋
-  daily_reset: "08:30"
+  # 오후 결과 레포트 시간 (HH:MM)
+  evening_report_time: "17:00"
 
-  # 일일 리포트
-  daily_report: "20:30"
-
-  # 자가 진화
+  # 자가 진화 실행 시간 (HH:MM)
   evolution_time: "20:30"
+
+  # NXT 종목 갱신 시간 (HH)
+  nxt_refresh_hour: 6
+
+  # 뉴스 임팩트 NewsEvent 발행 임계값 (0~100)
+  news_impact_threshold: 70
 
 
 # 대시보드 설정

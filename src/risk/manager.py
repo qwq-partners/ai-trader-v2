@@ -301,11 +301,12 @@ class RiskManager:
         return True, ""
 
     def _is_daily_loss_limit_hit(self, portfolio: Portfolio) -> bool:
-        """일일 손실 한도 도달 여부"""
-        if self.initial_capital <= 0:
+        """일일 손실 한도 도달 여부 (현재 자산 기준)"""
+        equity = portfolio.total_equity
+        if equity <= 0:
             return False
 
-        daily_pnl_pct = float(portfolio.daily_pnl / self.initial_capital * 100)
+        daily_pnl_pct = float(portfolio.daily_pnl / equity * 100)
         return daily_pnl_pct <= -self.config.daily_max_loss_pct
 
     # ============================================================
@@ -319,8 +320,9 @@ class RiskManager:
         # 일일 통계 업데이트
         self.daily_stats.trades += 1
 
-        # 일일 손실 체크
-        daily_pnl_pct = float(portfolio.daily_pnl / self.initial_capital * 100)
+        # 일일 손실 체크 (현재 자산 기준)
+        equity = portfolio.total_equity
+        daily_pnl_pct = float(portfolio.daily_pnl / equity * 100) if equity > 0 else 0.0
 
         # 경고 임계값 체크
         if daily_pnl_pct <= -self._warn_threshold_pct:

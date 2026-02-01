@@ -5,7 +5,7 @@ AI Trading Bot v2 - 모멘텀 브레이크아웃 전략
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Dict, List, Optional, Any
 from loguru import logger
@@ -70,7 +70,6 @@ class MomentumBreakoutStrategy(BaseStrategy):
 
         # 브레이크아웃 추적
         self._breakout_candidates: Dict[str, datetime] = {}  # 돌파 후보
-        self._confirmed_breakouts: Dict[str, float] = {}     # 확정 돌파 (가격)
 
         # 테마 정보 (외부에서 주입)
         self._hot_themes: Dict[str, float] = {}  # 종목 -> 테마 점수
@@ -82,6 +81,12 @@ class MomentumBreakoutStrategy(BaseStrategy):
         position: Optional[Position] = None
     ) -> Optional[Signal]:
         """매매 신호 생성"""
+        # 24시간 이상 된 돌파 후보 정리
+        cutoff = datetime.now() - timedelta(hours=24)
+        expired = [s for s, t in self._breakout_candidates.items() if t < cutoff]
+        for s in expired:
+            del self._breakout_candidates[s]
+
         indicators = self.get_indicators(symbol)
 
         if not indicators:

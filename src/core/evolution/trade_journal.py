@@ -253,6 +253,10 @@ class TradeJournal:
 
         trade.updated_at = now
 
+        # 오늘 청산된 거래를 _today_trades에 추가 (어제 진입→오늘 청산 케이스 포함)
+        if now.date() == date.today() and trade_id not in self._today_trades:
+            self._today_trades.append(trade_id)
+
         # 저장
         self._save_trades(trade.entry_time.date())
 

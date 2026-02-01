@@ -122,15 +122,62 @@ class StrategyEvolver:
                 with open(state_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
 
+                # active_changes 역직렬화
+                active_changes = []
+                for cd in data.get("active_changes", []):
+                    try:
+                        active_changes.append(ParameterChange(
+                            timestamp=datetime.fromisoformat(cd["timestamp"]),
+                            strategy=cd["strategy"],
+                            parameter=cd["parameter"],
+                            old_value=cd["old_value"],
+                            new_value=cd["new_value"],
+                            reason=cd["reason"],
+                            source=cd.get("source", "llm"),
+                            trades_before=cd.get("trades_before", 0),
+                            win_rate_before=cd.get("win_rate_before", 0),
+                            trades_after=cd.get("trades_after", 0),
+                            win_rate_after=cd.get("win_rate_after", 0),
+                            is_effective=cd.get("is_effective"),
+                        ))
+                    except (KeyError, ValueError) as e:
+                        logger.warning(f"active_change 역직렬화 실패, 건너뜀: {e}")
+
+                # change_history 역직렬화
+                change_history = []
+                for cd in data.get("change_history", []):
+                    try:
+                        change_history.append(ParameterChange(
+                            timestamp=datetime.fromisoformat(cd["timestamp"]),
+                            strategy=cd["strategy"],
+                            parameter=cd["parameter"],
+                            old_value=cd["old_value"],
+                            new_value=cd["new_value"],
+                            reason=cd["reason"],
+                            source=cd.get("source", "llm"),
+                            trades_before=cd.get("trades_before", 0),
+                            win_rate_before=cd.get("win_rate_before", 0),
+                            trades_after=cd.get("trades_after", 0),
+                            win_rate_after=cd.get("win_rate_after", 0),
+                            is_effective=cd.get("is_effective"),
+                        ))
+                    except (KeyError, ValueError) as e:
+                        logger.warning(f"change_history 역직렬화 실패, 건너뜀: {e}")
+
                 state = EvolutionState(
                     version=data.get("version", 1),
                     last_evolution=datetime.fromisoformat(data["last_evolution"]) if data.get("last_evolution") else None,
                     total_evolutions=data.get("total_evolutions", 0),
                     successful_changes=data.get("successful_changes", 0),
                     rolled_back_changes=data.get("rolled_back_changes", 0),
+                    active_changes=active_changes,
+                    change_history=change_history,
                 )
 
-                logger.info(f"진화 상태 로드: v{state.version}, 총 {state.total_evolutions}회 진화")
+                logger.info(
+                    f"진화 상태 로드: v{state.version}, 총 {state.total_evolutions}회 진화, "
+                    f"활성 변경 {len(active_changes)}개, 이력 {len(change_history)}개"
+                )
                 return state
 
             except Exception as e:
@@ -362,7 +409,7 @@ class StrategyEvolver:
             # 효과 판단
             win_rate_diff = current_win_rate - change.win_rate_before
 
-            if win_rate_diff >= 0:
+            if win_rate_diff > 1.0:
                 change.is_effective = True
                 self.state.successful_changes += 1
                 result_str = "효과적"
@@ -405,12 +452,19 @@ class StrategyEvolver:
             param_key = f"{change.strategy}.{change.parameter}"
 
             # 원래 값으로 복원
+            rolled_back = False
             if param_key in self._param_setters:
                 self._param_setters[param_key](change.old_value)
+                rolled_back = True
             elif change.strategy in self._strategies:
                 strategy = self._strategies[change.strategy]
                 if hasattr(strategy, 'config') and hasattr(strategy.config, change.parameter):
                     setattr(strategy.config, change.parameter, change.old_value)
+                    rolled_back = True
+
+            if not rolled_back:
+                logger.warning(f"[진화] 롤백 대상 없음: {param_key} (setter/config 미등록)")
+                return
 
             self.state.rolled_back_changes += 1
 

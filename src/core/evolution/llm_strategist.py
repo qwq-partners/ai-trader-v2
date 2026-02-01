@@ -7,7 +7,7 @@ LLM을 활용하여 거래 복기 결과를 분석하고 전략 개선안을 도
 import json
 import os
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional, Any
 from loguru import logger
 
@@ -89,6 +89,23 @@ class StrategyAdvice:
         }
 
 
+def _count_trading_days(start: date, end: date) -> int:
+    """실제 영업일 수 계산 (주말 + 공휴일 제외)"""
+    try:
+        from ..engine import is_kr_market_holiday
+        count = 0
+        d = start
+        while d <= end:
+            if d.weekday() < 5 and not is_kr_market_holiday(d):
+                count += 1
+            d += timedelta(days=1)
+        return max(count, 1)
+    except ImportError:
+        # fallback: 주말만 제외
+        period_days = (end - start).days or 1
+        return max(period_days * 5 // 7, 1)
+
+
 class LLMStrategist:
     """
     LLM 전략가
@@ -104,16 +121,33 @@ class LLMStrategist:
     SYSTEM_PROMPT = """당신은 경험 많은 퀀트 트레이더이자 전략 분석가입니다.
 한국 주식 시장의 단기 매매 전략을 분석하고 개선안을 제시합니다.
 
-분석 원칙:
-1. 데이터 기반 판단 - 감정이 아닌 수치로 평가
-2. 리스크 우선 - 손실 방지가 수익 추구보다 중요
-3. 점진적 개선 - 급격한 변경보다 작은 조정
-4. 실행 가능성 - 실제 적용 가능한 구체적 제안
+## 최우선 목표 (CRITICAL)
+이 봇의 핵심 목표는 **일평균 수익률 1% 달성**입니다.
+모든 분석과 파라미터 조정 제안은 이 목표 달성을 위한 것이어야 합니다.
+
+목표 달성 기준:
+- 일평균 수익률 1% 이상 → "good" (목표 달성)
+- 일평균 수익률 0.5~1% → "fair" (개선 필요)
+- 일평균 수익률 0.5% 미만 또는 손실 → "poor" (긴급 개선 필요)
+
+## 분석 원칙 (우선순위 순)
+1. 수익률 최적화 - 일평균 1% 수익 달성이 최우선 목표
+2. 리스크 관리 - 일일 최대 손실 -2% 이내, 연속 손실 방지
+3. 데이터 기반 판단 - 감정이 아닌 수치로 평가
+4. 점진적 개선 - 급격한 변경보다 작은 조정
+5. 실행 가능성 - 실제 적용 가능한 구체적 제안
+
+## 전략 최적화 방향
+- 승률 55% 이상 + 손익비 1.5 이상 조합으로 일 1% 도달
+- 1건당 평균 수익 +2~3% / 손실 -1.5~2% 범위 유지
+- 하루 2~5건 거래로 수익 분산
+- 장 초반(09:00~10:00) 모멘텀 + 장중 테마 추종 병행
 
 응답 형식:
 - JSON 형식으로 구조화하여 응답
 - 모든 수치는 소수점 2자리까지
-- 이유와 근거를 반드시 포함"""
+- 이유와 근거를 반드시 포함
+- 파라미터 조정 시 일 1% 수익률 달성에 미치는 영향을 반드시 설명"""
 
     def __init__(
         self,
@@ -194,8 +228,23 @@ class LLMStrategist:
         include_params: bool
     ) -> str:
         """LLM 분석 프롬프트 구성"""
+        # 분석 기간의 일수와 일평균 수익률 계산
+        period_days = (review.period_end - review.period_start).days or 1
+        trading_days = _count_trading_days(review.period_start.date(), review.period_end.date())
+        daily_avg_return = review.total_pnl / trading_days if trading_days > 0 else 0
+        daily_avg_return_pct = review.avg_pnl_pct * review.total_trades / trading_days if trading_days > 0 else 0
+
         prompt_parts = [
             "# 거래 복기 분석 요청",
+            "",
+            "## ⚠️ 최우선 목표: 일평균 수익률 1% 달성",
+            f"- 분석 기간: {period_days}일 (영업일 약 {trading_days}일)",
+            f"- 일평균 수익률: {daily_avg_return_pct:+.2f}% (목표: +1.00%)",
+            f"- 일평균 손익금액: {daily_avg_return:+,.0f}원",
+            f"- 목표 대비 달성률: {daily_avg_return_pct / 1.0 * 100:.0f}%" if daily_avg_return_pct > 0 else "- 목표 대비 달성률: 미달 (손실 구간)",
+            "",
+            "모든 파라미터 조정은 이 목표(일 1%)를 달성하기 위한 방향이어야 합니다.",
+            "현재 목표 미달인 경우, 어떤 전략/파라미터를 변경해야 1%에 도달할 수 있는지 구체적으로 제안해주세요.",
             "",
             review.summary_for_llm,
             "",
@@ -240,32 +289,36 @@ class LLMStrategist:
         prompt_parts.extend([
             "## 분석 요청",
             "",
-            "위 데이터를 바탕으로 다음을 JSON 형식으로 분석해주세요:",
+            "위 데이터를 바탕으로 **일평균 1% 수익률 달성**을 최우선 목표로 삼아 분석해주세요.",
+            "현재 일평균 수익률이 1% 미만이면, 1%에 도달하기 위한 구체적 방안을 제시하세요.",
+            "",
+            "다음을 JSON 형식으로 응답해주세요:",
             "",
             "```json",
             "{",
-            '  "overall_assessment": "good/fair/poor 중 하나",',
-            '  "confidence_score": 0.0~1.0 사이 숫자,',
+            '  "overall_assessment": "good(일1%이상)/fair(0.5~1%)/poor(0.5%미만) 중 하나",',
+            '  "confidence_score": 0.0~1.0,',
+            '  "daily_return_gap": "목표 일1% 대비 현재 부족분 분석 및 달성 방안",',
             '  "key_insights": ["인사이트1", "인사이트2", ...],',
             '  "parameter_adjustments": [',
             '    {',
-            '      "parameter": "파라미터명",',
+            '      "parameter": "전략명.파라미터명",',
             '      "current_value": 현재값,',
             '      "suggested_value": 제안값,',
-            '      "reason": "변경 이유",',
+            '      "reason": "변경 이유 (일1% 달성에 미치는 영향 포함)",',
             '      "confidence": 0.0~1.0,',
-            '      "expected_impact": "예상 효과"',
+            '      "expected_impact": "예상 일일 수익률 개선 효과"',
             '    }',
             '  ],',
             '  "strategy_recommendations": {',
-            '    "전략명": "권고사항"',
+            '    "전략명": "일1% 달성을 위한 구체적 권고"',
             '  },',
             '  "new_rules": [',
             '    {"condition": "조건", "action": "행동", "reason": "이유"}',
             '  ],',
             '  "avoid_situations": ["상황1", "상황2", ...],',
             '  "focus_opportunities": ["기회1", "기회2", ...],',
-            '  "next_week_outlook": "다음 주 전망 및 전략 방향"',
+            '  "next_week_outlook": "일1% 달성을 위한 다음 주 전략 방향"',
             "}",
             "```",
         ])
@@ -315,42 +368,57 @@ class LLMStrategist:
         )
 
     def _create_fallback_advice(self, review: ReviewResult, days: int) -> StrategyAdvice:
-        """LLM 실패 시 기본 분석 결과"""
-        # 규칙 기반 분석
+        """LLM 실패 시 기본 분석 결과 (일 1% 목표 기준)"""
+        # 일평균 수익률 추정 (공휴일 포함)
+        trading_days = _count_trading_days(review.period_start.date(), review.period_end.date())
+        daily_avg_pct = review.avg_pnl_pct * review.total_trades / trading_days if trading_days > 0 else 0
+
+        # 일 1% 목표 기준 평가
         assessment = "fair"
-        if review.win_rate >= 55 and review.profit_factor >= 1.5:
+        if daily_avg_pct >= 1.0 and review.win_rate >= 50:
             assessment = "good"
-        elif review.win_rate < 40 or review.profit_factor < 1.0:
+        elif daily_avg_pct < 0.5 or review.win_rate < 40 or review.profit_factor < 1.0:
             assessment = "poor"
 
         insights = []
         param_adjustments = []
 
+        # 일 1% 목표 대비 인사이트
+        insights.append(
+            f"일평균 수익률 {daily_avg_pct:+.2f}% (목표: +1.00%, "
+            f"{'달성' if daily_avg_pct >= 1.0 else f'부족분: {1.0 - daily_avg_pct:.2f}%p'})"
+        )
+
         # 승률 기반 인사이트
         if review.win_rate < 40:
-            insights.append(f"승률 {review.win_rate:.1f}%로 낮음 - 진입 조건 강화 필요")
+            insights.append(f"승률 {review.win_rate:.1f}%로 낮음 - 일 1% 달성을 위해 진입 조건 강화 필요")
             param_adjustments.append(ParameterAdjustment(
                 parameter="min_score",
                 current_value=60,
                 suggested_value=70,
-                reason="낮은 승률 개선을 위해 진입 기준 상향",
+                reason="낮은 승률 개선을 위해 진입 기준 상향 (일 1% 달성 필수)",
                 confidence=0.7,
-                expected_impact="신호 수 감소, 승률 향상 기대",
+                expected_impact="신호 수 감소, 승률 향상 → 일 수익률 개선 기대",
             ))
         elif review.win_rate >= 60:
-            insights.append(f"승률 {review.win_rate:.1f}%로 양호 - 현재 전략 유지")
+            insights.append(f"승률 {review.win_rate:.1f}%로 양호 - 거래 빈도 증가로 일 1% 달성 가능")
 
         # 손익비 기반 인사이트
         if review.profit_factor < 1.0:
-            insights.append(f"손익비 {review.profit_factor:.2f}로 손실 초과 - 손절 관리 필요")
+            insights.append(f"손익비 {review.profit_factor:.2f}로 손실 초과 - 손절 관리 시급")
             param_adjustments.append(ParameterAdjustment(
                 parameter="stop_loss_pct",
                 current_value=2.0,
                 suggested_value=1.5,
-                reason="손실 제한을 위해 손절선 타이트하게",
+                reason="손실 제한으로 손익비 개선 (일 1% 달성 전제조건)",
                 confidence=0.6,
-                expected_impact="개별 손실 감소, 전체 손익비 개선",
+                expected_impact="개별 손실 감소 → 손익비 1.0 이상으로 개선",
             ))
+
+        # 거래 빈도 인사이트
+        daily_trades = review.total_trades / trading_days if trading_days > 0 else 0
+        if daily_trades < 2:
+            insights.append(f"일평균 거래 {daily_trades:.1f}건으로 적음 - 거래 기회 확대 필요")
 
         # 패턴 기반 인사이트
         for issue in review.issues:
@@ -365,9 +433,9 @@ class LLMStrategist:
             parameter_adjustments=param_adjustments,
             strategy_recommendations={},
             new_rules=[],
-            avoid_situations=review.losing_patterns[:3] if review.losing_patterns else [],
+            avoid_situations=[p.get("description", str(p)) for p in review.losing_patterns[:3]] if review.losing_patterns else [],
             focus_opportunities=[],
-            next_week_outlook="LLM 분석 실패로 규칙 기반 분석 결과입니다.",
+            next_week_outlook="LLM 분석 실패로 규칙 기반 분석 결과입니다. 일 1% 목표 기준 평가.",
             raw_response="",
         )
 

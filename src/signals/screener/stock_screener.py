@@ -96,6 +96,11 @@ class StockScreener:
         self._cache_time: Dict[str, datetime] = {}
         self._cache_ttl = 1800  # 30분 (프리장 중 캐시 유지)
 
+        # 종목코드→이름 역매핑 (O(1) 조회용)
+        self._code_to_name: Dict[str, str] = {
+            code: name for name, code in self.KNOWN_STOCKS.items()
+        }
+
         # 설정
         self.min_volume_ratio = 2.0  # 최소 거래량 비율
         self.min_change_pct = 1.0    # 최소 등락률
@@ -567,9 +572,14 @@ class StockScreener:
         stocks = []
 
         try:
-            # 테이블 찾기
+            # 테이블 찾기 (다중 선택자로 안정성 확보)
             table = soup.find("table", {"class": "type_2"})
             if not table:
+                table = soup.find("table", {"class": "type2"})
+            if not table:
+                table = soup.select_one("table.type_2, table.type2, div.box_type_l table")
+            if not table:
+                logger.warning(f"[스크리너] 네이버 금융 테이블 구조 변경 감지 ('{reason_prefix}' 파싱 실패)")
                 return stocks
 
             rows = table.find_all("tr")
@@ -962,12 +972,8 @@ class StockScreener:
                     if data.get("direction") == "bullish" and data.get("impact", 0) >= 50:
                         reason = data.get("reason", "뉴스 호재")
                         score_bonus = min(data.get("impact", 0) * 0.8, 80)
-                        # KNOWN_STOCKS에서 종목명 역매핑
-                        stock_name = ""
-                        for sname, scode in self.KNOWN_STOCKS.items():
-                            if scode == symbol:
-                                stock_name = sname
-                                break
+                        # 종목명 역매핑 (O(1))
+                        stock_name = self._code_to_name.get(symbol, "")
                         stock = ScreenedStock(
                             symbol=symbol,
                             name=stock_name,

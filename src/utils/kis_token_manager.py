@@ -217,7 +217,7 @@ class KISTokenManager:
                 self._token_expires_at = datetime.now() + timedelta(seconds=expires_in)
 
                 # 캐시 저장
-                self._save_token_cache()
+                await self._save_token_cache()
 
                 logger.info(
                     f"[TokenManager] Access Token 발급 완료 "
@@ -254,7 +254,7 @@ class KISTokenManager:
                 self._approval_expires_at = datetime.now() + timedelta(hours=6)
 
                 # 캐시 저장
-                self._save_approval_cache()
+                await self._save_approval_cache()
 
                 logger.info(
                     f"[TokenManager] Approval Key 발급 완료 "
@@ -305,31 +305,35 @@ class KISTokenManager:
         except Exception as e:
             logger.debug(f"[TokenManager] Approval Key 캐시 로드 실패: {e}")
 
-    def _save_token_cache(self):
-        """Access Token 캐시 저장"""
+    async def _save_token_cache(self):
+        """Access Token 캐시 저장 (비동기)"""
         try:
             cache = {
                 "token": self._access_token,
                 "expires_at": self._token_expires_at.isoformat() if self._token_expires_at else None,
                 "updated_at": datetime.now().isoformat(),
             }
-            with open(self._token_cache_path, 'w') as f:
-                json.dump(cache, f, indent=2)
+            await asyncio.to_thread(self._write_json, self._token_cache_path, cache)
         except Exception as e:
             logger.debug(f"[TokenManager] Access Token 캐시 저장 실패: {e}")
 
-    def _save_approval_cache(self):
-        """Approval Key 캐시 저장"""
+    async def _save_approval_cache(self):
+        """Approval Key 캐시 저장 (비동기)"""
         try:
             cache = {
                 "approval_key": self._approval_key,
                 "expires_at": self._approval_expires_at.isoformat() if self._approval_expires_at else None,
                 "updated_at": datetime.now().isoformat(),
             }
-            with open(self._approval_cache_path, 'w') as f:
-                json.dump(cache, f, indent=2)
+            await asyncio.to_thread(self._write_json, self._approval_cache_path, cache)
         except Exception as e:
             logger.debug(f"[TokenManager] Approval Key 캐시 저장 실패: {e}")
+
+    @staticmethod
+    def _write_json(path, data):
+        """JSON 파일 쓰기 (동기, to_thread에서 호출)"""
+        with open(path, 'w') as f:
+            json.dump(data, f, indent=2)
 
     # ============================================================
     # 정리

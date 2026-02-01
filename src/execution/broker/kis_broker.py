@@ -7,8 +7,10 @@ AI Trading Bot v2 - KIS (한국투자증권) 브로커
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -89,6 +91,11 @@ class KISBroker(BaseBroker):
         # 토큰 매니저
         self._token_manager = get_token_manager()
 
+        # API 레이트 리미터 (초당 max_rps 호출 제한)
+        self._rate_limit_lock = asyncio.Lock()
+        self._api_call_times: collections.deque = collections.deque(maxlen=20)
+        self._max_rps = 18  # KIS API 초당 최대 호출 수 (안전 마진 포함)
+
         # 검증
         if not self.config.app_key or not self.config.app_secret:
             raise ValueError("KIS_APPKEY와 KIS_APPSECRET이 설정되지 않았습니다.")
@@ -99,6 +106,25 @@ class KISBroker(BaseBroker):
             f"KISBroker 초기화: env={self.config.env}, "
             f"account=****{self.config.account_no[-4:]}"
         )
+
+    # ============================================================
+    # API 레이트 리미팅
+    # ============================================================
+
+    async def _rate_limit(self):
+        """API 호출 전 레이트 리미트 대기 (슬라이딩 윈도우)"""
+        async with self._rate_limit_lock:
+            now = time.monotonic()
+            # 1초 이내 호출 기록만 유지
+            while self._api_call_times and now - self._api_call_times[0] > 1.0:
+                self._api_call_times.popleft()
+            # 초당 호출 한도 도달 시 대기
+            if len(self._api_call_times) >= self._max_rps:
+                wait_time = 1.0 - (now - self._api_call_times[0])
+                if wait_time > 0:
+                    logger.debug(f"[레이트 리밋] {wait_time:.3f}초 대기 (초당 {self._max_rps}건 제한)")
+                    await asyncio.sleep(wait_time)
+            self._api_call_times.append(time.monotonic())
 
     # ============================================================
     # 연결 관리
@@ -133,17 +159,30 @@ class KISBroker(BaseBroker):
 
     @property
     def is_connected(self) -> bool:
-        """연결 상태"""
-        return self._session is not None and not self._session.closed and self._token is not None
+        """연결 상태 (토큰 유효성 포함)"""
+        if self._session is None or self._session.closed:
+            return False
+        if self._token is None:
+            return False
+        # 토큰 매니저의 유효성 체크 활용 (만료 5분 전이면 갱신 필요)
+        return self._token_manager._is_token_valid()
 
     # ============================================================
     # 토큰 관리 (토큰 매니저 사용)
     # ============================================================
 
     async def _ensure_token(self) -> bool:
-        """토큰 유효성 확인 및 갱신 (토큰 매니저 사용)"""
-        self._token = await self._token_manager.get_access_token()
-        return self._token is not None
+        """토큰 유효성 확인 및 갱신 (지수 백오프 재시도)"""
+        for attempt in range(3):
+            self._token = await self._token_manager.get_access_token()
+            if self._token is not None:
+                return True
+            # 지수 백오프: 1초, 2초, 4초
+            delay = 2 ** attempt
+            logger.warning(f"[토큰] 발급 실패 (시도 {attempt + 1}/3), {delay}초 후 재시도")
+            await asyncio.sleep(delay)
+        logger.error("[토큰] 3회 재시도 후에도 토큰 발급 실패")
+        return False
 
     # ============================================================
     # HTTP 헬퍼
@@ -159,25 +198,126 @@ class KISBroker(BaseBroker):
             "tr_id": tr_id,
         }
 
+    def _is_token_error(self, data: dict) -> bool:
+        """토큰 관련 오류 여부 확인"""
+        msg_cd = str(data.get("msg_cd", ""))
+        # EGW00123: Access Token 만료, EGW00121: 유효하지 않은 Access Token
+        return msg_cd in ("EGW00123", "EGW00121")
+
+    async def _api_get(self, url: str, tr_id: str, params: dict) -> dict:
+        """API GET 요청 (토큰 만료 시 자동 갱신 + 재시도, 일시적 오류 재시도)"""
+        if not self._session or self._session.closed:
+            logger.warning("[API] 세션 없음, 재연결 시도")
+            if not await self.connect():
+                return {"rt_cd": "-1", "msg1": "세션 연결 실패"}
+        if self._token is None:
+            logger.warning("[API] 토큰 없음, 갱신 시도")
+            if not await self._ensure_token():
+                return {"rt_cd": "-1", "msg1": "토큰 발급 실패"}
+        for attempt in range(3):
+            try:
+                await self._rate_limit()
+                headers = self._get_headers(tr_id)
+                async with self._session.get(url, headers=headers, params=params) as resp:
+                    if resp.status == 401 and attempt < 2:
+                        logger.warning("[토큰] 401 응답, 토큰 갱신 시도")
+                        await self._ensure_token()
+                        continue
+                    if resp.status in (429, 500, 502, 503) and attempt < 2:
+                        logger.warning(f"[API] HTTP {resp.status}, {attempt+1}회 재시도")
+                        await asyncio.sleep(1.0 * (attempt + 1))
+                        continue
+                    try:
+                        data = await resp.json()
+                    except Exception:
+                        logger.warning(f"[API] JSON 파싱 실패 (status={resp.status})")
+                        return {"rt_cd": "-1", "msg1": f"JSON 파싱 실패 (HTTP {resp.status})"}
+                    if self._is_token_error(data) and attempt < 2:
+                        logger.warning(f"[토큰] 토큰 오류 감지 ({data.get('msg_cd')}), 갱신 시도")
+                        await self._ensure_token()
+                        continue
+                    return data
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                if attempt < 2:
+                    logger.warning(f"[API] 네트워크 오류, {attempt+1}회 재시도: {e}")
+                    await asyncio.sleep(1.0 * (attempt + 1))
+                    continue
+                logger.error(f"[API] GET 실패 (3회 시도): {e}")
+                return {"rt_cd": "-1", "msg1": f"네트워크 오류: {e}"}
+        return {"rt_cd": "-1", "msg1": "API 호출 실패 (최대 재시도 초과)"}
+
+    async def _api_post(self, url: str, tr_id: str, json_data: dict,
+                        extra_headers: Optional[dict] = None) -> dict:
+        """API POST 요청 (토큰 만료 시 자동 갱신 + 재시도, 일시적 오류 재시도)"""
+        if not self._session or self._session.closed:
+            logger.warning("[API] 세션 없음, 재연결 시도")
+            if not await self.connect():
+                return {"rt_cd": "-1", "msg1": "세션 연결 실패"}
+        if self._token is None:
+            logger.warning("[API] 토큰 없음, 갱신 시도")
+            if not await self._ensure_token():
+                return {"rt_cd": "-1", "msg1": "토큰 발급 실패"}
+        for attempt in range(3):
+            try:
+                await self._rate_limit()
+                headers = self._get_headers(tr_id)
+                if extra_headers:
+                    headers.update(extra_headers)
+                async with self._session.post(url, headers=headers, json=json_data) as resp:
+                    if resp.status == 401 and attempt < 2:
+                        logger.warning("[토큰] 401 응답, 토큰 갱신 시도")
+                        await self._ensure_token()
+                        continue
+                    if resp.status in (429, 500, 502, 503) and attempt < 2:
+                        logger.warning(f"[API] HTTP {resp.status}, {attempt+1}회 재시도")
+                        await asyncio.sleep(1.0 * (attempt + 1))
+                        continue
+                    try:
+                        data = await resp.json()
+                    except Exception:
+                        logger.warning(f"[API] JSON 파싱 실패 (status={resp.status})")
+                        return {"rt_cd": "-1", "msg1": f"JSON 파싱 실패 (HTTP {resp.status})"}
+                    if self._is_token_error(data) and attempt < 2:
+                        logger.warning(f"[토큰] 토큰 오류 감지 ({data.get('msg_cd')}), 갱신 시도")
+                        await self._ensure_token()
+                        continue
+                    return data
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                if attempt < 2:
+                    logger.warning(f"[API] 네트워크 오류, {attempt+1}회 재시도: {e}")
+                    await asyncio.sleep(1.0 * (attempt + 1))
+                    continue
+                logger.error(f"[API] POST 실패 (3회 시도): {e}")
+                return {"rt_cd": "-1", "msg1": f"네트워크 오류: {e}"}
+        return {"rt_cd": "-1", "msg1": "API 호출 실패 (최대 재시도 초과)"}
+
     async def _get_hashkey(self, params: Dict[str, Any]) -> Optional[str]:
-        """주문 API용 hashkey 발급"""
-        try:
-            url = f"{self.config.base_url}/uapi/hashkey"
-            headers = {
-                "Content-Type": "application/json",
-                "appkey": self.config.app_key,
-                "appsecret": self.config.app_secret,
-            }
-
-            async with self._session.post(url, headers=headers, json=params) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.json()
-                return data.get("HASH")
-
-        except Exception as e:
-            logger.error(f"Hashkey 발급 실패: {e}")
-            return None
+        """주문 API용 hashkey 발급 (최대 3회 재시도)"""
+        url = f"{self.config.base_url}/uapi/hashkey"
+        headers = {
+            "Content-Type": "application/json",
+            "appkey": self.config.app_key,
+            "appsecret": self.config.app_secret,
+        }
+        for attempt in range(3):
+            try:
+                await self._rate_limit()
+                async with self._session.post(url, headers=headers, json=params) as resp:
+                    if resp.status != 200:
+                        if attempt < 2:
+                            logger.warning(f"Hashkey 발급 실패 (HTTP {resp.status}), 재시도 {attempt + 1}/3")
+                            await asyncio.sleep(0.5 * (attempt + 1))
+                            continue
+                        return None
+                    data = await resp.json()
+                    return data.get("HASH")
+            except Exception as e:
+                if attempt < 2:
+                    logger.warning(f"Hashkey 발급 오류 ({e}), 재시도 {attempt + 1}/3")
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                else:
+                    logger.error(f"Hashkey 발급 실패 (3회 재시도 소진): {e}")
+        return None
 
     # ============================================================
     # 주문 실행
@@ -252,45 +392,41 @@ class KISBroker(BaseBroker):
 
             # API 호출
             url = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/order-cash"
-            headers = self._get_headers(tr_id)
-            headers["hashkey"] = hashkey
+            data = await self._api_post(url, tr_id, params, extra_headers={"hashkey": hashkey})
 
-            async with self._session.post(url, headers=headers, json=params) as resp:
-                data = await resp.json()
+            rt_cd = data.get("rt_cd", "")
+            if str(rt_cd) != "0":
+                msg = data.get("msg1", "알 수 없는 오류")
+                msg_cd = data.get("msg_cd", "")
+                logger.error(f"주문 실패: [{msg_cd}] {msg}")
+                return False, f"[{msg_cd}] {msg}"
 
-                rt_cd = data.get("rt_cd", "")
-                if str(rt_cd) != "0":
-                    msg = data.get("msg1", "알 수 없는 오류")
-                    msg_cd = data.get("msg_cd", "")
-                    logger.error(f"주문 실패: [{msg_cd}] {msg}")
-                    return False, f"[{msg_cd}] {msg}"
+            # 주문번호 추출
+            output = data.get("output", {})
+            if isinstance(output, list):
+                output = output[0] if output else {}
 
-                # 주문번호 추출
-                output = data.get("output", {})
-                if isinstance(output, list):
-                    output = output[0] if output else {}
+            kis_ord_no = output.get("ODNO") or output.get("odno", "")
+            orgno = output.get("KRX_FWDG_ORD_ORGNO") or output.get("ORGNO", "")
 
-                kis_ord_no = output.get("ODNO") or output.get("odno", "")
-                orgno = output.get("KRX_FWDG_ORD_ORGNO") or output.get("ORGNO", "")
+            if not kis_ord_no:
+                kis_ord_no = f"TEMP_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
 
-                if not kis_ord_no:
-                    kis_ord_no = f"TEMP_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+            # 주문 추적
+            order.status = OrderStatus.SUBMITTED
+            order.broker_order_id = kis_ord_no
+            order.updated_at = datetime.now()
 
-                # 주문 추적
-                order.status = OrderStatus.SUBMITTED
-                order.broker_order_id = kis_ord_no
-                order.updated_at = datetime.now()
+            self._pending_orders[order.id] = order
+            self._order_id_to_kis_no[order.id] = kis_ord_no
+            if orgno:
+                self._order_id_to_orgno[order.id] = orgno
 
-                self._pending_orders[order.id] = order
-                self._order_id_to_kis_no[order.id] = kis_ord_no
-                if orgno:
-                    self._order_id_to_orgno[order.id] = orgno
-
-                logger.info(
-                    f"주문 제출 성공: {order.symbol} {order.side.value} "
-                    f"{order.quantity}주 @ {ord_unpr}원 -> KIS#{kis_ord_no}"
-                )
-                return True, kis_ord_no
+            logger.info(
+                f"주문 제출 성공: {order.symbol} {order.side.value} "
+                f"{order.quantity}주 @ {ord_unpr}원 -> KIS#{kis_ord_no}"
+            )
+            return True, kis_ord_no
 
         except Exception as e:
             logger.exception(f"주문 제출 오류: {e}")
@@ -512,24 +648,23 @@ class KISBroker(BaseBroker):
                 "FID_INPUT_DATE_1": "",
             }
 
-            headers = self._get_headers(tr_id)
+            data = await self._api_get(url, tr_id, params)
 
-            async with self._session.get(url, headers=headers, params=params) as resp:
-                if resp.status != 200:
-                    return []
+            rt_cd = data.get("rt_cd", "")
+            if str(rt_cd) != "0":
+                return []
 
-                data = await resp.json()
-                output = data.get("output", [])
+            output = data.get("output", [])
 
-                symbols = []
-                for item in output[:100]:  # 상위 100개
-                    code = item.get("mksc_shrn_iscd", "")
-                    if code:
-                        symbols.append(code.zfill(6))
+            symbols = []
+            for item in output[:100]:  # 상위 100개
+                code = item.get("mksc_shrn_iscd", "")
+                if code:
+                    symbols.append(code.zfill(6))
 
-                if symbols:
-                    logger.info(f"대형주 {len(symbols)}개 조회 완료 (NXT 가능)")
-                    return symbols
+            if symbols:
+                logger.info(f"대형주 {len(symbols)}개 조회 완료 (NXT 가능)")
+                return symbols
 
         except Exception as e:
             logger.debug(f"코스피200 조회 실패: {e}")
@@ -595,25 +730,21 @@ class KISBroker(BaseBroker):
                 return False
 
             url = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/order-rvsecncl"
-            headers = self._get_headers(tr_id)
-            headers["hashkey"] = hashkey
+            data = await self._api_post(url, tr_id, params, extra_headers={"hashkey": hashkey})
 
-            async with self._session.post(url, headers=headers, json=params) as resp:
-                data = await resp.json()
+            rt_cd = data.get("rt_cd", "")
+            if str(rt_cd) != "0":
+                msg = data.get("msg1", "")
+                logger.error(f"주문 취소 실패: {msg}")
+                return False
 
-                rt_cd = data.get("rt_cd", "")
-                if str(rt_cd) != "0":
-                    msg = data.get("msg1", "")
-                    logger.error(f"주문 취소 실패: {msg}")
-                    return False
+            # 추적에서 제거
+            self._pending_orders.pop(order_id, None)
+            self._order_id_to_kis_no.pop(order_id, None)
+            self._order_id_to_orgno.pop(order_id, None)
 
-                # 추적에서 제거
-                self._pending_orders.pop(order_id, None)
-                self._order_id_to_kis_no.pop(order_id, None)
-                self._order_id_to_orgno.pop(order_id, None)
-
-                logger.info(f"주문 취소 성공: {order_id} (KIS#{kis_ord_no})")
-                return True
+            logger.info(f"주문 취소 성공: {order_id} (KIS#{kis_ord_no})")
+            return True
 
         except Exception as e:
             logger.exception(f"주문 취소 오류: {e}")
@@ -657,27 +788,23 @@ class KISBroker(BaseBroker):
                 return False
 
             url = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/order-rvsecncl"
-            headers = self._get_headers(tr_id)
-            headers["hashkey"] = hashkey
+            data = await self._api_post(url, tr_id, params, extra_headers={"hashkey": hashkey})
 
-            async with self._session.post(url, headers=headers, json=params) as resp:
-                data = await resp.json()
+            rt_cd = data.get("rt_cd", "")
+            if str(rt_cd) != "0":
+                msg = data.get("msg1", "")
+                logger.error(f"주문 수정 실패: {msg}")
+                return False
 
-                rt_cd = data.get("rt_cd", "")
-                if str(rt_cd) != "0":
-                    msg = data.get("msg1", "")
-                    logger.error(f"주문 수정 실패: {msg}")
-                    return False
+            # 주문 정보 업데이트
+            if new_quantity:
+                order.quantity = new_quantity
+            if new_price:
+                order.price = new_price
+            order.updated_at = datetime.now()
 
-                # 주문 정보 업데이트
-                if new_quantity:
-                    order.quantity = new_quantity
-                if new_price:
-                    order.price = new_price
-                order.updated_at = datetime.now()
-
-                logger.info(f"주문 수정 성공: {order_id}")
-                return True
+            logger.info(f"주문 수정 성공: {order_id}")
+            return True
 
         except Exception as e:
             logger.exception(f"주문 수정 오류: {e}")
@@ -723,37 +850,34 @@ class KISBroker(BaseBroker):
                 "CTX_AREA_NK100": "",
             }
 
-            headers = self._get_headers(tr_id)
+            data = await self._api_get(url, tr_id, params)
 
-            async with self._session.get(url, headers=headers, params=params) as resp:
-                data = await resp.json()
-
-                rt_cd = data.get("rt_cd", "")
-                if str(rt_cd) != "0":
-                    logger.warning(f"포지션 조회 실패: {data.get('msg1', '')}")
-                    return positions
-
-                output1 = data.get("output1", []) or []
-
-                for item in output1:
-                    symbol = str(item.get("pdno", "")).zfill(6)
-                    qty = int(item.get("hldg_qty", "0") or "0")
-
-                    if qty > 0:
-                        avg_price = Decimal(str(item.get("pchs_avg_pric", "0") or "0"))
-                        current_price = Decimal(str(item.get("prpr", "0") or "0"))
-                        name = str(item.get("prdt_name", "") or "").strip()
-
-                        positions[symbol] = Position(
-                            symbol=symbol,
-                            name=name,
-                            quantity=qty,
-                            avg_price=avg_price,
-                            current_price=current_price if current_price > 0 else avg_price,
-                        )
-
-                logger.debug(f"포지션 조회 완료: {len(positions)}개")
+            rt_cd = data.get("rt_cd", "")
+            if str(rt_cd) != "0":
+                logger.warning(f"포지션 조회 실패: {data.get('msg1', '')}")
                 return positions
+
+            output1 = data.get("output1", []) or []
+
+            for item in output1:
+                symbol = str(item.get("pdno", "")).zfill(6)
+                qty = int(item.get("hldg_qty", "0") or "0")
+
+                if qty > 0:
+                    avg_price = Decimal(str(item.get("pchs_avg_pric", "0") or "0"))
+                    current_price = Decimal(str(item.get("prpr", "0") or "0"))
+                    name = str(item.get("prdt_name", "") or "").strip()
+
+                    positions[symbol] = Position(
+                        symbol=symbol,
+                        name=name,
+                        quantity=qty,
+                        avg_price=avg_price,
+                        current_price=current_price if current_price > 0 else avg_price,
+                    )
+
+            logger.debug(f"포지션 조회 완료: {len(positions)}개")
+            return positions
 
         except Exception as e:
             logger.exception(f"포지션 조회 오류: {e}")
@@ -794,34 +918,31 @@ class KISBroker(BaseBroker):
                 "CTX_AREA_NK100": "",
             }
 
-            headers = self._get_headers(tr_id)
+            data = await self._api_get(url, tr_id, params)
 
-            async with self._session.get(url, headers=headers, params=params) as resp:
-                data = await resp.json()
+            rt_cd = data.get("rt_cd", "")
+            if str(rt_cd) != "0":
+                logger.warning(f"잔고 조회 실패: {data.get('msg1', '')}")
+                return {}
 
-                rt_cd = data.get("rt_cd", "")
-                if str(rt_cd) != "0":
-                    logger.warning(f"잔고 조회 실패: {data.get('msg1', '')}")
-                    return {}
+            output2 = data.get("output2", [])
+            if not output2:
+                return {}
 
-                output2 = data.get("output2", [])
-                if not output2:
-                    return {}
+            account_info = output2[0] if isinstance(output2, list) else output2
 
-                account_info = output2[0] if isinstance(output2, list) else output2
+            # 핵심 금액
+            deposit = float(account_info.get("dnca_tot_amt", "0") or "0")  # 예수금 총액
+            stock_value = float(account_info.get("scts_evlu_amt", "0") or "0")  # 주식 평가액
 
-                # 핵심 금액
-                deposit = float(account_info.get("dnca_tot_amt", "0") or "0")  # 예수금 총액
-                stock_value = float(account_info.get("scts_evlu_amt", "0") or "0")  # 주식 평가액
+            # 평가 손익
+            unrealized_pnl = float(account_info.get("evlu_pfls_smtl_amt", "0") or "0")
 
-                # 평가 손익
-                unrealized_pnl = float(account_info.get("evlu_pfls_smtl_amt", "0") or "0")
+            # 매입 금액 합계
+            purchase_amt = float(account_info.get("pchs_amt_smtl_amt", "0") or "0")
 
-                # 매입 금액 합계
-                purchase_amt = float(account_info.get("pchs_amt_smtl_amt", "0") or "0")
-
-                # KIS API 총평가금액 (D+2 정산 등 포함, 참고용)
-                tot_evlu_amt = float(account_info.get("tot_evlu_amt", "0") or "0")
+            # KIS API 총평가금액 (D+2 정산 등 포함, 참고용)
+            tot_evlu_amt = float(account_info.get("tot_evlu_amt", "0") or "0")
 
             # 2. 매수가능조회 API (실제 주문 가능 금액)
             available_cash = 0.0
@@ -839,14 +960,11 @@ class KISBroker(BaseBroker):
                     "OVRS_ICLD_YN": "N",
                 }
 
-                headers2 = self._get_headers(tr_id2)
-
-                async with self._session.get(url2, headers=headers2, params=params2) as resp2:
-                    data2 = await resp2.json()
-                    if str(data2.get("rt_cd", "")) == "0":
-                        output = data2.get("output", {})
-                        # 미수 없는 매수가능금액 (실제 주문 가능 금액)
-                        available_cash = float(output.get("nrcvb_buy_amt", "0") or "0")
+                data2 = await self._api_get(url2, tr_id2, params2)
+                if str(data2.get("rt_cd", "")) == "0":
+                    output = data2.get("output", {})
+                    # 미수 없는 매수가능금액 (실제 주문 가능 금액)
+                    available_cash = float(output.get("nrcvb_buy_amt", "0") or "0")
             except Exception as e:
                 logger.debug(f"매수가능조회 실패: {e}")
                 # 실패시 예수금 사용
@@ -884,28 +1002,25 @@ class KISBroker(BaseBroker):
                 "fid_input_iscd": symbol.zfill(6),
             }
 
-            headers = self._get_headers(tr_id)
+            data = await self._api_get(url, tr_id, params)
 
-            async with self._session.get(url, headers=headers, params=params) as resp:
-                data = await resp.json()
+            rt_cd = data.get("rt_cd", "")
+            if str(rt_cd) != "0":
+                return {}
 
-                rt_cd = data.get("rt_cd", "")
-                if str(rt_cd) != "0":
-                    return {}
-
-                output = data.get("output", {})
-                return {
-                    "symbol": symbol,
-                    "name": str(output.get("hts_kor_isnm", "") or "").strip(),
-                    "price": float(output.get("stck_prpr", "0") or "0"),
-                    "open": float(output.get("stck_oprc", "0") or "0"),
-                    "high": float(output.get("stck_hgpr", "0") or "0"),
-                    "low": float(output.get("stck_lwpr", "0") or "0"),
-                    "prev_close": float(output.get("stck_sdpr", "0") or "0"),
-                    "volume": int(output.get("acml_vol", "0") or "0"),
-                    "change": float(output.get("prdy_vrss", "0") or "0"),
-                    "change_pct": float(output.get("prdy_ctrt", "0") or "0"),
-                }
+            output = data.get("output", {})
+            return {
+                "symbol": symbol,
+                "name": str(output.get("hts_kor_isnm", "") or "").strip(),
+                "price": float(output.get("stck_prpr", "0") or "0"),
+                "open": float(output.get("stck_oprc", "0") or "0"),
+                "high": float(output.get("stck_hgpr", "0") or "0"),
+                "low": float(output.get("stck_lwpr", "0") or "0"),
+                "prev_close": float(output.get("stck_sdpr", "0") or "0"),
+                "volume": int(output.get("acml_vol", "0") or "0"),
+                "change": float(output.get("prdy_vrss", "0") or "0"),
+                "change_pct": float(output.get("prdy_ctrt", "0") or "0"),
+            }
 
         except Exception as e:
             logger.exception(f"현재가 조회 오류: {e}")
@@ -926,39 +1041,36 @@ class KISBroker(BaseBroker):
                 "fid_input_iscd": symbol.zfill(6),
             }
 
-            headers = self._get_headers(tr_id)
+            data = await self._api_get(url, tr_id, params)
 
-            async with self._session.get(url, headers=headers, params=params) as resp:
-                data = await resp.json()
+            rt_cd = data.get("rt_cd", "")
+            if str(rt_cd) != "0":
+                return {}
 
-                rt_cd = data.get("rt_cd", "")
-                if str(rt_cd) != "0":
-                    return {}
+            output1 = data.get("output1", {})
+            output2 = data.get("output2", {})
 
-                output1 = data.get("output1", {})
-                output2 = data.get("output2", {})
+            # 호가 추출
+            bids = []
+            asks = []
+            for i in range(1, 11):
+                bid_price = float(output1.get(f"bidp{i}", "0") or "0")
+                bid_size = int(output1.get(f"bidp_rsqn{i}", "0") or "0")
+                ask_price = float(output1.get(f"askp{i}", "0") or "0")
+                ask_size = int(output1.get(f"askp_rsqn{i}", "0") or "0")
 
-                # 호가 추출
-                bids = []
-                asks = []
-                for i in range(1, 11):
-                    bid_price = float(output1.get(f"bidp{i}", "0") or "0")
-                    bid_size = int(output1.get(f"bidp_rsqn{i}", "0") or "0")
-                    ask_price = float(output1.get(f"askp{i}", "0") or "0")
-                    ask_size = int(output1.get(f"askp_rsqn{i}", "0") or "0")
+                if bid_price > 0:
+                    bids.append({"price": bid_price, "size": bid_size})
+                if ask_price > 0:
+                    asks.append({"price": ask_price, "size": ask_size})
 
-                    if bid_price > 0:
-                        bids.append({"price": bid_price, "size": bid_size})
-                    if ask_price > 0:
-                        asks.append({"price": ask_price, "size": ask_size})
-
-                return {
-                    "symbol": symbol,
-                    "bids": bids,
-                    "asks": asks,
-                    "total_bid_volume": int(output2.get("total_bidp_rsqn", "0") or "0"),
-                    "total_ask_volume": int(output2.get("total_askp_rsqn", "0") or "0"),
-                }
+            return {
+                "symbol": symbol,
+                "bids": bids,
+                "asks": asks,
+                "total_bid_volume": int(output2.get("total_bidp_rsqn", "0") or "0"),
+                "total_ask_volume": int(output2.get("total_askp_rsqn", "0") or "0"),
+            }
 
         except Exception as e:
             logger.exception(f"호가 조회 오류: {e}")
@@ -999,44 +1111,41 @@ class KISBroker(BaseBroker):
                 "fid_org_adj_prc": "0",  # 수정주가 미반영
             }
 
-            headers = self._get_headers(tr_id)
+            data = await self._api_get(url, tr_id, params)
 
-            async with self._session.get(url, headers=headers, params=params) as resp:
-                data = await resp.json()
+            rt_cd = data.get("rt_cd", "")
+            if str(rt_cd) != "0":
+                msg = data.get("msg1", "")
+                logger.warning(f"일봉 조회 실패 ({symbol}): {msg}")
+                return []
 
-                rt_cd = data.get("rt_cd", "")
-                if str(rt_cd) != "0":
-                    msg = data.get("msg1", "")
-                    logger.warning(f"일봉 조회 실패 ({symbol}): {msg}")
-                    return []
+            output2 = data.get("output2", [])
+            if not output2:
+                return []
 
-                output2 = data.get("output2", [])
-                if not output2:
-                    return []
-
-                result = []
-                for item in output2:
-                    try:
-                        close_p = float(item.get("stck_clpr", "0") or "0")
-                        if close_p <= 0:
-                            continue
-                        result.append({
-                            "date": item.get("stck_bsop_date", ""),
-                            "open": float(item.get("stck_oprc", "0") or "0"),
-                            "high": float(item.get("stck_hgpr", "0") or "0"),
-                            "low": float(item.get("stck_lwpr", "0") or "0"),
-                            "close": close_p,
-                            "volume": int(item.get("acml_vol", "0") or "0"),
-                            "value": int(item.get("acml_tr_pbmn", "0") or "0"),
-                        })
-                    except (ValueError, TypeError):
+            result = []
+            for item in output2:
+                try:
+                    close_p = float(item.get("stck_clpr", "0") or "0")
+                    if close_p <= 0:
                         continue
+                    result.append({
+                        "date": item.get("stck_bsop_date", ""),
+                        "open": float(item.get("stck_oprc", "0") or "0"),
+                        "high": float(item.get("stck_hgpr", "0") or "0"),
+                        "low": float(item.get("stck_lwpr", "0") or "0"),
+                        "close": close_p,
+                        "volume": int(item.get("acml_vol", "0") or "0"),
+                        "value": int(item.get("acml_tr_pbmn", "0") or "0"),
+                    })
+                except (ValueError, TypeError):
+                    continue
 
-                # 오래된 순서로 정렬
-                result.sort(key=lambda x: x["date"])
+            # 오래된 순서로 정렬
+            result.sort(key=lambda x: x["date"])
 
-                # 요청 일수만큼 자르기
-                return result[-days:]
+            # 요청 일수만큼 자르기
+            return result[-days:]
 
         except Exception as e:
             logger.error(f"일봉 조회 오류 ({symbol}): {e}")
@@ -1077,54 +1186,64 @@ class KISBroker(BaseBroker):
                 "ODNO": "",
             }
 
-            headers = self._get_headers(tr_id)
+            data = await self._api_get(url, tr_id, params)
 
-            async with self._session.get(url, headers=headers, params=params) as resp:
-                data = await resp.json()
-
-                rt_cd = data.get("rt_cd", "")
-                if str(rt_cd) != "0":
-                    return fills
-
-                output1 = data.get("output1", []) or []
-
-                # KIS 주문번호 -> 내부 주문 ID 매핑
-                kis_to_order_id = {v: k for k, v in self._order_id_to_kis_no.items()}
-
-                for item in output1:
-                    odno = str(item.get("ODNO") or item.get("odno", "")).strip()
-                    ccld_qty = int(item.get("TOT_CCLD_QTY") or item.get("tot_ccld_qty", "0") or "0")
-                    ccld_price = float(item.get("AVG_PRVS") or item.get("avg_prvs", "0") or "0")
-
-                    if odno in kis_to_order_id and ccld_qty > 0:
-                        order_id = kis_to_order_id[odno]
-                        order = self._pending_orders.get(order_id)
-
-                        if order:
-                            fill = Fill(
-                                order_id=order_id,
-                                symbol=order.symbol,
-                                side=order.side,
-                                quantity=ccld_qty,
-                                price=Decimal(str(ccld_price)),
-                                commission=self.calculate_commission(
-                                    order.side, ccld_qty, Decimal(str(ccld_price))
-                                ),
-                            )
-                            fills.append(fill)
-
-                            # 완전 체결 확인
-                            if ccld_qty >= order.quantity:
-                                order.status = OrderStatus.FILLED
-                                order.filled_quantity = ccld_qty
-                                order.filled_price = Decimal(str(ccld_price))
-
-                                # 추적에서 제거
-                                self._pending_orders.pop(order_id, None)
-                                self._order_id_to_kis_no.pop(order_id, None)
-                                self._order_id_to_orgno.pop(order_id, None)
-
+            rt_cd = data.get("rt_cd", "")
+            if str(rt_cd) != "0":
                 return fills
+
+            output1 = data.get("output1", []) or []
+
+            # KIS 주문번호 -> 내부 주문 ID 매핑
+            kis_to_order_id = {v: k for k, v in self._order_id_to_kis_no.items()}
+
+            for item in output1:
+                odno = str(item.get("ODNO") or item.get("odno", "")).strip()
+                ccld_qty = int(item.get("TOT_CCLD_QTY") or item.get("tot_ccld_qty", "0") or "0")
+                ccld_price = float(item.get("AVG_PRVS") or item.get("avg_prvs", "0") or "0")
+
+                if odno in kis_to_order_id and ccld_qty > 0:
+                    order_id = kis_to_order_id[odno]
+                    order = self._pending_orders.get(order_id)
+
+                    if order:
+                        # TOT_CCLD_QTY는 누적 체결수량 → 이전 체결분 차감하여 증분만 처리
+                        prev_filled = order.filled_quantity or 0
+                        new_qty = ccld_qty - prev_filled
+
+                        if new_qty <= 0:
+                            continue  # 이미 처리된 체결, 스킵
+
+                        fill = Fill(
+                            order_id=order_id,
+                            symbol=order.symbol,
+                            side=order.side,
+                            quantity=new_qty,
+                            price=Decimal(str(ccld_price)),
+                            commission=self.calculate_commission(
+                                order.side, new_qty, Decimal(str(ccld_price))
+                            ),
+                        )
+                        fills.append(fill)
+
+                        # 체결 상태 업데이트 (누적값으로 설정)
+                        order.filled_quantity = ccld_qty
+                        order.filled_price = Decimal(str(ccld_price))
+
+                        if order.filled_quantity >= order.quantity:
+                            order.status = OrderStatus.FILLED
+                            # 완전 체결: 추적에서 제거
+                            self._pending_orders.pop(order_id, None)
+                            self._order_id_to_kis_no.pop(order_id, None)
+                            self._order_id_to_orgno.pop(order_id, None)
+                        else:
+                            order.status = OrderStatus.PARTIAL
+                            logger.info(
+                                f"[부분체결] {order.symbol} "
+                                f"{order.filled_quantity}/{order.quantity}주"
+                            )
+
+            return fills
 
         except Exception as e:
             logger.exception(f"체결 확인 오류: {e}")

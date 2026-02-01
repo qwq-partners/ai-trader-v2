@@ -40,6 +40,8 @@ class DashboardDataCollector:
 
     def __init__(self, bot):
         self.bot = bot
+        self._name_cache: Dict[str, str] = {}
+        self._name_cache_updated: Optional[datetime] = None
 
     # ----------------------------------------------------------
     # 시스템 상태
@@ -195,7 +197,11 @@ class DashboardDataCollector:
     # ----------------------------------------------------------
 
     def _build_name_cache(self) -> Dict[str, str]:
-        """종목명 캐시 구축 (봇 캐시 + 포지션 + 스크리너)"""
+        """종목명 캐시 구축 (60초 TTL, 봇 캐시 + 포지션 + 스크리너)"""
+        now = datetime.now()
+        if self._name_cache_updated and (now - self._name_cache_updated).total_seconds() < 60:
+            return self._name_cache
+
         cache: Dict[str, str] = {}
 
         # 1. 봇 레벨 캐시 (가장 우선)
@@ -218,6 +224,8 @@ class DashboardDataCollector:
                 if stock.symbol not in cache and stock.name and stock.name != stock.symbol:
                     cache[stock.symbol] = stock.name
 
+        self._name_cache = cache
+        self._name_cache_updated = now
         return cache
 
     def _enrich_trades(self, trades) -> List[Dict[str, Any]]:
@@ -658,3 +666,50 @@ class DashboardDataCollector:
             }
 
         return result
+
+    # ----------------------------------------------------------
+    # 시스템 건강 메트릭
+    # ----------------------------------------------------------
+
+    def get_system_health(self) -> Dict[str, Any]:
+        """시스템 건강 상태 (캐시, API, 토큰 등)"""
+        bot = self.bot
+        engine = bot.engine
+
+        # 전략 캐시 크기
+        cache_stats = {}
+        if bot.strategy_manager:
+            for name, strategy in bot.strategy_manager.strategies.items():
+                cache_stats[name] = {
+                    "price_history_symbols": len(getattr(strategy, '_price_history', {})),
+                    "indicators_symbols": len(getattr(strategy, '_indicators', {})),
+                }
+
+        # 브로커 상태
+        broker_stats = {}
+        if bot.broker:
+            broker_stats = {
+                "connected": bot.broker.is_connected,
+                "rate_limit_calls_last_sec": len(getattr(bot.broker, '_api_call_times', [])),
+                "pending_orders": len(getattr(bot.broker, '_pending_orders', {})),
+            }
+
+        # 엔진 리스크 매니저
+        risk_stats = {}
+        if engine.risk_manager:
+            rm = engine.risk_manager
+            risk_stats = {
+                "pending_orders": len(getattr(rm, '_pending_orders', set())),
+                "pending_quantities": len(getattr(rm, '_pending_quantities', {})),
+                "cooldown_symbols": len(getattr(rm, '_order_fail_cooldown', {})),
+                "reserved_cash": float(getattr(rm, '_reserved_cash', 0)),
+            }
+
+        return _serialize({
+            "cache": cache_stats,
+            "broker": broker_stats,
+            "risk_manager": risk_stats,
+            "stock_name_cache_size": len(getattr(bot, 'stock_name_cache', {})),
+            "watch_symbols_count": len(getattr(bot, '_watch_symbols', [])),
+            "timestamp": datetime.now(),
+        })

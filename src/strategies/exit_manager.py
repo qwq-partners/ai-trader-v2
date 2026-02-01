@@ -107,26 +107,50 @@ class ExitManager:
                 state.entry_price = position.avg_price
                 state.original_quantity = position.quantity
                 state.remaining_quantity = position.quantity
+                # 추가매수 시 익절 단계 초기화 및 고가 재계산
+                state.current_stage = ExitStage.NONE
+                state.highest_price = position.current_price or position.avg_price
                 logger.debug(
-                    f"[ExitManager] 포지션 업데이트: {position.symbol} "
+                    f"[ExitManager] 포지션 업데이트(추가매수): {position.symbol} "
                     f"{old_qty}주 → {position.quantity}주, "
-                    f"평단가={position.avg_price:,.0f}원"
+                    f"평단가={position.avg_price:,.0f}원, "
+                    f"stage→NONE, highest→{state.highest_price:,.0f}원"
                 )
             return
+
+        # 현재 수익률 기반으로 초기 단계 결정 (재시작/재등록 시)
+        initial_stage = ExitStage.NONE
+        current_price = position.current_price or position.avg_price
+        if position.avg_price and position.avg_price > 0 and current_price > position.avg_price:
+            pnl_pct = float((current_price - position.avg_price) / position.avg_price * 100)
+            if pnl_pct >= self.config.second_exit_pct:
+                initial_stage = ExitStage.TRAILING
+                logger.info(
+                    f"[ExitManager] {position.symbol} 수익률 +{pnl_pct:.1f}% → "
+                    f"트레일링 단계로 등록 (고점={current_price:,.0f}원)"
+                )
+            elif pnl_pct >= self.config.first_exit_pct:
+                initial_stage = ExitStage.FIRST
+                logger.info(
+                    f"[ExitManager] {position.symbol} 수익률 +{pnl_pct:.1f}% → "
+                    f"1차 익절 완료 단계로 등록"
+                )
 
         self._states[position.symbol] = PositionExitState(
             symbol=position.symbol,
             entry_price=position.avg_price,
             original_quantity=position.quantity,
             remaining_quantity=position.quantity,
-            highest_price=position.current_price or position.avg_price,
+            current_stage=initial_stage,
+            highest_price=current_price,
             stop_loss_pct=stop_loss_pct,
             trailing_stop_pct=trailing_stop_pct,
         )
         logger.debug(
             f"[ExitManager] 포지션 등록: {position.symbol} "
             f"(SL={stop_loss_pct or self.config.stop_loss_pct}%, "
-            f"TS={trailing_stop_pct or self.config.trailing_stop_pct}%)"
+            f"TS={trailing_stop_pct or self.config.trailing_stop_pct}%, "
+            f"stage={initial_stage.value})"
         )
 
     def update_price(self, symbol: str, current_price: Decimal) -> Optional[Tuple[str, int, str]]:
@@ -149,11 +173,12 @@ class ExitManager:
         if current_price > state.highest_price:
             state.highest_price = current_price
 
-        # 순손익률 계산 (수수료 포함)
+        # 순손익률 계산 (수수료 포함, float로 통일)
         if self.config.include_fees:
             _, net_pnl_pct = self.fee_calc.calculate_net_pnl(
                 state.entry_price, current_price, state.remaining_quantity
             )
+            net_pnl_pct = float(net_pnl_pct)
         else:
             net_pnl_pct = float((current_price - state.entry_price) / state.entry_price * 100)
 
@@ -260,7 +285,12 @@ class ExitManager:
         )
         state.total_realized_pnl += pnl
 
-        # 남은 수량 업데이트
+        # 남은 수량 업데이트 (과다 체결 방어)
+        if sold_quantity > state.remaining_quantity:
+            logger.warning(
+                f"[ExitManager] {symbol} 매도수량({sold_quantity}) > 보유수량({state.remaining_quantity}), 보정"
+            )
+            sold_quantity = state.remaining_quantity
         state.remaining_quantity -= sold_quantity
 
         logger.info(

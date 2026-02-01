@@ -5,7 +5,7 @@ AI Trading Bot v2 - 거래 복기 시스템 (Trade Reviewer)
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 from loguru import logger
 
@@ -547,13 +547,44 @@ class TradeReviewer:
         issues: List[str]
     ) -> str:
         """LLM 분석용 요약 텍스트 생성"""
+        # 일평균 지표 계산 (공휴일 포함 실제 영업일)
+        total_pnl = sum(t.pnl for t in trades)
+        if len(trades) >= 2:
+            sorted_trades = sorted(trades, key=lambda t: t.entry_time or datetime.min)
+            start_d = sorted_trades[0].entry_time.date()
+            end_d = sorted_trades[-1].exit_time.date() if sorted_trades[-1].exit_time else date.today()
+        else:
+            start_d = end_d = date.today()
+        period_days = max((end_d - start_d).days, 1)
+        try:
+            from ..engine import is_kr_market_holiday
+            trading_days = 0
+            d = start_d
+            while d <= end_d:
+                if d.weekday() < 5 and not is_kr_market_holiday(d):
+                    trading_days += 1
+                d += timedelta(days=1)
+            trading_days = max(trading_days, 1)
+        except ImportError:
+            trading_days = max(period_days * 5 // 7, 1)
+        daily_avg_pnl = total_pnl / trading_days
+        daily_avg_pnl_pct = avg_pnl_pct * len(trades) / trading_days if trading_days > 0 else 0
+        daily_trades = len(trades) / trading_days
+
         lines = [
             f"## 거래 복기 요약",
+            f"",
+            f"### 핵심 목표 달성 현황 (일평균 수익률 1% 목표)",
+            f"- 일평균 수익률: {daily_avg_pnl_pct:+.2f}% (목표: +1.00%)",
+            f"- 일평균 손익: {daily_avg_pnl:+,.0f}원",
+            f"- 일평균 거래: {daily_trades:.1f}건",
+            f"- 분석 기간: {period_days}일 (영업일 {trading_days}일)",
             f"",
             f"### 기본 성과",
             f"- 총 거래: {len(trades)}회",
             f"- 승률: {win_rate:.1f}%",
-            f"- 평균 수익률: {avg_pnl_pct:+.2f}%",
+            f"- 평균 수익률 (건당): {avg_pnl_pct:+.2f}%",
+            f"- 총 손익: {total_pnl:+,.0f}원",
             f"- 손익비: {profit_factor:.2f}",
             f"",
             f"### 성공 패턴",

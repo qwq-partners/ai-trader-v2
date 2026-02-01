@@ -10,10 +10,11 @@ import argparse
 import asyncio
 import signal
 import sys
+import aiohttp
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 
 # 프로젝트 루트를 path에 추가
 project_root = Path(__file__).parent.parent
@@ -46,9 +47,10 @@ from src.core.evolution import (
     get_trade_journal, get_trade_reviewer, get_strategy_evolver
 )
 from src.dashboard.server import DashboardServer
+from bot_schedulers import SchedulerMixin
 
 
-class TradingBot:
+class TradingBot(SchedulerMixin):
     """AI 트레이딩 봇"""
 
     def __init__(self, config: AppConfig, dry_run: bool = False):
@@ -89,7 +91,9 @@ class TradingBot:
         self._strategy_exit_params: Dict[str, Dict[str, float]] = {}
         # 종목별 전략 매핑 (ExitManager 등록 시 사용)
         self._symbol_strategy: Dict[str, str] = {}
+        self._exit_pending_symbols: Set[str] = set()  # ExitManager 매도 중복 방지
         self._watch_symbols_lock = asyncio.Lock()
+        self._portfolio_lock = asyncio.Lock()
 
         # 대시보드 서버
         self.dashboard: Optional[DashboardServer] = None
@@ -306,6 +310,14 @@ class TradingBot:
             ))
             logger.info("분할 익절 관리자 초기화 완료")
 
+            # 기존 포지션을 ExitManager에 등록 (초기화 순서: 포지션 로드 → ExitManager 생성 후 보완)
+            if self.engine.portfolio.positions:
+                for symbol, position in self.engine.portfolio.positions.items():
+                    self.exit_manager.register_position(position)
+                logger.info(
+                    f"기존 포지션 {len(self.engine.portfolio.positions)}개 ExitManager 등록 완료"
+                )
+
             # 자가 진화 엔진 초기화
             evolution_cfg = self.config.get("evolution") or {}
             if evolution_cfg.get("enabled", True):
@@ -329,11 +341,11 @@ class TradingBot:
 
             # 엔진에 컴포넌트 연결
             self.engine.strategy_manager = self.strategy_manager
-            self.engine.risk_manager = self.risk_manager
             self.engine.broker = self.broker
 
-            # 엔진 내부 RiskManager 인스턴스화 (SIGNAL/FILL 이벤트 핸들러 등록)
-            self._engine_risk_manager = RiskManager(self.engine, self.config.trading.risk)
+            # 엔진 이벤트 핸들링용 RiskManager (SIGNAL→ORDER, FILL 추적)
+            engine_risk_manager = RiskManager(self.engine, self.config.trading.risk)
+            self.engine.risk_manager = engine_risk_manager
             logger.info("엔진 리스크 매니저 (SIGNAL 핸들러) 등록 완료")
 
             # WebSocket 피드 초기화 (실시간 모드)
@@ -424,7 +436,7 @@ class TradingBot:
                     self.ws_feed.set_priority_symbols(list(positions.keys()))
 
         except Exception as e:
-            logger.error(f"기존 포지션 로드 오류: {e}")
+            logger.warning(f"기존 포지션 로드 오류: {e}")
 
     async def _load_watch_symbols(self):
         """감시 종목 로드 (스크리너 활용)"""
@@ -512,7 +524,7 @@ class TradingBot:
                 await asyncio.sleep(0.15)
 
             except Exception as e:
-                logger.debug(f"일봉 로드 실패 ({symbol}): {e}")
+                logger.warning(f"일봉 로드 실패 ({symbol}): {e}")
                 failed += 1
 
         logger.info(f"[히스토리] 일봉 데이터 로드 완료: 성공 {loaded}개, 실패 {failed}개")
@@ -583,8 +595,12 @@ class TradingBot:
             if self.exit_manager and event.symbol in self.engine.portfolio.positions:
                 await self._check_exit_signal(event.symbol, event.close)
 
+        except (ValueError, KeyError, TypeError) as e:
+            logger.debug(f"시세 데이터 형식 오류 ({event.symbol}): {e}")
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.error(f"시세 데이터 처리 오류: {e}")
+            logger.error(f"시세 데이터 처리 오류 ({event.symbol}): {e}")
 
     async def _check_exit_signal(self, symbol: str, current_price: Decimal):
         """분할 익절/손절 신호 확인"""
@@ -592,8 +608,8 @@ class TradingBot:
             return
 
         try:
-            # 전략이 이미 SELL 주문을 pending으로 올렸으면 ExitManager 스킵
-            if self._engine_risk_manager and symbol in self._engine_risk_manager._pending_orders:
+            # 이미 ExitManager 매도 주문이 진행 중이면 중복 방지
+            if symbol in self._exit_pending_symbols:
                 return
 
             # 청산 신호 확인
@@ -612,6 +628,9 @@ class TradingBot:
                     order_type=OrderType.MARKET,  # 시장가 청산
                     quantity=quantity,
                 )
+
+                # ExitManager 전용 pending 선등록 (중복 매도 방지, submit await 중 race condition 차단)
+                self._exit_pending_symbols.add(symbol)
 
                 # 브로커에 주문 제출 (실패 시 최대 2회 재시도)
                 success = False
@@ -634,16 +653,21 @@ class TradingBot:
                         order_type="MARKET",
                         status=f"submitted ({reason})"
                     )
-                    # 엔진 RiskManager에 pending 등록 → 전략 SELL과 중복 방지
-                    if self._engine_risk_manager:
-                        self._engine_risk_manager._pending_orders.add(symbol)
                 else:
+                    # 주문 실패 시 pending 해제 (다음 시세에서 재시도 가능)
+                    self._exit_pending_symbols.discard(symbol)
                     logger.error(f"[청산 주문 실패] {symbol} - {result} (3회 시도 후)")
-                    # 청산 실패는 중요하므로 알림
+                    # 청산 실패는 리스크 급증 → 신규 매수 차단
+                    self.engine.pause()
+                    logger.critical(
+                        f"[엔진 일시정지] 청산 실패로 신규 매수 차단: {symbol} "
+                        f"(수동 확인 후 재개 필요)"
+                    )
                     await self._send_error_alert(
-                        "WARNING",
-                        f"청산 주문 실패: {symbol} {quantity}주 (3회 재시도 후)",
-                        f"사유: {result}\n이유: {reason}"
+                        "CRITICAL",
+                        f"청산 주문 실패 → 엔진 일시정지: {symbol} {quantity}주",
+                        f"사유: {result}\n이유: {reason}\n"
+                        f"수동 확인 후 대시보드 또는 API로 재개 필요"
                     )
 
         except Exception as e:
@@ -708,11 +732,11 @@ class TradingBot:
                 )
 
                 # 주문 실패 시 해당 종목 쿨다운 등록 (반복 주문 방지)
-                if self._engine_risk_manager:
-                    self._engine_risk_manager.block_symbol(order.symbol)
+                if self.engine.risk_manager:
+                    self.engine.risk_manager.block_symbol(order.symbol)
                     # pending 해제 + 예약 현금 환원
                     order_amount = (order.price * order.quantity) if order.price and order.quantity else Decimal("0")
-                    self._engine_risk_manager.clear_pending(order.symbol, order_amount)
+                    self.engine.risk_manager.clear_pending(order.symbol, order_amount)
                     logger.info(f"[주문 쿨다운] {order.symbol} - 5분간 주문 차단 (pending 해제)")
 
                 # 주문 실패 알림 (종목당 1회만)
@@ -726,6 +750,14 @@ class TradingBot:
                         f"사유: {result}"
                     )
 
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            logger.error(f"주문 제출 네트워크 오류: {e}")
+            # 네트워크 오류 시 pending 해제
+            if self.engine.risk_manager and order:
+                order_amount = (order.price * order.quantity) if order.price and order.quantity else Decimal("0")
+                self.engine.risk_manager.clear_pending(order.symbol, order_amount)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.exception(f"주문 제출 오류: {e}")
 
@@ -787,8 +819,13 @@ class TradingBot:
                 commission=float(fill.commission)
             )
 
-            # 포트폴리오 업데이트
-            self.engine.update_position(fill)
+            # 포트폴리오 업데이트 (동기화 lock으로 보호)
+            async with self._portfolio_lock:
+                self.engine.update_position(fill)
+
+            # 리스크 통계 업데이트 (대시보드용: can_trade, daily_loss 등)
+            if self.risk_manager:
+                self.risk_manager.on_fill(event, self.engine.portfolio)
 
             # 매수 체결 시 종목명 보강 및 캐시
             if fill.side.value.upper() == "BUY":
@@ -802,16 +839,19 @@ class TradingBot:
                             position.name = cached
                         elif self.broker:
                             try:
-                                positions = await self.broker.get_positions()
-                                if fill.symbol in positions:
-                                    real_name = getattr(positions[fill.symbol], 'name', '')
-                                    if real_name and real_name != fill.symbol:
-                                        position.name = real_name
-                                        self.stock_name_cache[fill.symbol] = real_name
+                                quote = await self.broker.get_quote(fill.symbol)
+                                real_name = quote.get('name', '') if quote else ''
+                                if real_name and real_name != fill.symbol:
+                                    position.name = real_name
+                                    self.stock_name_cache[fill.symbol] = real_name
                             except Exception:
                                 pass
                     elif pos_name and pos_name != fill.symbol:
                         self.stock_name_cache[fill.symbol] = pos_name
+
+            # ExitManager 매도 pending 해제 (체결 확인)
+            if fill.side.value.upper() == "SELL":
+                self._exit_pending_symbols.discard(fill.symbol)
 
             # 분할 익절 관리자 업데이트
             if self.exit_manager:
@@ -1119,22 +1159,23 @@ class TradingBot:
                 # 엔진/WS 상태 로깅 (5분마다)
                 if now.minute % 5 == 0 and now.second < 60:
                     engine_stats = self.engine.stats
-                    logger.info(
+                    logger.debug(
                         f"[엔진 상태] 이벤트처리={engine_stats.events_processed}건, "
                         f"신호생성={engine_stats.signals_generated}건, "
                         f"오류={engine_stats.errors_count}건"
                     )
                     if self.ws_feed:
                         stats = self.ws_feed.get_stats()
-                        logger.info(
+                        logger.debug(
                             f"[WS 상태] 연결={stats['connected']}, "
                             f"구독={stats['subscribed_count']}개, "
                             f"수신={stats['message_count']}건, "
                             f"마지막={stats['last_message_time'] or 'N/A'}"
                         )
 
-                # 매일 06:00에 NXT 종목 갱신
-                if now.hour == 6 and (last_nxt_update is None or last_nxt_update.date() != now.date()):
+                # 매일 NXT 종목 갱신 (설정 시간)
+                nxt_hour = (self.config.get("scheduler") or {}).get("nxt_refresh_hour", 6)
+                if now.hour == nxt_hour and (last_nxt_update is None or last_nxt_update.date() != now.date()):
                     logger.info("[NXT] 매일 06:00 NXT 종목 갱신 시작")
                     await self._refresh_nxt_symbols()
                     last_nxt_update = now
@@ -1144,7 +1185,7 @@ class TradingBot:
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.error(f"세션 체크 오류: {e}")
+            logger.warning(f"세션 체크 오류: {e}")
 
     async def _refresh_nxt_symbols(self):
         """NXT 거래 가능 종목 갱신 (매일 06시 실행)"""
@@ -1161,594 +1202,6 @@ class TradingBot:
 
         except Exception as e:
             logger.error(f"NXT 종목 갱신 오류: {e}")
-
-    async def _run_pre_market_us_signal(self):
-        """US 시장 오버나이트 시그널 사전 조회 (08:00 아침 레포트 전)"""
-        if not self.us_market_data:
-            return
-
-        try:
-            signal = await self.us_market_data.get_overnight_signal()
-            if not signal:
-                return
-
-            sentiment = signal.get("sentiment", "neutral")
-            indices = signal.get("indices", {})
-            sector_signals = signal.get("sector_signals", {})
-
-            logger.info(f"[US 시그널] 시장 심리: {sentiment}")
-            for name, info in indices.items():
-                logger.info(f"[US 시그널]   {name}: {info['change_pct']:+.1f}%")
-
-            if sector_signals:
-                boosted = [
-                    f"{t}({s['boost']:+d})" for t, s in sector_signals.items()
-                ]
-                logger.info(f"[US 시그널] 한국 테마 영향: {', '.join(boosted)}")
-            else:
-                logger.info("[US 시그널] 한국 테마 영향 없음 (임계값 미달)")
-
-        except Exception as e:
-            logger.warning(f"[US 시그널] 오버나이트 시그널 조회 실패: {e}")
-
-    async def _run_daily_report_scheduler(self):
-        """
-        일일 레포트 스케줄러
-
-        - 00:00: 일일 통계 초기화
-        - 08:00: 오늘의 추천 종목 레포트
-        - 17:00: 추천 종목 결과 레포트
-        """
-        if not self.report_generator:
-            self.report_generator = get_report_generator()
-
-        last_morning_report: Optional[date] = None
-        last_evening_report: Optional[date] = None
-        last_holiday_refresh_month: Optional[str] = None
-        last_daily_reset: Optional[date] = None
-
-        try:
-            while self.running:
-                now = datetime.now()
-                today = now.date()
-
-                # 매월 25일 이후: 익월 휴장일 자동 갱신
-                if now.day >= 25 and self.kis_market_data:
-                    next_month = (now.replace(day=1) + timedelta(days=32)).strftime("%Y%m")
-                    if last_holiday_refresh_month != next_month:
-                        try:
-                            h = await self.kis_market_data.fetch_holidays(next_month)
-                            if h:
-                                from src.core.engine import _kr_market_holidays
-                                _kr_market_holidays.update(h)
-                                logger.info(f"[휴장일] 익월({next_month}) 휴장일 {len(h)}일 추가 로드")
-                            last_holiday_refresh_month = next_month
-                        except Exception as e:
-                            logger.warning(f"[휴장일] 익월 휴장일 갱신 실패: {e}")
-
-                # 자정: 일일 통계 + 전략 상태 초기화 (공휴일 포함 매일 실행)
-                if last_daily_reset != today:
-                    try:
-                        self.engine.reset_daily_stats()
-                        if self.risk_manager:
-                            self.risk_manager.reset_daily_stats()
-
-                        # 전략별 일일 상태 초기화
-                        for name, strat in self.strategy_manager.strategies.items():
-                            if hasattr(strat, 'clear_gap_stocks'):
-                                strat.clear_gap_stocks()
-                            if hasattr(strat, 'clear_oversold_stocks'):
-                                strat.clear_oversold_stocks()
-                            if hasattr(strat, '_theme_entries'):
-                                strat._theme_entries.clear()
-                            if hasattr(strat, '_active_themes'):
-                                strat._active_themes.clear()
-
-                        last_daily_reset = today
-                        logger.info("[스케줄러] 일일 통계 + 전략 상태 초기화 완료")
-                    except Exception as e:
-                        logger.error(f"[스케줄러] 일일 초기화 실패: {e}")
-
-                # 공휴일(주말 포함)이면 레포트 스킵
-                if is_kr_market_holiday(today):
-                    await asyncio.sleep(60)
-                    continue
-
-                # 아침 8시 레포트 (08:00~08:05)
-                if now.hour == 8 and now.minute < 5:
-                    if last_morning_report != today:
-                        # US 시장 오버나이트 시그널 선행 조회
-                        await self._run_pre_market_us_signal()
-
-                        logger.info("[레포트] 아침 추천 종목 레포트 발송 시작")
-                        try:
-                            await self.report_generator.generate_morning_report(
-                                max_stocks=10,
-                                send_telegram=True,
-                            )
-                            last_morning_report = today
-                        except Exception as e:
-                            logger.error(f"[레포트] 아침 레포트 발송 실패: {e}")
-
-                # 오후 5시 결과 레포트 (17:00~17:05)
-                if now.hour == 17 and now.minute < 5:
-                    if last_evening_report != today:
-                        logger.info("[레포트] 오후 결과 레포트 발송 시작")
-                        try:
-                            await self.report_generator.generate_evening_report(
-                                send_telegram=True,
-                            )
-                            last_evening_report = today
-                        except Exception as e:
-                            logger.error(f"[레포트] 오후 레포트 발송 실패: {e}")
-
-                # 1분마다 체크
-                await asyncio.sleep(60)
-
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error(f"레포트 스케줄러 오류: {e}")
-
-    async def _run_evolution_scheduler(self):
-        """
-        자가 진화 스케줄러
-
-        - 20:30: 일일 진화 실행 (장 마감 후)
-          1. 거래 저널에서 데이터 분석
-          2. LLM으로 전략 개선안 도출
-          3. 파라미터 자동 조정
-          4. 효과 평가 및 롤백
-        """
-        last_evolution_date: Optional[date] = None
-
-        try:
-            while self.running:
-                now = datetime.now()
-                today = now.date()
-
-                # 넥스트장 마감 후 20:30~20:35에 일일 진화 실행
-                if now.hour == 20 and 30 <= now.minute < 35:
-                    if last_evolution_date != today:
-                        logger.info("[진화] 일일 자가 진화 시작...")
-
-                        try:
-                            # 1. 복기 및 진화 실행
-                            evolution_cfg = self.config.get("evolution") or {}
-                            analysis_days = evolution_cfg.get("analysis_days", 7)
-                            min_trades = evolution_cfg.get("min_trades_for_evolution", 5)
-
-                            # 최소 거래 수 체크
-                            recent_trades = self.trade_journal.get_recent_trades(days=analysis_days)
-
-                            if len(recent_trades) >= min_trades:
-                                # 진화 실행
-                                result = await self.strategy_evolver.evolve(days=analysis_days)
-
-                                if result:
-                                    # 진화 결과 로깅
-                                    logger.info(
-                                        f"[진화] 완료 - 평가={result.overall_assessment}, "
-                                        f"인사이트 {len(result.key_insights)}개, "
-                                        f"파라미터 조정 {len(result.parameter_adjustments)}개"
-                                    )
-
-                                    # 핵심 인사이트 로그
-                                    for insight in result.key_insights[:3]:
-                                        logger.info(f"  [인사이트] {insight}")
-
-                                    # 파라미터 변경 로그
-                                    for adj in result.parameter_adjustments:
-                                        logger.info(
-                                            f"  [파라미터] {adj.parameter}: "
-                                            f"{adj.current_value} -> {adj.suggested_value} "
-                                            f"(신뢰도: {adj.confidence:.0%})"
-                                        )
-
-                                    # 텔레그램 알림 (선택적)
-                                    if evolution_cfg.get("send_telegram", True):
-                                        await self._send_evolution_report(result)
-
-                                    # 거래 로그에 기록 (복기용)
-                                    trading_logger.log_evolution(
-                                        assessment=result.overall_assessment,
-                                        confidence=result.confidence_score,
-                                        insights=result.key_insights,
-                                        parameter_changes=[
-                                            {
-                                                "parameter": p.parameter,
-                                                "from": p.current_value,
-                                                "to": p.suggested_value,
-                                                "confidence": p.confidence,
-                                            }
-                                            for p in result.parameter_adjustments
-                                        ],
-                                    )
-                                else:
-                                    logger.info("[진화] 진화 결과 없음 (변경 불필요)")
-                            else:
-                                logger.info(
-                                    f"[진화] 거래 부족으로 스킵 "
-                                    f"({len(recent_trades)}/{min_trades}건)"
-                                )
-
-                            last_evolution_date = today
-
-                        except Exception as e:
-                            logger.error(f"[진화] 실행 오류: {e}")
-                            import traceback
-                            await self._send_error_alert(
-                                "ERROR",
-                                "자가 진화 실행 오류",
-                                traceback.format_exc()
-                            )
-
-                # 매 시간 정각에 진화 효과 평가 (적용된 변경이 있는 경우)
-                if now.minute < 5 and 9 <= now.hour <= 15:
-                    try:
-                        # 진화 상태 확인 및 효과 평가
-                        state = self.strategy_evolver.get_evolution_state()
-
-                        if state and state.active_changes:
-                            evaluation = await self.strategy_evolver.evaluate_changes()
-
-                            if evaluation:
-                                logger.info(
-                                    f"[진화 평가] 활성 변경 {len(state.active_changes)}개, "
-                                    f"효과: {evaluation.get('effectiveness', 'unknown')}"
-                                )
-
-                                # 효과 없으면 롤백 고려
-                                if evaluation.get('should_rollback', False):
-                                    logger.warning("[진화] 효과 없음 - 롤백 실행")
-                                    await self.strategy_evolver.rollback_last_change()
-
-                    except Exception as e:
-                        logger.error(f"[진화 평가] 오류: {e}")
-
-                # 1분마다 체크
-                await asyncio.sleep(60)
-
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error(f"진화 스케줄러 오류: {e}")
-
-    async def _send_evolution_report(self, result):
-        """진화 결과 텔레그램 알림"""
-        try:
-            emoji_map = {"good": "✅", "fair": "⚠️", "poor": "❌", "no_data": "📊"}
-            emoji = emoji_map.get(result.overall_assessment, "📊")
-
-            text = f"""
-{emoji} <b>AI Trader v2 - 일일 진화 리포트</b>
-
-<b>분석 기간:</b> 최근 {result.period_days}일
-<b>전체 평가:</b> {result.overall_assessment.upper()}
-<b>신뢰도:</b> {result.confidence_score:.0%}
-
-<b>핵심 인사이트:</b>
-"""
-            for i, insight in enumerate(result.key_insights[:5], 1):
-                text += f"{i}. {insight}\n"
-
-            if result.parameter_adjustments:
-                text += "\n<b>파라미터 조정:</b>\n"
-                for adj in result.parameter_adjustments[:3]:
-                    text += (
-                        f"- {adj.parameter}: {adj.current_value} -> {adj.suggested_value} "
-                        f"({adj.confidence:.0%})\n"
-                    )
-
-            if result.next_week_outlook:
-                text += f"\n<b>전망:</b> {result.next_week_outlook[:200]}"
-
-            await send_alert(text)
-
-        except Exception as e:
-            logger.error(f"진화 리포트 전송 실패: {e}")
-
-    async def _run_theme_detection(self):
-        """테마 탐지 루프"""
-        try:
-            scan_interval = self.theme_detector.detection_interval_minutes * 60
-
-            while self.running:
-                try:
-                    # 테마 스캔
-                    themes = await self.theme_detector.detect_themes(force=True)
-
-                    if themes:
-                        logger.info(f"[테마 탐지] {len(themes)}개 테마 감지")
-
-                        # 테마 이벤트 발행
-                        for theme in themes:
-                            event = ThemeEvent(
-                                source="theme_detector",
-                                name=theme.name,
-                                score=theme.score,
-                                keywords=theme.keywords,
-                                symbols=theme.related_stocks,
-                            )
-                            await self.engine.emit(event)
-
-                            # 테마 관련 종목 WebSocket 구독 추가
-                            if self.ws_feed and theme.related_stocks:
-                                async with self._watch_symbols_lock:
-                                    new_symbols = [s for s in theme.related_stocks
-                                                 if s not in self._watch_symbols]
-                                    if new_symbols:
-                                        await self.ws_feed.subscribe(new_symbols[:10])
-                                        self._watch_symbols.extend(new_symbols[:10])
-                                        logger.info(f"[테마 탐지] 신규 종목 구독: {new_symbols[:10]}")
-
-                        # 종목별 뉴스 임팩트 → NewsEvent 발행 + WS 구독
-                        sentiments = self.theme_detector.get_all_stock_sentiments()
-                        for symbol, data in sentiments.items():
-                            impact = data.get("impact", 0)
-                            direction = data.get("direction", "bullish")
-                            reason = data.get("reason", "")
-
-                            # 임팩트 70+ 종목은 NewsEvent 발행
-                            if impact >= 70:
-                                news_event = NewsEvent(
-                                    source="theme_detector",
-                                    title=reason,
-                                    symbols=[symbol],
-                                    sentiment=1.0 if direction == "bullish" else -1.0,
-                                )
-                                await self.engine.emit(news_event)
-
-                                # WebSocket 구독에 자동 추가
-                                if self.ws_feed:
-                                    async with self._watch_symbols_lock:
-                                        if symbol not in self._watch_symbols:
-                                            await self.ws_feed.subscribe([symbol])
-                                            self._watch_symbols.append(symbol)
-                                            logger.info(
-                                                f"[뉴스 임팩트] {symbol} 구독 추가 "
-                                                f"(impact={impact}, {direction})"
-                                            )
-
-                except Exception as e:
-                    logger.error(f"테마 스캔 오류: {e}")
-
-                # 다음 스캔까지 대기
-                await asyncio.sleep(scan_interval)
-
-        except asyncio.CancelledError:
-            pass
-
-    async def _run_screening(self):
-        """주기적 종목 스크리닝 루프"""
-        try:
-            # 초기 대기 (다른 컴포넌트 초기화 후)
-            await asyncio.sleep(60)
-
-            while self.running:
-                try:
-                    # 세션 확인 - 마감 시간에는 스크리닝 스킵
-                    current_session = self._get_current_session()
-                    if current_session == MarketSession.CLOSED:
-                        await asyncio.sleep(self._screening_interval)
-                        continue
-
-                    logger.info(f"[스크리닝] 동적 종목 스캔 시작... (세션: {current_session.value})")
-
-                    # 통합 스크리닝 실행 (theme_detector 연동)
-                    screened = await self.screener.screen_all(
-                        theme_detector=self.theme_detector,
-                    )
-
-                    # 점수 맵 생성 (WebSocket 우선순위용)
-                    scores = {s.symbol: s.score for s in screened}
-
-                    new_symbols = []
-                    async with self._watch_symbols_lock:
-                        for stock in screened:
-                            # 높은 점수 종목만 감시 목록에 추가
-                            if stock.score >= 70 and stock.symbol not in self._watch_symbols:
-                                new_symbols.append(stock.symbol)
-                                self._watch_symbols.append(stock.symbol)
-                                logger.info(
-                                    f"  [NEW] {stock.symbol} {stock.name}: "
-                                    f"점수={stock.score:.0f}, {', '.join(stock.reasons[:2])}"
-                                )
-
-                    # 신규 종목 WebSocket 구독 (점수와 함께)
-                    if self.ws_feed:
-                        # 전체 점수 업데이트
-                        self.ws_feed.set_symbol_scores(scores)
-
-                        if new_symbols:
-                            # 신규 종목 구독 (롤링 방식으로 자동 관리)
-                            await self.ws_feed.subscribe(new_symbols, scores)
-                            stats = self.ws_feed.get_subscription_stats()
-                            logger.info(
-                                f"[스크리닝] 신규 {len(new_symbols)}개 추가 → "
-                                f"총 감시={stats['total_watch']}, 구독={stats['subscribed_count']}, "
-                                f"롤링대기={stats['rolling_queue_size']}"
-                            )
-
-                            # 감시 종목 변경 로그
-                            trading_logger.log_watchlist_update(
-                                added=new_symbols,
-                                removed=[],
-                                total=stats['total_watch'],
-                            )
-
-                    # 스크리닝 결과 로그 기록 (복기용)
-                    if screened:
-                        trading_logger.log_screening(
-                            source=f"periodic_{current_session.value}",
-                            total_stocks=len(screened),
-                            top_stocks=[{
-                                "symbol": s.symbol,
-                                "name": s.name,
-                                "score": s.score,
-                                "price": s.price,
-                                "change_pct": s.change_pct,
-                                "reasons": s.reasons,
-                            } for s in screened[:20]]
-                        )
-
-                    logger.info(f"[스크리닝] 완료 - 총 {len(screened)}개 후보, 신규 {len(new_symbols)}개")
-
-                except Exception as e:
-                    logger.error(f"스크리닝 오류: {e}")
-
-                # 다음 스캔까지 대기
-                await asyncio.sleep(self._screening_interval)
-
-        except asyncio.CancelledError:
-            pass
-
-    async def _run_fill_check(self):
-        """체결 확인 루프 (5초마다)"""
-        check_interval = 5  # 초
-
-        try:
-            while self.running:
-                try:
-                    # 미체결 주문이 있는 경우에만 확인
-                    open_orders = await self.broker.get_open_orders()
-
-                    if open_orders:
-                        fills = await self.broker.check_fills()
-
-                        for fill in fills:
-                            logger.info(
-                                f"[체결] {fill.symbol} {fill.side.value} "
-                                f"{fill.quantity}주 @ {fill.price:,.0f}원"
-                            )
-
-                            # 체결 이벤트 발행 → _on_fill() 핸들러에서 일괄 처리
-                            # (update_position, exit_manager, trading_logger, trade_journal)
-                            from src.core.event import FillEvent
-                            event = FillEvent.from_fill(fill, source="kis_broker")
-                            await self.engine.emit(event)
-
-                except Exception as e:
-                    logger.error(f"체결 확인 오류: {e}")
-                    # 연속 오류 시에만 알림 (3회 이상)
-                    if not hasattr(self, '_fill_check_errors'):
-                        self._fill_check_errors = 0
-                    self._fill_check_errors += 1
-                    if self._fill_check_errors >= 3:
-                        await self._send_error_alert(
-                            "ERROR",
-                            f"체결 확인 연속 오류 ({self._fill_check_errors}회)",
-                            str(e)
-                        )
-                        self._fill_check_errors = 0
-
-                await asyncio.sleep(check_interval)
-
-        except asyncio.CancelledError:
-            pass
-
-    async def _sync_portfolio(self):
-        """KIS API와 포트폴리오 동기화"""
-        if not self.broker:
-            return
-
-        try:
-            # 1. KIS API에서 실제 잔고/포지션 조회
-            balance = await self.broker.get_account_balance()
-            kis_positions = await self.broker.get_positions()
-
-            if not balance:
-                logger.warning("포트폴리오 동기화: 잔고 조회 실패")
-                return
-
-            portfolio = self.engine.portfolio
-            kis_symbols = set(kis_positions.keys()) if kis_positions else set()
-            bot_symbols = set(portfolio.positions.keys())
-
-            # 2. 유령 포지션 제거 (봇에만 있고 KIS에 없는 종목)
-            ghost_symbols = bot_symbols - kis_symbols
-            for symbol in ghost_symbols:
-                pos = portfolio.positions[symbol]
-                logger.warning(
-                    f"[동기화] 유령 포지션 제거: {symbol} {pos.name} "
-                    f"({pos.quantity}주 @ {pos.avg_price:,.0f}원)"
-                )
-                del portfolio.positions[symbol]
-                if self.exit_manager and hasattr(self.exit_manager, '_states'):
-                    self.exit_manager._states.pop(symbol, None)
-
-            # 3. 누락 포지션 추가 (KIS에 있고 봇에 없는 종목)
-            new_symbols = kis_symbols - bot_symbols
-            for symbol in new_symbols:
-                pos = kis_positions[symbol]
-                portfolio.positions[symbol] = pos
-                logger.info(
-                    f"[동기화] 포지션 추가: {symbol} {pos.name} "
-                    f"({pos.quantity}주 @ {pos.avg_price:,.0f}원)"
-                )
-                if self.exit_manager:
-                    self.exit_manager.register_position(pos)
-                if symbol not in self._watch_symbols:
-                    self._watch_symbols.append(symbol)
-
-            # 4. 기존 포지션 수량/가격 업데이트
-            common_symbols = bot_symbols & kis_symbols
-            for symbol in common_symbols:
-                bot_pos = portfolio.positions[symbol]
-                kis_pos = kis_positions[symbol]
-                if bot_pos.quantity != kis_pos.quantity:
-                    logger.warning(
-                        f"[동기화] 수량 수정: {symbol} "
-                        f"{bot_pos.quantity}주 → {kis_pos.quantity}주"
-                    )
-                    bot_pos.quantity = kis_pos.quantity
-                if kis_pos.avg_price > 0 and bot_pos.avg_price != kis_pos.avg_price:
-                    logger.info(
-                        f"[동기화] 평단가 수정: {symbol} "
-                        f"{bot_pos.avg_price:,.0f}원 → {kis_pos.avg_price:,.0f}원"
-                    )
-                    bot_pos.avg_price = kis_pos.avg_price
-                if kis_pos.current_price > 0:
-                    bot_pos.current_price = kis_pos.current_price
-
-            # 5. 현금 동기화
-            available_cash = Decimal(str(balance.get('available_cash', 0)))
-            if available_cash > 0:
-                old_cash = portfolio.cash
-                portfolio.cash = available_cash
-                if abs(old_cash - available_cash) > 1000:
-                    logger.info(
-                        f"[동기화] 현금 수정: {old_cash:,.0f}원 → {available_cash:,.0f}원"
-                    )
-
-            # 6. initial_capital은 당일 시작 자본 → 동기화에서 갱신하지 않음
-            #    (봇 시작 시 또는 daily_reset에서만 설정)
-            #    포지션 사이징은 total_equity를 사용하므로 영향 없음
-
-            changes = len(ghost_symbols) + len(new_symbols)
-            if changes > 0:
-                logger.info(
-                    f"[동기화] 완료: 제거={len(ghost_symbols)}, "
-                    f"추가={len(new_symbols)}, "
-                    f"보유={len(portfolio.positions)}종목"
-                )
-            else:
-                logger.debug(
-                    f"[동기화] 확인 완료: 보유={len(portfolio.positions)}종목, 변경 없음"
-                )
-
-        except Exception as e:
-            logger.error(f"포트폴리오 동기화 오류: {e}")
-
-    async def _run_portfolio_sync(self):
-        """주기적 포트폴리오 동기화 루프"""
-        await asyncio.sleep(30)  # 시작 후 30초 대기
-        while self.running:
-            try:
-                await self._sync_portfolio()
-            except Exception as e:
-                logger.error(f"동기화 루프 오류: {e}")
-            await asyncio.sleep(300)  # 5분마다 동기화
 
     def stop(self):
         """봇 중지"""
