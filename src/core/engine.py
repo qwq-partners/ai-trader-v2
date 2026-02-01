@@ -569,9 +569,12 @@ class RiskManager:
     신호를 검증하고 포지션 크기를 계산합니다.
     """
 
-    def __init__(self, engine: TradingEngine, config: RiskConfig):
+    def __init__(self, engine: TradingEngine, config: RiskConfig, risk_validator=None):
         self.engine = engine
         self.config = config
+
+        # 외부 리스크 검증자 (RiskMgr 인스턴스) — daily_stats 공유용
+        self._risk_validator = risk_validator
 
         # 주문 실패 쿨다운 추적 (종목별)
         self._order_fail_cooldown: Dict[str, datetime] = {}
@@ -590,12 +593,17 @@ class RiskManager:
         # 부분 체결 추적: 종목별 미체결 수량
         self._pending_quantities: Dict[str, int] = {}
 
-        # 현금 초과 주문 방지: 주문 예약 현금
-        self._reserved_cash: Decimal = Decimal("0")
+        # 현금 초과 주문 방지: 주문별 예약 현금 추적 (symbol → 예약 금액)
+        self._reserved_by_order: Dict[str, Decimal] = {}
 
         # 엔진에 핸들러 등록
         engine.register_handler(EventType.SIGNAL, self.on_signal)
         engine.register_handler(EventType.FILL, self.on_fill)
+
+    @property
+    def _reserved_cash(self) -> Decimal:
+        """예약 현금 합계 (주문별 추적 기반)"""
+        return sum(self._reserved_by_order.values()) if self._reserved_by_order else Decimal("0")
 
     def block_symbol(self, symbol: str):
         """종목 주문 쿨다운 등록 (외부에서 호출)"""
@@ -616,15 +624,7 @@ class RiskManager:
         stale_pending = [s for s, t in self._pending_timestamps.items()
                          if (now - t).total_seconds() >= self._PENDING_TIMEOUT_SECONDS]
         for s in stale_pending:
-            amount = Decimal("0")
-            qty = self._pending_quantities.get(s, 0)
-            # 예약 현금 환원 추정 (정확한 금액 없으므로 보수적 추정)
-            if qty > 0 and s in self._pending_orders:
-                pos = self.engine.portfolio.positions.get(s)
-                if pos and pos.avg_price:
-                    amount = pos.avg_price * qty
-            self.clear_pending(s, amount)
-            self._pending_timestamps.pop(s, None)
+            self.clear_pending(s)
             logger.warning(f"[리스크] stale pending 정리: {s} ({self._PENDING_TIMEOUT_SECONDS}초 초과)")
 
         # 거래 가능 여부 체크
@@ -690,6 +690,16 @@ class RiskManager:
 
         # 리스크 체크 (SELL은 포지션 축소이므로 체크 스킵)
         if order.side == OrderSide.BUY:
+            # 외부 리스크 검증자 체크 (daily_stats, 연속 손실 등)
+            if self._risk_validator:
+                can_trade, reason = self._risk_validator.can_open_position(
+                    order.symbol, order.side, order.quantity,
+                    order.price or Decimal("0"), self.engine.portfolio
+                )
+                if not can_trade:
+                    logger.warning(f"주문 거부 (리스크 검증): {order.symbol} - {reason}")
+                    return None
+
             can_trade, reason = self.engine.can_open_position(
                 order.symbol, order.side, order.quantity, order.price or Decimal("0"),
                 pending_symbols=self._pending_orders,
@@ -706,9 +716,9 @@ class RiskManager:
         self._pending_quantities[order.symbol] = order.quantity
         self._pending_timestamps[order.symbol] = datetime.now()
 
-        # 현금 예약 (매수 주문 금액만큼)
+        # 현금 예약 (매수 주문 금액만큼, 주문별 추적)
         if order.side == OrderSide.BUY and order.price and order.quantity:
-            self._reserved_cash += order.price * order.quantity
+            self._reserved_by_order[order.symbol] = order.price * order.quantity
 
         return [OrderEvent.from_order(order, source="risk_manager")]
 
@@ -717,21 +727,18 @@ class RiskManager:
         self._pending_orders.discard(symbol)
         self._pending_quantities.pop(symbol, None)
         self._pending_timestamps.pop(symbol, None)
-        self._reserved_cash = max(self._reserved_cash - amount, Decimal("0"))
+        self._reserved_by_order.pop(symbol, None)
 
     async def on_fill(self, event: FillEvent) -> Optional[List[Event]]:
         """체결 후 리스크 업데이트 (부분 체결 지원)"""
-        # 매수 체결 시에만 예약 현금 해제 (SELL은 예약 현금 대상이 아님)
-        if event.side == OrderSide.BUY:
-            fill_amount = event.price * event.quantity if event.price and event.quantity else Decimal("0")
-            self._reserved_cash = max(self._reserved_cash - fill_amount, Decimal("0"))
-
-        # 미체결 수량 감소 → 전량 체결 시에만 pending 해제
+        # 미체결 수량 감소 → 전량 체결 시에만 pending 해제 및 예약 현금 해제
         remaining = self._pending_quantities.get(event.symbol, 0) - (event.quantity or 0)
         if remaining <= 0:
             self._pending_orders.discard(event.symbol)
             self._pending_quantities.pop(event.symbol, None)
             self._pending_timestamps.pop(event.symbol, None)
+            # 전량 체결 시 원래 예약 금액 정확히 해제 (슬리피지 드리프트 방지)
+            self._reserved_by_order.pop(event.symbol, None)
         else:
             self._pending_quantities[event.symbol] = remaining
             logger.info(f"[리스크] 부분 체결: {event.symbol} 잔여 {remaining}주")
@@ -778,7 +785,7 @@ class RiskManager:
         pct_value = equity * Decimal(str(position_pct))
 
         # 가용 현금 (수수료 여유분, 예약 현금 차감)
-        available = (self.engine.get_available_cash() - self._reserved_cash) * Decimal("0.99")
+        available = self.engine.get_available_cash() - self._reserved_cash
         if available <= 0:
             return 0
 

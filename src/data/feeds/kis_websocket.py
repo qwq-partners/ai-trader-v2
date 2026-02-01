@@ -22,7 +22,7 @@ from typing import Callable, Coroutine, Dict, List, Optional, Set, Any
 import aiohttp
 from loguru import logger
 
-from ...core.types import OrderSide
+from ...core.types import OrderSide, MarketSession
 from ...core.event import MarketDataEvent, QuoteEvent, TickEvent
 from ...utils.kis_token_manager import get_token_manager
 
@@ -72,13 +72,6 @@ DataCallback = Callable[[MarketDataEvent], Coroutine[Any, Any, None]]
 QuoteCallback = Callable[[QuoteEvent], Coroutine[Any, Any, None]]
 TickCallback = Callable[[TickEvent], Coroutine[Any, Any, None]]
 
-
-class MarketSession(str, Enum):
-    """장 세션"""
-    PRE_MARKET = "pre_market"      # 프리장 (08:00-08:50)
-    REGULAR = "regular"            # 정규장 (09:00-15:30)
-    NEXT_MARKET = "next_market"    # 넥스트장 (15:30-20:00)
-    CLOSED = "closed"              # 장 마감
 
 
 class KISWebSocketFeed:
@@ -256,7 +249,7 @@ class KISWebSocketFeed:
 
     def get_session_symbols(self) -> Set[str]:
         """현재 세션에서 거래 가능한 감시 종목 반환"""
-        if self._current_session in (MarketSession.PRE_MARKET, MarketSession.NEXT_MARKET):
+        if self._current_session in (MarketSession.PRE_MARKET, MarketSession.NEXT):
             # 프리장/넥스트장: NXT 종목만
             return self._watch_symbols & self._nxt_symbols
         else:
@@ -417,6 +410,7 @@ class KISWebSocketFeed:
 
     async def _rebuild_subscriptions(self):
         """구독 재구성 (세션 변경 시)"""
+        self._rolling_index = 0  # 세션 전환 시 인덱스 리셋 (큐 크기 변경 대응)
         self._update_rolling_queue()
         await self._apply_subscriptions()
 

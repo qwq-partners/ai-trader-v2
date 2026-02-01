@@ -35,7 +35,8 @@ from src.strategies.theme_chasing import ThemeChasingStrategy, ThemeChasingConfi
 from src.strategies.gap_and_go import GapAndGoStrategy, GapAndGoConfig
 from src.strategies.mean_reversion import MeanReversionStrategy, MeanReversionConfig
 from src.risk.manager import RiskManager as RiskMgr
-from src.data.feeds.kis_websocket import KISWebSocketFeed, KISWebSocketConfig, MarketSession
+from src.data.feeds.kis_websocket import KISWebSocketFeed, KISWebSocketConfig
+from src.core.types import MarketSession
 from src.signals.sentiment.theme_detector import ThemeDetector, get_theme_detector
 from src.signals.screener import StockScreener, get_screener
 from src.strategies.exit_manager import ExitManager, ExitConfig, get_exit_manager
@@ -356,9 +357,13 @@ class TradingBot(SchedulerMixin):
             self.engine.broker = self.broker
 
             # 엔진 이벤트 핸들링용 RiskManager (SIGNAL→ORDER, FILL 추적)
-            engine_risk_manager = RiskManager(self.engine, self.config.trading.risk)
+            # RiskMgr(대시보드/daily_stats)를 risk_validator로 주입하여 상태 공유
+            engine_risk_manager = RiskManager(
+                self.engine, self.config.trading.risk,
+                risk_validator=self.risk_manager,
+            )
             self.engine.risk_manager = engine_risk_manager
-            logger.info("엔진 리스크 매니저 (SIGNAL 핸들러) 등록 완료")
+            logger.info("엔진 리스크 매니저 (SIGNAL 핸들러 + 리스크 검증 위임) 등록 완료")
 
             # WebSocket 피드 초기화 (실시간 모드)
             if not self.dry_run:
@@ -1168,7 +1173,7 @@ class TradingBot(SchedulerMixin):
         elif 900 <= time_val < 1530:
             return MarketSession.REGULAR
         elif 1530 <= time_val < 2000:
-            return MarketSession.NEXT_MARKET
+            return MarketSession.NEXT
         else:
             return MarketSession.CLOSED
 
@@ -1195,7 +1200,7 @@ class TradingBot(SchedulerMixin):
                     session_map = {
                         MarketSession.PRE_MARKET: TradingSession.PRE_MARKET,
                         MarketSession.REGULAR: TradingSession.REGULAR,
-                        MarketSession.NEXT_MARKET: TradingSession.AFTER_HOURS,
+                        MarketSession.NEXT: TradingSession.NEXT,
                         MarketSession.CLOSED: TradingSession.CLOSED,
                     }
 

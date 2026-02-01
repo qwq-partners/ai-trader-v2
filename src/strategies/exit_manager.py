@@ -219,12 +219,8 @@ class ExitManager:
         # 1차 익절: 아직 1차 익절 전이고, 수익률 도달
         if state.current_stage == ExitStage.NONE:
             if net_pnl_pct >= self.config.first_exit_pct:
-                exit_qty = int(state.original_quantity * self.config.first_exit_ratio)
+                exit_qty = max(1, int(state.original_quantity * self.config.first_exit_ratio))
                 exit_qty = min(exit_qty, state.remaining_quantity)
-
-                # 소량 보유 시 (1주 등) 분할 불가 → 전량 매도
-                if exit_qty <= 0:
-                    exit_qty = state.remaining_quantity
 
                 state.current_stage = ExitStage.FIRST
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
@@ -236,12 +232,8 @@ class ExitManager:
         # 2차 익절: 1차 완료 후, 추가 수익률 도달
         elif state.current_stage == ExitStage.FIRST:
             if net_pnl_pct >= self.config.second_exit_pct:
-                exit_qty = int(state.remaining_quantity * self.config.second_exit_ratio)
+                exit_qty = max(1, int(state.remaining_quantity * self.config.second_exit_ratio))
                 exit_qty = min(exit_qty, state.remaining_quantity)
-
-                # 소량 잔여 시 전량 매도
-                if exit_qty <= 0:
-                    exit_qty = state.remaining_quantity
 
                 state.current_stage = ExitStage.TRAILING
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
