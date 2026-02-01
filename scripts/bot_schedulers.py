@@ -17,7 +17,7 @@ from loguru import logger
 from src.core.engine import is_kr_market_holiday
 from src.core.event import ThemeEvent, NewsEvent, FillEvent
 from src.data.feeds.kis_websocket import MarketSession
-from src.utils.logger import trading_logger
+from src.utils.logger import trading_logger, cleanup_old_logs, cleanup_old_cache
 from src.utils.telegram import send_alert
 
 
@@ -157,8 +157,12 @@ class SchedulerMixin:
                             self.engine.risk_manager._pending_orders.clear()
                             self.engine.risk_manager._pending_quantities.clear()
 
+                        # 거래 로거 일일 기록 플러시 및 초기화
+                        trading_logger.flush()
+                        trading_logger._daily_records.clear()
+
                         last_daily_reset = today
-                        logger.info("[스케줄러] 일일 통계 + 전략 상태 + pending 주문 초기화 완료")
+                        logger.info("[스케줄러] 일일 통계 + 전략 상태 + pending 주문 + 거래로그 초기화 완료")
                     except Exception as e:
                         logger.error(f"[스케줄러] 일일 초기화 실패: {e}")
 
@@ -371,6 +375,59 @@ class SchedulerMixin:
         except Exception as e:
             logger.error(f"진화 리포트 전송 실패: {e}")
 
+    async def _run_stock_master_refresh(self):
+        """
+        종목 마스터 갱신 스케줄러
+
+        매일 지정 시간(기본 18:00)에 종목 마스터 DB를 갱신합니다.
+        주말은 스킵 옵션 지원.
+        """
+        sm_cfg = getattr(self, '_stock_master_config', None) or {}
+        if not sm_cfg.get("enabled", True):
+            logger.info("[종목마스터] 비활성화됨 (stock_master.enabled=false)")
+            return
+
+        refresh_time_str = sm_cfg.get("refresh_time", "18:00")
+        skip_weekends = sm_cfg.get("skip_weekends", True)
+        refresh_hour, refresh_min = (int(x) for x in refresh_time_str.split(":"))
+
+        last_refresh_date: Optional[date] = None
+
+        try:
+            while self.running:
+                now = datetime.now()
+                today = now.date()
+
+                # 주말 스킵
+                if skip_weekends and now.weekday() >= 5:
+                    await asyncio.sleep(60)
+                    continue
+
+                # 지정 시간 ±15분 윈도우
+                if (now.hour == refresh_hour
+                        and refresh_min <= now.minute < refresh_min + 15
+                        and last_refresh_date != today):
+                    try:
+                        logger.info("[종목마스터] 일일 갱신 시작...")
+                        stats = await self.stock_master.refresh_master()
+                        if stats:
+                            logger.info(
+                                f"[종목마스터] 갱신 완료: "
+                                f"전체={stats.get('total', 0)}, "
+                                f"KOSPI200={stats.get('kospi200', 0)}, "
+                                f"KOSDAQ150={stats.get('kosdaq150', 0)}"
+                            )
+                        last_refresh_date = today
+                    except Exception as e:
+                        logger.error(f"[종목마스터] 갱신 오류: {e}")
+
+                await asyncio.sleep(60)
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"[종목마스터] 스케줄러 오류: {e}")
+
     async def _run_theme_detection(self):
         """테마 탐지 루프"""
         try:
@@ -411,15 +468,17 @@ class SchedulerMixin:
                             impact = data.get("impact", 0)
                             direction = data.get("direction", "bullish")
                             reason = data.get("reason", "")
+                            abs_impact = abs(impact)
 
                             # 임팩트 임계값 이상 종목은 NewsEvent 발행
-                            news_threshold = (self.config.get("scheduler") or {}).get("news_impact_threshold", 70)
-                            if impact >= news_threshold:
+                            # 새 스케일: -10~+10, 임계값 기본 5
+                            news_threshold = (self.config.get("scheduler") or {}).get("news_impact_threshold", 5)
+                            if abs_impact >= news_threshold:
                                 news_event = NewsEvent(
                                     source="theme_detector",
                                     title=reason,
                                     symbols=[symbol],
-                                    sentiment=1.0 if direction == "bullish" else -1.0,
+                                    sentiment=impact / 10.0,  # -1.0 ~ +1.0
                                 )
                                 await self.engine.emit(news_event)
 
@@ -693,6 +752,13 @@ class SchedulerMixin:
                     f"추가={len(new_symbols)}, "
                     f"보유={len(portfolio.positions)}종목"
                 )
+                trading_logger.log_portfolio_sync(
+                    ghost_removed=len(ghost_symbols),
+                    new_added=len(new_symbols),
+                    total_positions=len(portfolio.positions),
+                    cash=float(portfolio.cash),
+                    total_equity=float(portfolio.total_equity),
+                )
             else:
                 logger.debug(
                     f"[동기화] 확인 완료: 보유={len(portfolio.positions)}종목, 변경 없음"
@@ -781,3 +847,34 @@ class SchedulerMixin:
             except Exception as e:
                 logger.error(f"동기화 루프 오류: {e}")
             await asyncio.sleep(300)  # 5분마다 동기화
+
+    async def _run_log_cleanup(self):
+        """
+        로그/캐시 정리 스케줄러
+
+        매일 00:05에 오래된 로그 디렉터리, 로그 파일, 캐시 JSON 정리
+        """
+        try:
+            while self.running:
+                now = datetime.now()
+
+                # 매일 00:05 ~ 00:10 에 실행
+                if now.hour == 0 and 5 <= now.minute < 10:
+                    try:
+                        from pathlib import Path
+                        log_base = Path(__file__).parent.parent / "logs"
+                        cleanup_old_logs(str(log_base), max_days=7)
+                        cleanup_old_cache(max_days=7)
+                        logger.info("[스케줄러] 로그/캐시 정리 완료")
+                    except Exception as e:
+                        logger.error(f"[스케줄러] 로그 정리 오류: {e}")
+
+                    # 같은 날 다시 실행 방지 (10분 대기)
+                    await asyncio.sleep(600)
+                else:
+                    await asyncio.sleep(60)
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"로그 정리 스케줄러 오류: {e}")

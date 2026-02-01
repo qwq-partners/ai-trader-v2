@@ -65,6 +65,10 @@ google-generativeai>=0.3.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
 
+# === 종목 마스터 ===
+FinanceDataReader>=0.9.0
+pykrx>=1.0.0
+
 # === 유틸리티 ===
 tenacity>=8.2.0
 python-dateutil>=2.8.0

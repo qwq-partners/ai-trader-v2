@@ -127,7 +127,7 @@ logging:
   file_enabled: true
   file_path: ./logs
   rotation: 1 day
-  retention: 30 days
+  retention: 7 days
 
 
 # 알림 설정
@@ -199,13 +199,20 @@ code_evolution:
   claude_timeout: 300              # Claude CLI 타임아웃 (초)
 
 
+# 종목 마스터
+stock_master:
+  enabled: true
+  refresh_time: "18:00"
+  skip_weekends: true
+
+
 # 스케줄러 설정
 scheduler:
   morning_report_time: "08:00"
   evening_report_time: "17:00"
   evolution_time: "20:30"
   nxt_refresh_hour: 6
-  news_impact_threshold: 70
+  news_impact_threshold: 5
 
 
 # 대시보드 설정

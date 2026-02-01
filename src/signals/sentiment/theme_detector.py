@@ -13,11 +13,14 @@ AI Trading Bot v2 - 테마 탐지 시스템
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set, Any
+from email.utils import parsedate_to_datetime
+from typing import Dict, List, Optional, Set, Any, Tuple
 import aiohttp
 from loguru import logger
 
@@ -134,7 +137,7 @@ KNOWN_STOCKS = {
 
 
 class NewsCollector:
-    """뉴스 수집기 (네이버 금융)"""
+    """뉴스 수집기 (네이버 + 다음 금융 + 매일경제 RSS)"""
 
     def __init__(self, client_id: str = "", client_secret: str = ""):
         self.client_id = client_id
@@ -147,10 +150,27 @@ class NewsCollector:
             self.client_id = os.getenv("NAVER_CLIENT_ID", "")
             self.client_secret = os.getenv("NAVER_CLIENT_SECRET", "")
 
+        # 중복 제거용 캐시
+        self._seen_keys: Set[str] = set()
+
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
         return self._session
+
+    @staticmethod
+    def _make_dedupe_key(title: str, url: str) -> str:
+        """제목+URL 기반 SHA1 중복 키"""
+        raw = f"{title.strip()}|{url.strip()}"
+        return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+    def _is_duplicate(self, title: str, url: str) -> bool:
+        """중복 여부 체크 (캐시 기반)"""
+        key = self._make_dedupe_key(title, url)
+        if key in self._seen_keys:
+            return True
+        self._seen_keys.add(key)
+        return False
 
     async def search_news(
         self,
@@ -195,7 +215,7 @@ class NewsCollector:
                         title=title,
                         content=description,
                         url=item.get("link", ""),
-                        source=item.get("originallink", ""),
+                        source="naver",
                     ))
 
                 return articles
@@ -204,16 +224,192 @@ class NewsCollector:
             logger.error(f"뉴스 수집 오류: {e}")
             return []
 
+    async def fetch_daum_finance_news(self, limit: int = 20) -> List[NewsArticle]:
+        """다음 금융 뉴스 수집"""
+        try:
+            session = await self._get_session()
+            url = "https://finance.daum.net/content/news"
+            params = {"page": 1, "perPage": limit, "category": "stock"}
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; AITrader/2.0)",
+                "Referer": "https://finance.daum.net/",
+            }
+
+            async with session.get(
+                url, params=params, headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                if resp.status != 200:
+                    logger.debug(f"[뉴스] 다음 금융 HTTP {resp.status}")
+                    return []
+
+                data = await resp.json()
+                articles = []
+
+                items = data.get("data", [])
+                if not items:
+                    return []
+
+                for item in items[:limit]:
+                    title = item.get("title", "").strip()
+                    if not title:
+                        continue
+
+                    # 요약 200~300자
+                    summary = item.get("summary", "") or item.get("content", "")
+                    if summary:
+                        summary = re.sub(r'<[^>]+>', '', summary).strip()
+                        summary = summary[:300]
+
+                    news_url = item.get("url", "") or item.get("link", "")
+
+                    pub_str = item.get("createdAt", "") or item.get("publishedAt", "")
+                    pub_dt = datetime.now()
+                    if pub_str:
+                        try:
+                            pub_dt = datetime.fromisoformat(
+                                pub_str.replace("Z", "+00:00").replace("+09:00", "")
+                            )
+                        except Exception:
+                            pass
+
+                    articles.append(NewsArticle(
+                        title=title,
+                        content=summary,
+                        url=news_url,
+                        source="daum",
+                        published_at=pub_dt,
+                    ))
+
+                logger.debug(f"[뉴스] 다음 금융: {len(articles)}건 수집")
+                return articles
+
+        except Exception as e:
+            logger.debug(f"[뉴스] 다음 금융 수집 오류: {e}")
+            return []
+
+    async def fetch_mk_rss(self, limit: int = 20) -> List[NewsArticle]:
+        """매일경제 증권 RSS 수집"""
+        try:
+            session = await self._get_session()
+            rss_url = "https://www.mk.co.kr/rss/50200011/"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; AITrader/2.0)",
+            }
+
+            async with session.get(
+                rss_url, headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                if resp.status != 200:
+                    logger.debug(f"[뉴스] 매경 RSS HTTP {resp.status}")
+                    return []
+
+                xml_text = await resp.text()
+
+            # XML 파싱
+            root = ET.fromstring(xml_text)
+            articles = []
+            count = 0
+
+            for item in root.iter("item"):
+                if count >= limit:
+                    break
+
+                title_el = item.find("title")
+                title = title_el.text.strip() if title_el is not None and title_el.text else ""
+                if not title:
+                    continue
+
+                link_el = item.find("link")
+                link = link_el.text.strip() if link_el is not None and link_el.text else ""
+
+                desc_el = item.find("description")
+                desc = ""
+                if desc_el is not None and desc_el.text:
+                    desc = re.sub(r'<[^>]+>', '', desc_el.text).strip()
+                    desc = desc[:150]
+
+                pub_dt = datetime.now()
+                pub_el = item.find("pubDate")
+                if pub_el is not None and pub_el.text:
+                    try:
+                        pub_dt = parsedate_to_datetime(pub_el.text.strip())
+                        # timezone naive로 변환
+                        pub_dt = pub_dt.replace(tzinfo=None)
+                    except Exception:
+                        pass
+
+                articles.append(NewsArticle(
+                    title=title,
+                    content=desc,
+                    url=link,
+                    source="mk",
+                    published_at=pub_dt,
+                ))
+                count += 1
+
+            logger.debug(f"[뉴스] 매경 RSS: {len(articles)}건 수집")
+            return articles
+
+        except Exception as e:
+            logger.debug(f"[뉴스] 매경 RSS 수집 오류: {e}")
+            return []
+
     async def get_market_news(self, limit: int = 30) -> List[NewsArticle]:
-        """시장 전반 뉴스 수집"""
-        queries = ["증시", "코스피", "코스닥", "주식시장"]
-        all_articles = []
+        """
+        시장 전반 뉴스 수집 (3개 소스 통합)
 
-        for query in queries:
-            articles = await self.search_news(query, display=limit // len(queries))
-            all_articles.extend(articles)
+        소스별 실패 시 무시, 최소 1개 소스로 동작 보장.
+        SHA1 기반 중복 제거 후 시간순 정렬.
+        """
+        # 매 수집 시 중복 캐시 초기화
+        self._seen_keys.clear()
+        all_articles: List[NewsArticle] = []
+        source_counts: Dict[str, int] = {}
 
-        return all_articles
+        # 1. 네이버 뉴스 검색
+        try:
+            queries = ["증시", "코스피", "코스닥", "주식시장"]
+            for query in queries:
+                articles = await self.search_news(query, display=limit // len(queries))
+                all_articles.extend(articles)
+            source_counts["naver"] = len(all_articles)
+        except Exception as e:
+            logger.debug(f"[뉴스] 네이버 소스 실패 (무시): {e}")
+
+        # 2. 다음 금융 뉴스
+        try:
+            daum_articles = await self.fetch_daum_finance_news(limit=20)
+            before = len(all_articles)
+            all_articles.extend(daum_articles)
+            source_counts["daum"] = len(all_articles) - before
+        except Exception as e:
+            logger.debug(f"[뉴스] 다음 소스 실패 (무시): {e}")
+
+        # 3. 매일경제 RSS
+        try:
+            mk_articles = await self.fetch_mk_rss(limit=20)
+            before = len(all_articles)
+            all_articles.extend(mk_articles)
+            source_counts["mk"] = len(all_articles) - before
+        except Exception as e:
+            logger.debug(f"[뉴스] 매경 소스 실패 (무시): {e}")
+
+        # SHA1 중복 제거
+        unique_articles: List[NewsArticle] = []
+        for article in all_articles:
+            if not self._is_duplicate(article.title, article.url):
+                unique_articles.append(article)
+
+        # 시간순 정렬 (최신 우선)
+        unique_articles.sort(key=lambda a: a.published_at, reverse=True)
+
+        logger.info(
+            f"[뉴스] 수집 완료: 소스별={source_counts}, "
+            f"전체={len(all_articles)}, 중복제거={len(unique_articles)}"
+        )
+        return unique_articles
 
     async def get_theme_news(self, theme: str, limit: int = 10) -> List[NewsArticle]:
         """특정 테마 뉴스 수집"""
@@ -251,11 +447,12 @@ class ThemeDetector:
         "탄소중립": ["전기가스", "화학"],
     }
 
-    def __init__(self, llm_manager: Optional[LLMManager] = None, kis_market_data=None, us_market_data=None):
+    def __init__(self, llm_manager: Optional[LLMManager] = None, kis_market_data=None, us_market_data=None, stock_master=None):
         self.llm = llm_manager or get_llm_manager()
         self.news_collector = NewsCollector()
         self._kis_market_data = kis_market_data
         self._us_market_data = us_market_data
+        self._stock_master = stock_master
 
         # 뉴스/테마 저장소 (PostgreSQL)
         self._storage: Optional[NewsStorage] = None
@@ -384,20 +581,23 @@ class ThemeDetector:
             # 2-2. 종목별 센티멘트 파싱 (themes[].stocks + stock_impacts)
             now = datetime.now()
 
-            # stock_impacts에서 파싱 (기존 엔트리보다 impact가 높으면 덮어쓰기)
+            # stock_impacts에서 파싱 (새 스케일: -10~+10)
             for item in stock_impacts:
-                symbol = self._resolve_stock_symbol(
+                symbol = await self._resolve_stock_symbol(
                     item.get("symbol", ""), item.get("name", "")
                 )
                 if not symbol:
                     continue
                 impact = item.get("impact", 0)
-                direction = item.get("direction", "bullish")
+                # impact 부호로 direction 결정
+                direction = "bullish" if impact >= 0 else "bearish"
+                abs_impact = abs(impact)
                 existing = self._stock_sentiments.get(symbol)
-                if not existing or impact > existing.get("impact", 0):
+                if not existing or abs_impact > abs(existing.get("impact", 0)):
                     self._stock_sentiments[symbol] = {
                         "sentiment": 1.0 if direction == "bullish" else -1.0,
                         "impact": impact,
+                        "abs_impact": abs_impact,
                         "direction": direction,
                         "theme": "",
                         "reason": item.get("reason", ""),
@@ -408,20 +608,22 @@ class ThemeDetector:
             for theme_data in detected_themes:
                 # themes[].stocks에서 종목 센티멘트 파싱
                 for stock_item in theme_data.get("stocks", []):
-                    symbol = self._resolve_stock_symbol(
+                    symbol = await self._resolve_stock_symbol(
                         stock_item.get("symbol", ""), stock_item.get("name", "")
                     )
                     if not symbol:
                         continue
                     impact = stock_item.get("impact", 0)
-                    direction = stock_item.get("direction", "bullish")
+                    direction = "bullish" if impact >= 0 else "bearish"
+                    abs_impact = abs(impact)
                     theme_name_raw = theme_data.get("theme", "")
-                    # 기존 엔트리보다 impact가 높으면 덮어쓰기
+                    # 기존 엔트리보다 abs_impact가 높으면 덮어쓰기
                     existing = self._stock_sentiments.get(symbol)
-                    if not existing or impact > existing.get("impact", 0):
+                    if not existing or abs_impact > abs(existing.get("impact", 0)):
                         self._stock_sentiments[symbol] = {
                             "sentiment": 1.0 if direction == "bullish" else -1.0,
                             "impact": impact,
+                            "abs_impact": abs_impact,
                             "direction": direction,
                             "theme": theme_name_raw,
                             "reason": f"테마[{theme_name_raw}] 관련",
@@ -505,6 +707,28 @@ class ThemeDetector:
             logger.exception(f"테마 탐지 오류: {e}")
             return list(self._themes.values())
 
+    async def _get_stock_hints_for_llm(self) -> str:
+        """
+        LLM 프롬프트용 종목 힌트 생성
+
+        1차: kr_stock_master DB에서 KOSPI200+KOSDAQ150 상위 80개
+        2차: KNOWN_STOCKS 폴백
+        """
+        if self._stock_master:
+            try:
+                top_stocks = await self._stock_master.get_top_stocks(80)
+                if top_stocks:
+                    return "\n".join(
+                        [f"  {name}={code}" for name, code in top_stocks]
+                    )
+            except Exception as e:
+                logger.debug(f"[ThemeDetector] stock_master 힌트 로드 실패: {e}")
+
+        # 폴백: KNOWN_STOCKS 상위 40개
+        return "\n".join(
+            [f"  {name}={code}" for name, code in list(KNOWN_STOCKS.items())[:40]]
+        )
+
     async def _extract_themes_from_news(
         self,
         articles: List[NewsArticle]
@@ -515,20 +739,27 @@ class ThemeDetector:
         Returns:
             {"themes": [...], "stock_impacts": [...]}
         """
-        # 뉴스 제목들 준비
-        titles = "\n".join([f"- {a.title}" for a in articles[:20]])  # 최대 20개
+        # 뉴스 제목 + 요약(content) 함께 전달 (최대 20개)
+        news_lines = []
+        for a in articles[:20]:
+            line = f"- {a.title}"
+            if a.content:
+                # 요약을 100자로 제한하여 첨부
+                snippet = a.content[:100].strip()
+                if snippet:
+                    line += f" | {snippet}"
+            news_lines.append(line)
+        news_text = "\n".join(news_lines)
 
         theme_list = list(DEFAULT_THEME_STOCKS.keys())
         numbered_themes = "\n".join([f"  {i+1}. {t}" for i, t in enumerate(theme_list)])
 
-        # KNOWN_STOCKS 힌트 (상위 40개)
-        known_stocks_hint = "\n".join(
-            [f"  {name}={code}" for name, code in list(KNOWN_STOCKS.items())[:40]]
-        )
+        # 종목 힌트 (DB 우선, KNOWN_STOCKS 폴백)
+        known_stocks_hint = await self._get_stock_hints_for_llm()
 
-        prompt = f"""다음은 오늘의 한국 주식시장 뉴스 제목들입니다:
+        prompt = f"""다음은 오늘의 한국 주식시장 뉴스입니다 (제목 | 요약):
 
-{titles}
+{news_text}
 
 위 뉴스들을 분석하여 (1) 투자 테마와 (2) 개별 종목 임팩트를 동시에 추출해주세요.
 
@@ -550,7 +781,7 @@ class ThemeDetector:
         {{
           "symbol": "6자리 종목코드",
           "name": "종목명",
-          "impact": 0-100 영향도 점수,
+          "impact": -10에서 +10 사이 점수,
           "direction": "bullish 또는 bearish"
         }}
       ]
@@ -560,7 +791,7 @@ class ThemeDetector:
     {{
       "symbol": "6자리 종목코드",
       "name": "종목명",
-      "impact": 0-100 영향도 점수,
+      "impact": -10에서 +10 사이 점수,
       "direction": "bullish 또는 bearish",
       "reason": "영향 이유 (30자 이내)"
     }}
@@ -570,8 +801,8 @@ class ThemeDetector:
 규칙:
 1. themes: 최대 5개 테마, 뉴스 2개 이상인 테마만, 각 테마별 stocks는 최대 5개
 2. stock_impacts: 테마 무관하게 뉴스에 직접 언급된 개별 종목 (최대 10개)
-3. impact: 0=무관, 50=보통, 80+=강한 영향
-4. direction: 호재=bullish, 악재=bearish
+3. impact 스케일: -10(극단적 악재) ~ 0(무관) ~ +10(극단적 호재). 양수=bullish, 음수=bearish
+4. direction: impact 부호와 일치시킬 것 (양수→bullish, 음수→bearish)
 5. theme 필드는 반드시 위 허용 목록의 테마명을 정확히 사용
 6. symbol은 위 종목코드 힌트 참고, 모르면 빈 문자열"""
 
@@ -663,16 +894,43 @@ class ThemeDetector:
             if (now - data["updated_at"]).total_seconds() <= 3600
         }
 
-    def _resolve_stock_symbol(self, symbol: str, name: str) -> str:
-        """종목코드 보정: 코드가 유효하면 그대로, 아니면 이름으로 KNOWN_STOCKS 매핑"""
+    async def _resolve_stock_symbol(self, symbol: str, name: str) -> str:
+        """
+        종목코드 보정 (async)
+
+        1차: 6자리 코드 → stock_master DB 검증
+        2차: 이름 → stock_master DB 조회
+        3차: KNOWN_STOCKS 폴백
+        """
         symbol = symbol.strip()
-        if symbol and symbol.isdigit() and len(symbol) == 6:
-            return symbol
-        # 이름으로 코드 조회
         name = name.strip()
-        resolved = KNOWN_STOCKS.get(name, "")
-        if resolved:
-            return resolved
+
+        # 1차: 6자리 코드가 주어진 경우
+        if symbol and symbol.isdigit() and len(symbol) == 6:
+            if self._stock_master:
+                try:
+                    if await self._stock_master.validate_ticker(symbol):
+                        return symbol
+                except Exception:
+                    pass
+            # DB 검증 실패해도 형식이 맞으면 반환 (하위호환)
+            return symbol
+
+        # 2차: 이름으로 DB 조회
+        if name and self._stock_master:
+            try:
+                resolved = await self._stock_master.lookup_ticker(name)
+                if resolved:
+                    return resolved
+            except Exception:
+                pass
+
+        # 3차: KNOWN_STOCKS 폴백
+        if name:
+            resolved = KNOWN_STOCKS.get(name, "")
+            if resolved:
+                return resolved
+
         return ""
 
     async def _adjust_scores_by_sector(self):

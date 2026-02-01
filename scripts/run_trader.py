@@ -38,6 +38,7 @@ from src.risk.manager import RiskManager as RiskMgr
 from src.data.feeds.kis_websocket import KISWebSocketFeed, KISWebSocketConfig
 from src.core.types import MarketSession
 from src.signals.sentiment.theme_detector import ThemeDetector, get_theme_detector
+from src.data.storage.stock_master import StockMaster, get_stock_master
 from src.signals.screener import StockScreener, get_screener
 from src.strategies.exit_manager import ExitManager, ExitConfig, get_exit_manager
 from src.utils.config import AppConfig
@@ -106,6 +107,9 @@ class TradingBot(SchedulerMixin):
 
         # US 시장 오버나이트 데이터 클라이언트
         self.us_market_data: Optional[USMarketData] = None
+
+        # 종목 마스터
+        self.stock_master: Optional[StockMaster] = None
 
         # 종목명 캐시 (symbol → name)
         self.stock_name_cache: Dict[str, str] = {}
@@ -197,11 +201,32 @@ class TradingBot(SchedulerMixin):
                 self.us_market_data = get_us_market_data()
                 logger.info("US 시장 오버나이트 데이터 클라이언트 초기화 완료")
 
+            # 종목 마스터 초기화
+            sm_cfg = self.config.get("stock_master") or {}
+            if sm_cfg.get("enabled", True):
+                self.stock_master = get_stock_master()
+                if await self.stock_master.connect():
+                    # 테이블이 비어있으면 초기 갱신 실행
+                    if await self.stock_master.is_empty():
+                        logger.info("[종목마스터] 빈 테이블 감지 → 초기 갱신 실행")
+                        try:
+                            await self.stock_master.refresh_master()
+                        except Exception as e:
+                            logger.warning(f"[종목마스터] 초기 갱신 실패 (무시): {e}")
+                    else:
+                        # 캐시만 재구축
+                        await self.stock_master._rebuild_cache()
+                    logger.info("종목 마스터 초기화 완료")
+                else:
+                    logger.warning("종목 마스터 DB 연결 실패 (무시)")
+                    self.stock_master = None
+
             # 테마 탐지기 초기화 (kis_market_data + us_market_data 연동)
             theme_cfg = self.config.get("theme_detector") or {}
             self.theme_detector = ThemeDetector(
                 kis_market_data=self.kis_market_data,
                 us_market_data=self.us_market_data,
+                stock_master=self.stock_master,
             )
             self.theme_detector.detection_interval_minutes = theme_cfg.get("scan_interval_minutes", 15)
             self.theme_detector.min_news_count = theme_cfg.get("min_news_count", 3)
@@ -655,6 +680,12 @@ class TradingBot(SchedulerMixin):
             if exit_signal:
                 action, quantity, reason = exit_signal
                 logger.info(f"[청산 신호] {symbol}: {reason} ({quantity}주)")
+                trading_logger.log_position_update(
+                    symbol=symbol,
+                    action=f"EXIT_SIGNAL:{action}",
+                    quantity=quantity,
+                    avg_price=float(current_price),
+                )
 
                 # 주문 생성 및 제출
                 from src.core.types import Order, OrderSide, OrderType
@@ -830,10 +861,30 @@ class TradingBot(SchedulerMixin):
 
     async def _on_session(self, event: SessionEvent):
         """세션 변경 처리"""
-        logger.info(f"세션 변경: {event.session.value}")
+        prev = getattr(event, 'prev_session', None)
+        prev_val = prev.value if prev else ""
+        new_val = event.session.value
+
+        # 포지션/현금/손익 상세 정보
+        portfolio = self.engine.portfolio
+        pos_count = len(portfolio.positions)
+        cash = float(portfolio.cash)
+        daily_pnl = float(portfolio.daily_pnl)
+
+        details = (
+            f"포지션={pos_count}종목 현금={cash:,.0f}원 "
+            f"일일손익={daily_pnl:+,.0f}원"
+        )
+        logger.info(f"세션 변경: {prev_val} → {new_val} | {details}")
+
+        trading_logger.log_session_change(
+            new_session=new_val,
+            prev_session=prev_val,
+            details=details,
+        )
 
         # 장 마감 시 일일 요약
-        if event.session.value == "closed" and event.prev_session:
+        if new_val == "closed" and prev_val:
             await self._daily_summary()
 
     async def _on_risk_alert(self, event):
@@ -903,6 +954,40 @@ class TradingBot(SchedulerMixin):
                 self._exit_pending_timestamps.pop(fill.symbol, None)
                 if self.engine.risk_manager:
                     self.engine.risk_manager.clear_pending(fill.symbol)
+
+                # EXIT 레코드 기록 (진입가/손익/사유)
+                # 포지션은 update_position에서 이미 갱신되었으므로 저널에서 조회
+                try:
+                    if self.trade_journal:
+                        open_trades = self.trade_journal.get_open_trades()
+                        matching = [t for t in open_trades if t.symbol == fill.symbol]
+                        if matching:
+                            trade = matching[0]
+                            entry_price = trade.entry_price
+                        else:
+                            # 이미 청산된 직전 거래에서 진입가 추출
+                            closed = self.trade_journal.get_closed_trades(days=1)
+                            sym_trades = [t for t in closed if t.symbol == fill.symbol]
+                            entry_price = sym_trades[-1].entry_price if sym_trades else float(fill.price)
+                    else:
+                        entry_price = float(fill.price)
+
+                    exit_price = float(fill.price)
+                    pnl = (exit_price - entry_price) * fill.quantity
+                    pnl_pct = ((exit_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+                    reason = getattr(fill, 'reason', '') or "매도체결"
+
+                    trading_logger.log_exit(
+                        symbol=fill.symbol,
+                        quantity=fill.quantity,
+                        entry_price=entry_price,
+                        exit_price=exit_price,
+                        pnl=pnl,
+                        pnl_pct=pnl_pct,
+                        reason=reason,
+                    )
+                except Exception as e:
+                    logger.warning(f"EXIT 로그 기록 실패: {e}")
 
             # 분할 익절 관리자 업데이트
             if self.exit_manager:
@@ -998,12 +1083,42 @@ class TradingBot(SchedulerMixin):
 
         pnl_pct = float(portfolio.daily_pnl / portfolio.initial_capital * 100) if portfolio.initial_capital > 0 else 0
 
+        # trade_journal 기반 wins/losses 실제 계산
+        wins = 0
+        losses = 0
+        if self.trade_journal:
+            try:
+                today_trades = self.trade_journal.get_closed_trades(days=1)
+                for t in today_trades:
+                    if t.pnl > 0:
+                        wins += 1
+                    elif t.pnl < 0:
+                        losses += 1
+            except Exception as e:
+                logger.warning(f"일일 요약 승패 계산 실패: {e}")
+
+        # 현재 보유 포지션 정보
+        positions_info = []
+        for symbol, pos in portfolio.positions.items():
+            pos_pnl_pct = 0
+            if pos.avg_price > 0 and pos.current_price > 0:
+                pos_pnl_pct = float((pos.current_price - pos.avg_price) / pos.avg_price * 100)
+            positions_info.append({
+                "symbol": symbol,
+                "name": getattr(pos, 'name', symbol),
+                "quantity": pos.quantity,
+                "avg_price": float(pos.avg_price),
+                "current_price": float(pos.current_price) if pos.current_price else 0,
+                "pnl_pct": pos_pnl_pct,
+            })
+
         trading_logger.log_daily_summary(
             total_trades=portfolio.daily_trades,
-            wins=0,  # TODO: 승/패 추적
-            losses=0,
+            wins=wins,
+            losses=losses,
             total_pnl=float(portfolio.daily_pnl),
-            pnl_pct=pnl_pct
+            pnl_pct=pnl_pct,
+            positions=positions_info,
         )
 
     async def run(self):
@@ -1060,7 +1175,17 @@ class TradingBot(SchedulerMixin):
                     self._run_code_evolution_scheduler(), name="code_evolution"
                 ))
 
-            # 9. 대시보드 서버 실행
+            # 9. 로그/캐시 정리 스케줄러
+            tasks.append(asyncio.create_task(self._run_log_cleanup(), name="log_cleanup"))
+
+            # 10-1. 종목 마스터 갱신 스케줄러
+            if self.stock_master:
+                self._stock_master_config = self.config.get("stock_master") or {}
+                tasks.append(asyncio.create_task(
+                    self._run_stock_master_refresh(), name="stock_master_refresh"
+                ))
+
+            # 10. 대시보드 서버 실행
             dashboard_cfg = self.config.get("dashboard") or {}
             if dashboard_cfg.get("enabled", True):
                 self.dashboard = DashboardServer(
@@ -1329,6 +1454,13 @@ class TradingBot(SchedulerMixin):
                 logger.info("US 시장 데이터 클라이언트 종료")
         except Exception as e:
             logger.error(f"US 시장 데이터 종료 실패: {e}")
+
+        try:
+            if self.stock_master:
+                await self.stock_master.disconnect()
+                logger.info("종목 마스터 종료")
+        except Exception as e:
+            logger.error(f"종목 마스터 종료 실패: {e}")
 
         try:
             if self.broker:
