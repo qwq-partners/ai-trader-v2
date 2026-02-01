@@ -833,7 +833,9 @@ class RiskManager:
             max_pos = min(max(1, calculated), self.config.max_positions)
 
         # 남은 슬롯 기반 균등 배분 (유휴 자본 방지)
-        current_count = len(self.engine.portfolio.positions) + len(self._pending_orders)
+        # 기존 포지션 매도 주문(pending)은 이중 카운트 방지
+        new_pending = self._pending_orders - set(self.engine.portfolio.positions.keys())
+        current_count = len(self.engine.portfolio.positions) + len(new_pending)
         remaining_slots = max(max_pos - current_count, 1)
         slot_value = available / Decimal(str(remaining_slots))
 

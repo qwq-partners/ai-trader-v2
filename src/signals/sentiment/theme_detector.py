@@ -23,6 +23,7 @@ from email.utils import parsedate_to_datetime
 from typing import Dict, List, Optional, Set, Any, Tuple
 import aiohttp
 from loguru import logger
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from ...core.types import Theme
 from ...core.event import ThemeEvent
@@ -158,6 +159,12 @@ class NewsCollector:
             self._session = aiohttp.ClientSession()
         return self._session
 
+    async def close(self):
+        """HTTP 세션 종료"""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
+
     @staticmethod
     def _make_dedupe_key(title: str, url: str) -> str:
         """제목+URL 기반 SHA1 중복 키"""
@@ -224,8 +231,13 @@ class NewsCollector:
             logger.error(f"뉴스 수집 오류: {e}")
             return []
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=False,
+    )
     async def fetch_daum_finance_news(self, limit: int = 20) -> List[NewsArticle]:
-        """다음 금융 뉴스 수집"""
+        """다음 금융 뉴스 수집 (최대 3회 재시도)"""
         try:
             session = await self._get_session()
             url = "https://finance.daum.net/content/news"
@@ -241,6 +253,12 @@ class NewsCollector:
             ) as resp:
                 if resp.status != 200:
                     logger.debug(f"[뉴스] 다음 금융 HTTP {resp.status}")
+                    return []
+
+                # JSON 응답인지 확인 (HTML 반환 시 스킵)
+                content_type = resp.headers.get("Content-Type", "")
+                if "json" not in content_type and "javascript" not in content_type:
+                    logger.debug(f"[뉴스] 다음 금융 비-JSON 응답: {content_type[:50]}")
                     return []
 
                 data = await resp.json()
@@ -267,9 +285,12 @@ class NewsCollector:
                     pub_dt = datetime.now()
                     if pub_str:
                         try:
-                            pub_dt = datetime.fromisoformat(
-                                pub_str.replace("Z", "+00:00").replace("+09:00", "")
+                            # ISO 형식 파싱 후 timezone-naive로 변환
+                            parsed = datetime.fromisoformat(
+                                pub_str.replace("Z", "+00:00")
                             )
+                            # timezone-aware → naive (로컬 시각 유지)
+                            pub_dt = parsed.replace(tzinfo=None)
                         except Exception:
                             pass
 
@@ -288,8 +309,13 @@ class NewsCollector:
             logger.debug(f"[뉴스] 다음 금융 수집 오류: {e}")
             return []
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=False,
+    )
     async def fetch_mk_rss(self, limit: int = 20) -> List[NewsArticle]:
-        """매일경제 증권 RSS 수집"""
+        """매일경제 증권 RSS 수집 (최대 3회 재시도)"""
         try:
             session = await self._get_session()
             rss_url = "https://www.mk.co.kr/rss/50200011/"
@@ -368,12 +394,14 @@ class NewsCollector:
         all_articles: List[NewsArticle] = []
         source_counts: Dict[str, int] = {}
 
-        # 1. 네이버 뉴스 검색
+        # 1. 네이버 뉴스 검색 (호출 간 rate limit)
         try:
             queries = ["증시", "코스피", "코스닥", "주식시장"]
-            for query in queries:
+            for i, query in enumerate(queries):
                 articles = await self.search_news(query, display=limit // len(queries))
                 all_articles.extend(articles)
+                if i < len(queries) - 1:
+                    await asyncio.sleep(0.15)
             source_counts["naver"] = len(all_articles)
         except Exception as e:
             logger.debug(f"[뉴스] 네이버 소스 실패 (무시): {e}")
@@ -911,9 +939,17 @@ class ThemeDetector:
                 try:
                     if await self._stock_master.validate_ticker(symbol):
                         return symbol
-                except Exception:
-                    pass
-            # DB 검증 실패해도 형식이 맞으면 반환 (하위호환)
+                    # DB 검증 실패 → 로그 추가
+                    logger.debug(f"[종목 검증] DB에 없는 코드: {symbol}")
+                    # DB에 없는 코드 → 이름으로 재시도
+                    if name:
+                        resolved = await self._stock_master.lookup_ticker(name)
+                        if resolved:
+                            logger.info(f"[종목 검증] 이름으로 해결: {name} → {resolved}")
+                            return resolved
+                except Exception as e:
+                    logger.warning(f"[종목 검증] DB 조회 오류: {e}")
+            # DB 없거나 검증 불가 시 형식만으로 반환 (하위호환)
             return symbol
 
         # 2차: 이름으로 DB 조회
@@ -922,15 +958,21 @@ class ThemeDetector:
                 resolved = await self._stock_master.lookup_ticker(name)
                 if resolved:
                     return resolved
-            except Exception:
-                pass
+                # 조회 실패 → 로그 추가
+                logger.debug(f"[종목 검증] DB에 없는 이름: {name}")
+            except Exception as e:
+                logger.warning(f"[종목 검증] 이름 조회 오류: {e}")
 
         # 3차: KNOWN_STOCKS 폴백
         if name:
             resolved = KNOWN_STOCKS.get(name, "")
             if resolved:
+                logger.debug(f"[종목 검증] KNOWN_STOCKS 폴백: {name} → {resolved}")
                 return resolved
 
+        # 최종 실패
+        if symbol or name:
+            logger.warning(f"[종목 검증 실패] symbol='{symbol}', name='{name}'")
         return ""
 
     async def _adjust_scores_by_sector(self):

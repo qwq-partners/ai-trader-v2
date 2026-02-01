@@ -390,8 +390,10 @@ class SchedulerMixin:
         refresh_time_str = sm_cfg.get("refresh_time", "18:00")
         skip_weekends = sm_cfg.get("skip_weekends", True)
         refresh_hour, refresh_min = (int(x) for x in refresh_time_str.split(":"))
+        alert_threshold = sm_cfg.get("alert_on_consecutive_failures", 3)
 
         last_refresh_date: Optional[date] = None
+        consecutive_failures = 0  # 연속 실패 카운터
 
         try:
             while self.running:
@@ -417,9 +419,22 @@ class SchedulerMixin:
                                 f"KOSPI200={stats.get('kospi200', 0)}, "
                                 f"KOSDAQ150={stats.get('kosdaq150', 0)}"
                             )
+                            consecutive_failures = 0  # 성공 시 리셋
                         last_refresh_date = today
                     except Exception as e:
                         logger.error(f"[종목마스터] 갱신 오류: {e}")
+                        consecutive_failures += 1
+                        last_refresh_date = today  # 실패해도 날짜 기록 (무한 재시도 방지)
+
+                        # N일 연속 실패 시 알림
+                        if consecutive_failures >= alert_threshold:
+                            await self._send_error_alert(
+                                "WARNING",
+                                f"종목 마스터 {consecutive_failures}일 연속 갱신 실패",
+                                f"마지막 오류: {str(e)}\n"
+                                f"임계값: {alert_threshold}일\n"
+                                f"종목 데이터가 오래되었을 수 있습니다."
+                            )
 
                 await asyncio.sleep(60)
 

@@ -28,7 +28,6 @@ CREATE TABLE IF NOT EXISTS kr_stock_master (
     ticker VARCHAR(10) PRIMARY KEY,
     corp_name VARCHAR(200) NOT NULL,
     market VARCHAR(20) NOT NULL,
-    corp_cls VARCHAR(10) DEFAULT '',
     kospi200_yn VARCHAR(1) DEFAULT 'N',
     kosdaq150_yn VARCHAR(1) DEFAULT 'N',
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -55,6 +54,8 @@ class StockMaster:
         # 인메모리 캐시
         self._name_cache: Dict[str, str] = {}   # 이름 → 코드
         self._ticker_set: Set[str] = set()       # 유효 코드 집합
+        self._cache_updated_at: Optional[datetime] = None  # 캐시 갱신 시각
+        self._cache_ttl_hours = 24  # 캐시 TTL (24시간)
 
     # ============================================================
     # 연결 관리
@@ -118,10 +119,24 @@ class StockMaster:
                     )
                 """)
                 if not has_col:
-                    # 스키마 변경: 기존 테이블 삭제 후 재생성
-                    logger.info("[StockMaster] 스키마 변경 감지 → 테이블 재생성")
-                    await conn.execute("DROP TABLE kr_stock_master")
-                    await conn.execute(_CREATE_TABLE_SQL)
+                    # 스키마 변경: ALTER TABLE로 컬럼 추가 시도 (데이터 보존)
+                    logger.info("[StockMaster] 스키마 변경 감지 → 컬럼 추가 시도")
+                    try:
+                        # kospi200_yn, kosdaq150_yn 컬럼 추가
+                        await conn.execute("""
+                            ALTER TABLE kr_stock_master
+                            ADD COLUMN IF NOT EXISTS kospi200_yn VARCHAR(1) DEFAULT 'N'
+                        """)
+                        await conn.execute("""
+                            ALTER TABLE kr_stock_master
+                            ADD COLUMN IF NOT EXISTS kosdaq150_yn VARCHAR(1) DEFAULT 'N'
+                        """)
+                        logger.info("[StockMaster] 컬럼 추가 완료 (기존 데이터 보존)")
+                    except Exception as e:
+                        # ALTER 실패 시에만 테이블 재생성
+                        logger.warning(f"[StockMaster] ALTER 실패 → 테이블 재생성: {e}")
+                        await conn.execute("DROP TABLE kr_stock_master")
+                        await conn.execute(_CREATE_TABLE_SQL)
                     return
 
             await conn.execute(_CREATE_TABLE_SQL)
@@ -135,17 +150,17 @@ class StockMaster:
         종목 마스터 전체 갱신
 
         FDR/pykrx에서 동기 함수로 데이터를 로드한 뒤
-        DB를 전체 교체(UPSERT)합니다.
+        DB를 벌크 UPSERT로 교체하고, 상장폐지 종목을 삭제합니다.
 
         Returns:
             {"total": N, "kospi": N, "kosdaq": N, "konex": N, "etf": N,
-             "kospi200": N, "kosdaq150": N}
+             "kospi200": N, "kosdaq150": N, "deleted": N}
         """
         await self._ensure_connected()
 
         logger.info("[StockMaster] 종목 마스터 갱신 시작...")
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         # 1. FDR에서 전 종목 로드 (동기 → executor)
         all_stocks = await loop.run_in_executor(None, self._sync_load_fdr)
@@ -161,53 +176,97 @@ class StockMaster:
         kospi200_set = set(kospi200)
         kosdaq150_set = set(kosdaq150)
 
-        # 3. DB UPSERT
-        stats = {"total": 0, "kospi": 0, "kosdaq": 0, "konex": 0, "etf": 0,
-                 "kospi200": len(kospi200_set), "kosdaq150": len(kosdaq150_set)}
-
+        # 3. 벌크 데이터 준비
         now = datetime.now()
+        rows = []
+        stats = {"total": 0, "kospi": 0, "kosdaq": 0, "konex": 0, "etf": 0,
+                 "kospi200": len(kospi200_set), "kosdaq150": len(kosdaq150_set),
+                 "deleted": 0}
+
+        for ticker, name, market in all_stocks:
+            k200 = "Y" if ticker in kospi200_set else "N"
+            k150 = "Y" if ticker in kosdaq150_set else "N"
+            rows.append((ticker, name, market, k200, k150, now))
+
+            stats["total"] += 1
+            market_lower = market.lower()
+            if "kospi" in market_lower and "kosdaq" not in market_lower:
+                stats["kospi"] += 1
+            elif "kosdaq" in market_lower:
+                stats["kosdaq"] += 1
+            elif "konex" in market_lower:
+                stats["konex"] += 1
+            elif "etf" in market_lower:
+                stats["etf"] += 1
+
+        # 4. DB 벌크 UPSERT (임시 테이블 → MERGE) + 상장폐지 종목 삭제
         async with self._pool.acquire() as conn:
-            # 트랜잭션으로 전체 교체
             async with conn.transaction():
-                for ticker, name, market in all_stocks:
-                    k200 = "Y" if ticker in kospi200_set else "N"
-                    k150 = "Y" if ticker in kosdaq150_set else "N"
+                # 임시 테이블 생성 (트랜잭션 종료 시 자동 삭제)
+                await conn.execute("""
+                    CREATE TEMP TABLE _tmp_stock_master (
+                        ticker VARCHAR(10),
+                        corp_name VARCHAR(200),
+                        market VARCHAR(20),
+                        kospi200_yn VARCHAR(1),
+                        kosdaq150_yn VARCHAR(1),
+                        updated_at TIMESTAMP
+                    ) ON COMMIT DROP
+                """)
 
-                    await conn.execute("""
-                        INSERT INTO kr_stock_master
-                            (ticker, corp_name, market, kospi200_yn, kosdaq150_yn, updated_at)
-                        VALUES ($1, $2, $3, $4, $5, $6)
-                        ON CONFLICT (ticker) DO UPDATE SET
-                            corp_name = EXCLUDED.corp_name,
-                            market = EXCLUDED.market,
-                            kospi200_yn = EXCLUDED.kospi200_yn,
-                            kosdaq150_yn = EXCLUDED.kosdaq150_yn,
-                            updated_at = EXCLUDED.updated_at
-                    """, ticker, name, market, k200, k150, now)
+                # 벌크 COPY로 임시 테이블에 삽입
+                await conn.copy_records_to_table(
+                    "_tmp_stock_master",
+                    records=rows,
+                    columns=["ticker", "corp_name", "market",
+                             "kospi200_yn", "kosdaq150_yn", "updated_at"],
+                )
 
-                    stats["total"] += 1
-                    market_lower = market.lower()
-                    if "kospi" in market_lower and "kosdaq" not in market_lower:
-                        stats["kospi"] += 1
-                    elif "kosdaq" in market_lower:
-                        stats["kosdaq"] += 1
-                    elif "konex" in market_lower:
-                        stats["konex"] += 1
-                    elif "etf" in market_lower:
-                        stats["etf"] += 1
+                # 임시 테이블 → 본 테이블 UPSERT
+                await conn.execute("""
+                    INSERT INTO kr_stock_master
+                        (ticker, corp_name, market, kospi200_yn, kosdaq150_yn, updated_at)
+                    SELECT ticker, corp_name, market, kospi200_yn, kosdaq150_yn, updated_at
+                    FROM _tmp_stock_master
+                    ON CONFLICT (ticker) DO UPDATE SET
+                        corp_name = EXCLUDED.corp_name,
+                        market = EXCLUDED.market,
+                        kospi200_yn = EXCLUDED.kospi200_yn,
+                        kosdaq150_yn = EXCLUDED.kosdaq150_yn,
+                        updated_at = EXCLUDED.updated_at
+                """)
 
-        # 4. 인메모리 캐시 갱신
-        await self._rebuild_cache()
+                # 상장폐지 종목 삭제 (새 데이터에 없는 기존 종목)
+                # LEFT JOIN 방식으로 성능 최적화
+                del_result = await conn.execute("""
+                    DELETE FROM kr_stock_master m
+                    USING (
+                        SELECT m2.ticker
+                        FROM kr_stock_master m2
+                        LEFT JOIN _tmp_stock_master t ON m2.ticker = t.ticker
+                        WHERE t.ticker IS NULL
+                    ) AS to_delete
+                    WHERE m.ticker = to_delete.ticker
+                """)
+                # del_result = "DELETE N" 형식
+                try:
+                    stats["deleted"] = int(del_result.split()[-1])
+                except (ValueError, IndexError):
+                    stats["deleted"] = 0
+
+        # 5. 인메모리 캐시 갱신
+        await self.rebuild_cache()
 
         logger.info(
             f"[StockMaster] 갱신 완료: 전체={stats['total']}, "
             f"KOSPI={stats['kospi']}, KOSDAQ={stats['kosdaq']}, "
             f"KONEX={stats['konex']}, ETF={stats['etf']}, "
-            f"KOSPI200={stats['kospi200']}, KOSDAQ150={stats['kosdaq150']}"
+            f"KOSPI200={stats['kospi200']}, KOSDAQ150={stats['kosdaq150']}, "
+            f"삭제={stats['deleted']}"
         )
         return stats
 
-    async def _rebuild_cache(self):
+    async def rebuild_cache(self):
         """DB에서 인메모리 캐시 재구축"""
         await self._ensure_connected()
 
@@ -224,10 +283,24 @@ class StockMaster:
                 self._ticker_set.add(ticker)
                 self._name_cache[name] = ticker
 
+        # 캐시 갱신 시각 기록
+        self._cache_updated_at = datetime.now()
+
         logger.debug(
             f"[StockMaster] 캐시 구축: {len(self._ticker_set)}개 종목, "
             f"{len(self._name_cache)}개 이름 매핑"
         )
+
+    async def _ensure_cache_valid(self):
+        """캐시 유효성 체크 (TTL 초과 시 재구축)"""
+        if not self._cache_updated_at:
+            await self.rebuild_cache()
+            return
+
+        elapsed = (datetime.now() - self._cache_updated_at).total_seconds() / 3600
+        if elapsed > self._cache_ttl_hours:
+            logger.info(f"[StockMaster] 캐시 TTL 초과 ({elapsed:.1f}시간) → 재구축")
+            await self.rebuild_cache()
 
     # ============================================================
     # 조회 메서드
@@ -240,6 +313,9 @@ class StockMaster:
         1차: 인메모리 캐시 정확 매칭
         2차: DB ILIKE 폴백
         """
+        # 캐시 유효성 체크
+        await self._ensure_cache_valid()
+
         # 캐시 정확 매칭
         name = name.strip()
         cached = self._name_cache.get(name)
@@ -251,7 +327,7 @@ class StockMaster:
         try:
             async with self._pool.acquire() as conn:
                 row = await conn.fetchrow(
-                    "SELECT ticker FROM kr_stock_master WHERE corp_name ILIKE $1 LIMIT 1",
+                    "SELECT ticker FROM kr_stock_master WHERE corp_name ILIKE $1 ORDER BY LENGTH(corp_name), corp_name LIMIT 1",
                     f"%{name}%"
                 )
                 if row:
@@ -268,6 +344,9 @@ class StockMaster:
         code = code.strip()
         if not code:
             return False
+
+        # 캐시 유효성 체크
+        await self._ensure_cache_valid()
 
         # 캐시 확인
         if self._ticker_set:
@@ -463,39 +542,8 @@ class StockMaster:
         except ImportError:
             logger.warning("[StockMaster] pykrx 미설치, FDR 폴백 시도")
 
-        # 2차: FDR 폴백 (pykrx 실패 시)
-        if not kospi200:
-            try:
-                import FinanceDataReader as fdr
-                df = fdr.StockListing("KRX-MARCAP")
-                if df is not None and not df.empty:
-                    # 시가총액 상위 200개 (KOSPI200 근사)
-                    col_map = {}
-                    for col in df.columns:
-                        cl = col.lower()
-                        if cl in ("code", "symbol", "ticker", "종목코드"):
-                            col_map["ticker"] = col
-                        elif cl in ("marcap", "시가총액", "market_cap"):
-                            col_map["marcap"] = col
-                        elif cl in ("market", "시장구분"):
-                            col_map["market"] = col
-
-                    if col_map.get("ticker") and col_map.get("marcap"):
-                        # KOSPI 종목만 필터
-                        market_col = col_map.get("market")
-                        if market_col:
-                            kospi_df = df[df[market_col].str.contains("KOSPI", na=False) &
-                                         ~df[market_col].str.contains("KOSDAQ", na=False)]
-                        else:
-                            kospi_df = df
-
-                        kospi_sorted = kospi_df.nlargest(200, col_map["marcap"])
-                        kospi200 = [str(t).strip() for t in kospi_sorted[col_map["ticker"]].tolist()]
-                        logger.info(f"[StockMaster] FDR 폴백 KOSPI200 (시총 상위): {len(kospi200)}개")
-            except Exception as e:
-                logger.warning(f"[StockMaster] FDR KOSPI200 폴백 실패: {e}")
-
-        if not kosdaq150:
+        # 2차: FDR 폴백 (pykrx 실패 시) — 한 번만 로드하여 공유
+        if not kospi200 or not kosdaq150:
             try:
                 import FinanceDataReader as fdr
                 df = fdr.StockListing("KRX-MARCAP")
@@ -510,13 +558,34 @@ class StockMaster:
                         elif cl in ("market", "시장구분"):
                             col_map["market"] = col
 
-                    if col_map.get("ticker") and col_map.get("marcap") and col_map.get("market"):
-                        kosdaq_df = df[df[col_map["market"]].str.contains("KOSDAQ", na=False)]
-                        kosdaq_sorted = kosdaq_df.nlargest(150, col_map["marcap"])
-                        kosdaq150 = [str(t).strip() for t in kosdaq_sorted[col_map["ticker"]].tolist()]
-                        logger.info(f"[StockMaster] FDR 폴백 KOSDAQ150 (시총 상위): {len(kosdaq150)}개")
+                    ticker_col = col_map.get("ticker")
+                    marcap_col = col_map.get("marcap")
+                    market_col = col_map.get("market")
+
+                    if ticker_col and marcap_col:
+                        if not kospi200:
+                            if market_col:
+                                kospi_df = df[df[market_col].str.contains("KOSPI", na=False) &
+                                             ~df[market_col].str.contains("KOSDAQ", na=False)]
+                            else:
+                                kospi_df = df
+                            kospi_sorted = kospi_df.nlargest(200, marcap_col)
+                            kospi200 = [str(t).strip() for t in kospi_sorted[ticker_col].tolist()]
+                            logger.warning(
+                                f"[StockMaster] pykrx KOSPI200 실패 → FDR 시총 폴백: {len(kospi200)}개 "
+                                f"(정확도 저하 가능, 실제 지수 구성과 다를 수 있음)"
+                            )
+
+                        if not kosdaq150 and market_col:
+                            kosdaq_df = df[df[market_col].str.contains("KOSDAQ", na=False)]
+                            kosdaq_sorted = kosdaq_df.nlargest(150, marcap_col)
+                            kosdaq150 = [str(t).strip() for t in kosdaq_sorted[ticker_col].tolist()]
+                            logger.warning(
+                                f"[StockMaster] pykrx KOSDAQ150 실패 → FDR 시총 폴백: {len(kosdaq150)}개 "
+                                f"(정확도 저하 가능, 실제 지수 구성과 다를 수 있음)"
+                            )
             except Exception as e:
-                logger.warning(f"[StockMaster] FDR KOSDAQ150 폴백 실패: {e}")
+                logger.warning(f"[StockMaster] FDR KOSPI200/KOSDAQ150 폴백 실패: {e}")
 
         return kospi200, kosdaq150
 

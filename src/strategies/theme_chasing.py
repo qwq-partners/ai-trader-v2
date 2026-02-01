@@ -234,7 +234,8 @@ class ThemeChasingStrategy(BaseStrategy):
                     return None
 
                 if direction == "bullish":
-                    news_bonus = min(impact * 0.1, 10.0)
+                    # impact: -10 ~ +10 스케일 → 보너스 최대 10점
+                    news_bonus = min(impact * 1.0, 10.0)
                     news_info = f", 뉴스호재={impact}"
 
         # 외국인/기관 수급 체크

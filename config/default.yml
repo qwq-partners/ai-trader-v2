@@ -202,8 +202,13 @@ code_evolution:
 # 종목 마스터
 stock_master:
   enabled: true
-  refresh_time: "18:00"
-  skip_weekends: true
+  refresh_time: "18:00"              # 일일 갱신 시간
+  skip_weekends: true                # 주말 갱신 스킵
+
+  # 추가 설정
+  auto_initial_refresh: true         # 빈 테이블 시 자동 갱신
+  cache_ttl_hours: 24                # 캐시 TTL (시간)
+  alert_on_consecutive_failures: 3   # N일 연속 실패 시 알림
 
 
 # 스케줄러 설정

@@ -202,7 +202,8 @@ class TradingBot(SchedulerMixin):
                 logger.info("US 시장 오버나이트 데이터 클라이언트 초기화 완료")
 
             # 종목 마스터 초기화
-            sm_cfg = self.config.get("stock_master") or {}
+            self._stock_master_config = self.config.get("stock_master") or {}
+            sm_cfg = self._stock_master_config
             if sm_cfg.get("enabled", True):
                 self.stock_master = get_stock_master()
                 if await self.stock_master.connect():
@@ -215,7 +216,7 @@ class TradingBot(SchedulerMixin):
                             logger.warning(f"[종목마스터] 초기 갱신 실패 (무시): {e}")
                     else:
                         # 캐시만 재구축
-                        await self.stock_master._rebuild_cache()
+                        await self.stock_master.rebuild_cache()
                     logger.info("종목 마스터 초기화 완료")
                 else:
                     logger.warning("종목 마스터 DB 연결 실패 (무시)")
@@ -375,6 +376,9 @@ class TradingBot(SchedulerMixin):
             self.screener.min_change_pct = screener_cfg.get("min_change_pct", 1.0)
             self.screener.max_change_pct = screener_cfg.get("max_change_pct", 15.0)
             self._screening_interval = screener_cfg.get("scan_interval_minutes", 10) * 60
+            # stock_master → screener 연동 (종목 DB 활용)
+            if self.stock_master:
+                self.screener.set_stock_master(self.stock_master)
             logger.info("종목 스크리너 초기화 완료")
 
             # 엔진에 컴포넌트 연결
@@ -1180,7 +1184,6 @@ class TradingBot(SchedulerMixin):
 
             # 10-1. 종목 마스터 갱신 스케줄러
             if self.stock_master:
-                self._stock_master_config = self.config.get("stock_master") or {}
                 tasks.append(asyncio.create_task(
                     self._run_stock_master_refresh(), name="stock_master_refresh"
                 ))
@@ -1454,6 +1457,13 @@ class TradingBot(SchedulerMixin):
                 logger.info("US 시장 데이터 클라이언트 종료")
         except Exception as e:
             logger.error(f"US 시장 데이터 종료 실패: {e}")
+
+        try:
+            if self.theme_detector and self.theme_detector.news_collector:
+                await self.theme_detector.news_collector.close()
+                logger.info("뉴스 수집기 세션 종료")
+        except Exception as e:
+            logger.error(f"뉴스 수집기 종료 실패: {e}")
 
         try:
             if self.stock_master:

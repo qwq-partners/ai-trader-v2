@@ -86,10 +86,11 @@ class StockScreener:
                 return True
         return False
 
-    def __init__(self, kis_market_data: Optional[KISMarketData] = None):
+    def __init__(self, kis_market_data: Optional[KISMarketData] = None, stock_master=None):
         self._token_manager = get_token_manager()
         self._session: Optional[aiohttp.ClientSession] = None
         self._kis_market_data = kis_market_data
+        self._stock_master = stock_master  # StockMaster 인스턴스 (종목 DB)
 
         # 캐시
         self._cache: Dict[str, List[ScreenedStock]] = {}
@@ -97,14 +98,33 @@ class StockScreener:
         self._cache_ttl = 1800  # 30분 (프리장 중 캐시 유지)
 
         # 종목코드→이름 역매핑 (O(1) 조회용)
-        self._code_to_name: Dict[str, str] = {
-            code: name for name, code in self.KNOWN_STOCKS.items()
-        }
+        # stock_master가 있으면 DB 캐시 활용, 없으면 KNOWN_STOCKS 폴백
+        self._code_to_name: Dict[str, str] = {}
+        self._refresh_code_to_name()
 
         # 설정
         self.min_volume_ratio = 2.0  # 최소 거래량 비율
         self.min_change_pct = 1.0    # 최소 등락률
         self.max_change_pct = 15.0   # 최대 등락률 (과열 제외)
+
+    def set_stock_master(self, stock_master):
+        """stock_master 인스턴스 설정 (런타임에서 주입)"""
+        self._stock_master = stock_master
+        self._refresh_code_to_name()
+
+    def _refresh_code_to_name(self):
+        """종목코드→이름 매핑 갱신 (stock_master DB 우선, KNOWN_STOCKS 폴백)"""
+        if self._stock_master and hasattr(self._stock_master, '_name_cache') and self._stock_master._name_cache:
+            # stock_master의 이름→코드 캐시를 역매핑
+            self._code_to_name = {
+                code: name for name, code in self._stock_master._name_cache.items()
+            }
+            logger.debug(f"[Screener] code_to_name 갱신: stock_master DB ({len(self._code_to_name)}종목)")
+        else:
+            # 폴백: KNOWN_STOCKS (~40개)
+            self._code_to_name = {
+                code: name for name, code in self.KNOWN_STOCKS.items()
+            }
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -783,6 +803,33 @@ class StockScreener:
         "현대건설": "000720", "만도": "204320", "한국타이어앤테크놀로지": "161390",
     }
 
+    async def _get_stock_hints_for_llm(self) -> str:
+        """LLM 프롬프트용 종목 힌트 생성 (stock_master DB 우선, KNOWN_STOCKS 폴백)"""
+        if self._stock_master:
+            try:
+                top = await self._stock_master.get_top_stocks(limit=60)
+                if top:
+                    return "\n".join([f"  {name}={code}" for name, code in top])
+            except Exception as e:
+                logger.debug(f"[Screener] stock_master 힌트 조회 실패: {e}")
+        # 폴백
+        return "\n".join(
+            [f"  {name}={code}" for name, code in list(self.KNOWN_STOCKS.items())[:30]]
+        )
+
+    async def _resolve_stock_name(self, name: str) -> str:
+        """종목명 → 종목코드 변환 (stock_master DB 우선, KNOWN_STOCKS 폴백)"""
+        # 1차: stock_master DB 조회
+        if self._stock_master:
+            try:
+                code = await self._stock_master.lookup_ticker(name)
+                if code:
+                    return code
+            except Exception:
+                pass
+        # 2차: KNOWN_STOCKS 폴백
+        return self.KNOWN_STOCKS.get(name, "")
+
     async def extract_stocks_from_news(
         self,
         news_titles: List[str],
@@ -801,9 +848,7 @@ class StockScreener:
             # 뉴스 제목 모음
             titles_text = "\n".join([f"- {t}" for t in news_titles[:20]])
 
-            known_stocks_hint = "\n".join(
-                [f"  {name}={code}" for name, code in list(self.KNOWN_STOCKS.items())[:30]]
-            )
+            known_stocks_hint = await self._get_stock_hints_for_llm()
 
             prompt = f"""다음 한국 주식시장 뉴스 제목들을 분석하여 관련 종목을 추출해주세요.
 
@@ -843,7 +888,7 @@ class StockScreener:
 
                 # 종목명으로 코드 변환 시도
                 if not symbol or not symbol.isdigit() or len(symbol) != 6:
-                    resolved = self.KNOWN_STOCKS.get(name, "")
+                    resolved = await self._resolve_stock_name(name)
                     if resolved:
                         symbol = resolved
                         logger.debug(f"[Screener] 종목명→코드 변환: {name} → {symbol}")
@@ -969,9 +1014,11 @@ class StockScreener:
                 sentiments = theme_detector.get_all_stock_sentiments()
                 news_added = 0
                 for symbol, data in sentiments.items():
-                    if data.get("direction") == "bullish" and data.get("impact", 0) >= 50:
+                    # impact: -10 ~ +10 스케일 (방향 + 강도 통합)
+                    impact = data.get("impact", 0)
+                    if data.get("direction") == "bullish" and impact >= 5:
                         reason = data.get("reason", "뉴스 호재")
-                        score_bonus = min(data.get("impact", 0) * 0.8, 80)
+                        score_bonus = min(impact * 8, 80)  # 10→80
                         # 종목명 역매핑 (O(1))
                         stock_name = self._code_to_name.get(symbol, "")
                         stock = ScreenedStock(
