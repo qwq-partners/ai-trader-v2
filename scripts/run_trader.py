@@ -644,6 +644,11 @@ class TradingBot(SchedulerMixin):
             if symbol in self._exit_pending_symbols:
                 return
 
+            # 동시호가 시간대 체크 (15:20~15:30)
+            now = datetime.now()
+            time_val = now.hour * 100 + now.minute
+            is_auction = 1520 <= time_val < 1530
+
             # 청산 신호 확인
             exit_signal = self.exit_manager.update_price(symbol, current_price)
 
@@ -657,13 +662,18 @@ class TradingBot(SchedulerMixin):
                 order = Order(
                     symbol=symbol,
                     side=OrderSide.SELL,
-                    order_type=OrderType.MARKET,  # 시장가 청산
+                    order_type=OrderType.LIMIT if is_auction else OrderType.MARKET,
                     quantity=quantity,
+                    price=current_price if is_auction else None,
                 )
 
                 # ExitManager 전용 pending 선등록 (중복 매도 방지, submit await 중 race condition 차단)
                 self._exit_pending_symbols.add(symbol)
                 self._exit_pending_timestamps[symbol] = datetime.now()
+                # 엔진 RiskManager에도 pending 등록 (전략 SELL 신호 중복 차단용)
+                if self.engine.risk_manager:
+                    self.engine.risk_manager._pending_orders.add(symbol)
+                    self.engine.risk_manager._pending_timestamps[symbol] = datetime.now()
 
                 # 브로커에 주문 제출 (실패 시 최대 2회 재시도)
                 success = False
@@ -677,19 +687,22 @@ class TradingBot(SchedulerMixin):
                         await asyncio.sleep(0.5)
 
                 if success:
-                    logger.info(f"[청산 주문 성공] {symbol} {quantity}주 -> 주문번호: {result}")
+                    order_type_str = "LIMIT" if is_auction else "MARKET"
+                    logger.info(f"[청산 주문 성공] {symbol} {quantity}주 ({order_type_str}) -> 주문번호: {result}")
                     trading_logger.log_order(
                         symbol=symbol,
                         side="SELL",
                         quantity=quantity,
                         price=float(current_price),
-                        order_type="MARKET",
+                        order_type=order_type_str,
                         status=f"submitted ({reason})"
                     )
                 else:
-                    # 주문 실패 시 pending 해제 (다음 시세에서 재시도 가능)
+                    # 주문 실패 시 양쪽 pending 해제 (다음 시세에서 재시도 가능)
                     self._exit_pending_symbols.discard(symbol)
                     self._exit_pending_timestamps.pop(symbol, None)
+                    if self.engine.risk_manager:
+                        self.engine.risk_manager.clear_pending(symbol)
                     logger.error(f"[청산 주문 실패] {symbol} - {result} (3회 시도 후)")
                     # 청산 실패는 리스크 급증 → 신규 매수 차단 (5분 후 자동 재개)
                     self.engine.pause()
@@ -884,10 +897,12 @@ class TradingBot(SchedulerMixin):
                     elif pos_name and pos_name != fill.symbol:
                         self.stock_name_cache[fill.symbol] = pos_name
 
-            # ExitManager 매도 pending 해제 (체결 확인)
+            # ExitManager 매도 pending 해제 (체결 확인) + 엔진 RiskManager pending 해제
             if fill.side.value.upper() == "SELL":
                 self._exit_pending_symbols.discard(fill.symbol)
                 self._exit_pending_timestamps.pop(fill.symbol, None)
+                if self.engine.risk_manager:
+                    self.engine.risk_manager.clear_pending(fill.symbol)
 
             # 분할 익절 관리자 업데이트
             if self.exit_manager:
@@ -1165,14 +1180,15 @@ class TradingBot(SchedulerMixin):
 
         # 세션 시간대
         # 프리장: 08:00 ~ 08:50
-        # 정규장: 09:00 ~ 15:30
-        # 넥스트장: 15:30 ~ 20:00
+        # 정규장: 09:00 ~ 15:20 (장마감 동시호가 전까지)
+        # 15:20~15:40: CLOSED (동시호가 + 휴장)
+        # 넥스트장: 15:40 ~ 20:00
 
         if 800 <= time_val < 850:
             return MarketSession.PRE_MARKET
-        elif 900 <= time_val < 1530:
+        elif 900 <= time_val < 1520:
             return MarketSession.REGULAR
-        elif 1530 <= time_val < 2000:
+        elif 1540 <= time_val < 2000:
             return MarketSession.NEXT
         else:
             return MarketSession.CLOSED

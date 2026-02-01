@@ -304,16 +304,16 @@ class TradingEngine:
         if 800 <= time_int < 850:
             return MarketSession.PRE_MARKET
 
-        # 정규장: 09:00 ~ 15:30
-        if 900 <= time_int < 1530:
+        # 정규장: 09:00 ~ 15:20 (장마감 동시호가 전까지)
+        if 900 <= time_int < 1520:
             return MarketSession.REGULAR
 
-        # 넥스트장: 15:30 ~ 20:00
-        if 1530 <= time_int < 2000:
-            return MarketSession.NEXT
+        # 15:20~15:40: CLOSED (장마감 동시호가 + 휴장)
+        # → is_trading_hours()=False → 신규 매수/매도 신호 차단
 
-        # 시간외 (개별 경쟁매매): 15:40 ~ 16:00
-        # (넥스트와 겹침 - 우선순위는 넥스트)
+        # 넥스트장: 15:40 ~ 20:00 (10분 휴장 반영)
+        if 1540 <= time_int < 2000:
+            return MarketSession.NEXT
 
         return MarketSession.CLOSED
 
@@ -370,7 +370,9 @@ class TradingEngine:
             if pos.quantity <= 0:
                 del self.portfolio.positions[symbol]
 
-        self.portfolio.daily_trades += 1
+        # 매수 체결만 일일 거래 횟수로 카운트 (분할 익절 매도가 한도를 소모하지 않도록)
+        if fill.side == OrderSide.BUY:
+            self.portfolio.daily_trades += 1
 
     def update_position_price(self, symbol: str, current_price: Decimal):
         """
@@ -716,9 +718,9 @@ class RiskManager:
         self._pending_quantities[order.symbol] = order.quantity
         self._pending_timestamps[order.symbol] = datetime.now()
 
-        # 현금 예약 (매수 주문 금액만큼, 주문별 추적)
+        # 현금 예약 (매수 주문 금액만큼, 주문별 추적 + 시장가 슬리피지/수수료 버퍼 1.5%)
         if order.side == OrderSide.BUY and order.price and order.quantity:
-            self._reserved_by_order[order.symbol] = order.price * order.quantity
+            self._reserved_by_order[order.symbol] = order.price * order.quantity * Decimal("1.015")
 
         return [OrderEvent.from_order(order, source="risk_manager")]
 

@@ -531,8 +531,8 @@ class SchedulerMixin:
             pass
 
     async def _run_fill_check(self):
-        """체결 확인 루프 (5초마다)"""
-        check_interval = 5  # 초
+        """체결 확인 루프 (적응형 폴링: 미체결 유무에 따라 2초/5초)"""
+        check_interval = 5  # 초 (기본값)
 
         try:
             while self.running:
@@ -552,6 +552,9 @@ class SchedulerMixin:
                             # 체결 이벤트 발행 → _on_fill() 핸들러에서 일괄 처리
                             event = FillEvent.from_fill(fill, source="kis_broker")
                             await self.engine.emit(event)
+
+                    # 미체결 주문 유무에 따라 폴링 간격 조정
+                    check_interval = 2 if open_orders else 5
 
                     # 성공 시 에러 카운터 리셋
                     if hasattr(self, '_fill_check_errors') and self._fill_check_errors > 0:
