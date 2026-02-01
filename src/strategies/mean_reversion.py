@@ -194,7 +194,7 @@ class MeanReversionStrategy(BaseStrategy):
 
         logger.info(f"[MeanReversion] 진입 신호: {symbol} - {reason}")
 
-        return self.create_signal(
+        signal = self.create_signal(
             symbol=symbol,
             side=OrderSide.BUY,
             strength=strength,
@@ -204,6 +204,11 @@ class MeanReversionStrategy(BaseStrategy):
             target_price=target_price,
             stop_price=stop_price,
         )
+
+        # 역추세 전략은 포지션 축소 (리스크 관리)
+        signal.metadata["position_multiplier"] = self.mr_config.position_size_multiplier
+
+        return signal
 
     async def _check_exit_signal(
         self,

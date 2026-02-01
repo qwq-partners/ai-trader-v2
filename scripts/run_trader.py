@@ -217,7 +217,7 @@ class TradingBot(SchedulerMixin):
             momentum_cfg = self.config.get("strategies", "momentum_breakout") or {}
             if momentum_cfg.get("enabled", True):
                 momentum_strategy = MomentumBreakoutStrategy(MomentumConfig(
-                    stop_loss_pct=momentum_cfg.get("stop_loss_pct", 2.0),
+                    stop_loss_pct=momentum_cfg.get("stop_loss_pct", 2.5),
                     take_profit_pct=momentum_cfg.get("take_profit_pct", 5.0),
                     trailing_stop_pct=momentum_cfg.get("trailing_stop_pct", 1.5),
                     volume_surge_ratio=momentum_cfg.get("volume_surge_ratio", 2.0),
@@ -231,8 +231,8 @@ class TradingBot(SchedulerMixin):
                 theme_strategy = ThemeChasingStrategy(
                     config=ThemeChasingConfig(
                         min_theme_score=theme_strategy_cfg.get("min_theme_score", 50.0),
-                        stop_loss_pct=theme_strategy_cfg.get("stop_loss_pct", 1.5),
-                        take_profit_pct=theme_strategy_cfg.get("take_profit_pct", 3.0),
+                        stop_loss_pct=theme_strategy_cfg.get("stop_loss_pct", 2.0),
+                        take_profit_pct=theme_strategy_cfg.get("take_profit_pct", 4.0),
                         trailing_stop_pct=theme_strategy_cfg.get("trailing_stop_pct", 1.0),
                     ),
                     kis_market_data=self.kis_market_data,
@@ -250,7 +250,7 @@ class TradingBot(SchedulerMixin):
                     entry_delay_minutes=gap_cfg.get("entry_delay_minutes", 30),
                     pullback_pct=gap_cfg.get("pullback_pct", 1.0),
                     min_volume_ratio=gap_cfg.get("min_volume_ratio", 2.0),
-                    stop_loss_pct=gap_cfg.get("stop_loss_pct", 1.5),
+                    stop_loss_pct=gap_cfg.get("stop_loss_pct", 2.0),
                     take_profit_pct=gap_cfg.get("take_profit_pct", 4.0),
                     trailing_stop_pct=gap_cfg.get("trailing_stop_pct", 1.5),
                 ))
@@ -274,15 +274,15 @@ class TradingBot(SchedulerMixin):
             # 전략별 청산 파라미터 기록 (ExitManager 전달용)
             self._strategy_exit_params = {
                 "momentum_breakout": {
-                    "stop_loss_pct": momentum_cfg.get("stop_loss_pct", 2.0),
+                    "stop_loss_pct": momentum_cfg.get("stop_loss_pct", 2.5),
                     "trailing_stop_pct": momentum_cfg.get("trailing_stop_pct", 1.5),
                 },
                 "theme_chasing": {
-                    "stop_loss_pct": theme_strategy_cfg.get("stop_loss_pct", 1.5),
+                    "stop_loss_pct": theme_strategy_cfg.get("stop_loss_pct", 2.0),
                     "trailing_stop_pct": theme_strategy_cfg.get("trailing_stop_pct", 1.0),
                 },
                 "gap_and_go": {
-                    "stop_loss_pct": gap_cfg.get("stop_loss_pct", 1.5),
+                    "stop_loss_pct": gap_cfg.get("stop_loss_pct", 2.0),
                     "trailing_stop_pct": gap_cfg.get("trailing_stop_pct", 1.5),
                 },
                 "mean_reversion": {
@@ -302,12 +302,12 @@ class TradingBot(SchedulerMixin):
             self.exit_manager = ExitManager(ExitConfig(
                 enable_partial_exit=exit_cfg.get("enable_partial_exit", True),
                 first_exit_pct=exit_cfg.get("first_exit_pct", 3.0),
-                first_exit_ratio=exit_cfg.get("first_exit_ratio", 0.5),
+                first_exit_ratio=exit_cfg.get("first_exit_ratio", 0.3),
                 second_exit_pct=exit_cfg.get("second_exit_pct", 5.0),
                 second_exit_ratio=exit_cfg.get("second_exit_ratio", 0.5),
-                stop_loss_pct=exit_cfg.get("stop_loss_pct", 2.0),
+                stop_loss_pct=exit_cfg.get("stop_loss_pct", 2.5),
                 trailing_stop_pct=exit_cfg.get("trailing_stop_pct", 1.5),
-                trailing_activate_pct=exit_cfg.get("trailing_activate_pct", 2.0),
+                trailing_activate_pct=exit_cfg.get("trailing_activate_pct", 3.0),
                 include_fees=exit_cfg.get("include_fees", True),
             ))
             logger.info("분할 익절 관리자 초기화 완료")

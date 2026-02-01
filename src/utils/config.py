@@ -67,18 +67,18 @@ def create_trading_config(config: Optional[Dict[str, Any]] = None) -> TradingCon
 
     # RiskConfig 생성
     risk = RiskConfig(
-        daily_max_loss_pct=float(risk_cfg.get("daily_max_loss_pct", 5.0)),
-        daily_max_trades=int(risk_cfg.get("daily_max_trades", 20)),
-        base_position_pct=float(risk_cfg.get("base_position_pct", 25.0)),
-        max_position_pct=float(risk_cfg.get("max_position_pct", 50.0)),
+        daily_max_loss_pct=float(risk_cfg.get("daily_max_loss_pct", 3.0)),
+        daily_max_trades=int(risk_cfg.get("daily_max_trades", 15)),
+        base_position_pct=float(risk_cfg.get("base_position_pct", 15.0)),
+        max_position_pct=float(risk_cfg.get("max_position_pct", 35.0)),
         max_positions=int(risk_cfg.get("max_positions", 5)),
-        min_cash_reserve_pct=float(risk_cfg.get("min_cash_reserve_pct", 10.0)),
+        min_cash_reserve_pct=float(risk_cfg.get("min_cash_reserve_pct", 15.0)),
         min_position_value=int(risk_cfg.get("min_position_value", 500000)),
         dynamic_max_positions=bool(risk_cfg.get("dynamic_max_positions", True)),
-        default_stop_loss_pct=float(risk_cfg.get("default_stop_loss_pct", 2.0)),
-        default_take_profit_pct=float(risk_cfg.get("default_take_profit_pct", 3.0)),
+        default_stop_loss_pct=float(risk_cfg.get("default_stop_loss_pct", 2.5)),
+        default_take_profit_pct=float(risk_cfg.get("default_take_profit_pct", 5.0)),
         trailing_stop_pct=float(risk_cfg.get("trailing_stop_pct", 1.5)),
-        hot_theme_position_pct=float(risk_cfg.get("hot_theme_position_pct", 70.0)),
+        hot_theme_position_pct=float(risk_cfg.get("hot_theme_position_pct", 50.0)),
         momentum_multiplier=float(risk_cfg.get("momentum_multiplier", 1.5)),
     )
 
@@ -90,7 +90,7 @@ def create_trading_config(config: Optional[Dict[str, Any]] = None) -> TradingCon
     return TradingConfig(
         initial_capital=Decimal(str(initial_capital)),
         buy_fee_rate=float(fees.get("buy_rate", 0.00015)),
-        sell_fee_rate=float(fees.get("sell_rate", 0.00315)),
+        sell_fee_rate=float(fees.get("sell_rate", 0.00195)),
         enable_pre_market=trading.get("enable_pre_market", True),
         enable_next_market=trading.get("enable_next_market", True),
         risk=risk,

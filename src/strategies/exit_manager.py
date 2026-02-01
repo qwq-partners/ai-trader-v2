@@ -4,9 +4,9 @@ AI Trading Bot v2 - 분할 익절/청산 관리자
 포지션별로 분할 익절을 관리합니다.
 
 분할 익절 전략:
-1. +3% 도달 → 50% 익절
-2. +5% 도달 → 25% 추가 익절
-3. 나머지 25% → 트레일링 스탑으로 수익 극대화
+1. +3% 도달 → 30% 익절
+2. +5% 도달 → 잔여의 50% (전체 35%) 추가 익절
+3. 나머지 35% → 트레일링 스탑으로 수익 극대화
 
 수수료 포함 계산으로 실제 순수익 기준 청산
 """
@@ -25,9 +25,9 @@ from ..utils.fee_calculator import FeeCalculator, get_fee_calculator
 class ExitStage(Enum):
     """익절 단계"""
     NONE = "none"               # 익절 전
-    FIRST = "first"             # 1차 익절 (50%)
-    SECOND = "second"           # 2차 익절 (25%)
-    TRAILING = "trailing"       # 트레일링 (나머지 25%)
+    FIRST = "first"             # 1차 익절 (30%)
+    SECOND = "second"           # 2차 익절 (35%)
+    TRAILING = "trailing"       # 트레일링 (나머지 35%)
 
 
 @dataclass
@@ -36,20 +36,20 @@ class ExitConfig:
     # 분할 익절 설정
     enable_partial_exit: bool = True
 
-    # 1차 익절 (50%)
+    # 1차 익절 (30%) — 수익 종목을 더 오래 보유하여 R:R 개선
     first_exit_pct: float = 3.0       # 목표 수익률 (%)
-    first_exit_ratio: float = 0.5     # 청산 비율 (50%)
+    first_exit_ratio: float = 0.3     # 청산 비율 (30%)
 
-    # 2차 익절 (25%)
+    # 2차 익절 (잔여의 50% = 전체의 35%)
     second_exit_pct: float = 5.0      # 목표 수익률 (%)
-    second_exit_ratio: float = 0.5    # 남은 물량의 50% = 전체의 25%
+    second_exit_ratio: float = 0.5    # 남은 물량의 50% = 전체의 35%
 
-    # 손절
-    stop_loss_pct: float = 2.0        # 최대 손실률 (%)
+    # 손절 — 노이즈 손절 감소를 위해 확대
+    stop_loss_pct: float = 2.5        # 최대 손실률 (%)
 
-    # 트레일링 스탑
+    # 트레일링 스탑 — 1차 익절과 동일 시점에 활성화 (조기 청산 방지)
     trailing_stop_pct: float = 1.5    # 고점 대비 하락률 (%)
-    trailing_activate_pct: float = 2.0  # 트레일링 활성화 수익률
+    trailing_activate_pct: float = 3.0  # 트레일링 활성화 수익률 (1차 익절과 동일)
 
     # 수수료 포함 계산
     include_fees: bool = True

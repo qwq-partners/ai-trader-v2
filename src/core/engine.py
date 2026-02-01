@@ -800,6 +800,13 @@ class RiskManager:
         max_value = equity * Decimal(str(self.config.max_position_pct / 100))
         position_value = min(max(pct_value, slot_value), max_value, available)
 
+        # 전략별 포지션 배율 (역추세 등은 축소) — 최종 금액에 적용
+        position_multiplier = 1.0
+        if signal.signal and signal.signal.metadata:
+            position_multiplier = signal.signal.metadata.get("position_multiplier", 1.0)
+        if position_multiplier != 1.0:
+            position_value *= Decimal(str(position_multiplier))
+
         # 최소 포지션 금액 체크
         min_val = Decimal(str(self.config.min_position_value))
         if position_value < min_val:

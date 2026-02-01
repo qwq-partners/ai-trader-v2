@@ -410,24 +410,24 @@ class RiskMetrics:
 class RiskConfig:
     """리스크 설정"""
     # 일일 한도
-    daily_max_loss_pct: float = 5.0
-    daily_max_trades: int = 20
+    daily_max_loss_pct: float = 3.0
+    daily_max_trades: int = 15
 
     # 포지션 관리
-    base_position_pct: float = 10.0    # 기본 포지션 비율 (10% - 보수적)
-    max_position_pct: float = 30.0     # 최대 포지션 비율 (30%로 하향)
-    max_positions: int = 5             # 최대 동시 포지션 수 (분산투자)
-    min_cash_reserve_pct: float = 20.0 # 최소 현금 예비 (안전마진)
+    base_position_pct: float = 15.0    # 기본 포지션 비율 (15% - 집중 투자)
+    max_position_pct: float = 35.0     # 최대 포지션 비율 (35%)
+    max_positions: int = 5             # 최대 동시 포지션 수 (소수 정예)
+    min_cash_reserve_pct: float = 15.0 # 최소 현금 예비 (안전마진)
     min_position_value: int = 500000   # 최소 포지션 금액 (50만원 — 이하면 매수 안 함)
     dynamic_max_positions: bool = True # 자산 규모에 따라 max_positions 동적 조정
 
     # 손절/익절
-    default_stop_loss_pct: float = 2.0
-    default_take_profit_pct: float = 3.0
+    default_stop_loss_pct: float = 2.5
+    default_take_profit_pct: float = 5.0
     trailing_stop_pct: float = 1.5
 
     # 특별 상황
-    hot_theme_position_pct: float = 70.0
+    hot_theme_position_pct: float = 50.0
     momentum_multiplier: float = 1.5
 
 
@@ -440,7 +440,7 @@ class TradingConfig:
 
     # 수수료
     buy_fee_rate: float = 0.00015      # 0.015%
-    sell_fee_rate: float = 0.00315     # 0.015% + 세금 0.30%
+    sell_fee_rate: float = 0.00195     # 0.015% + 증권거래세 0.18%
 
     # 슬리피지
     expected_slippage_ticks: int = 1

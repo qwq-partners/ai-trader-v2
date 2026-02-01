@@ -1,5 +1,6 @@
 # AI Trading Bot v2 - 기본 설정
 # ================================
+# 목표: 일 1% 수익률, 손익비 2:1 기준 최적화
 
 # 트레이딩 기본 설정
 trading:
@@ -10,10 +11,10 @@ trading:
   enable_pre_market: true        # 프리장 (08:00~08:50)
   enable_next_market: true       # 넥스트장 (15:30~20:00)
 
-  # 수수료 (한국투자증권 기준)
+  # 수수료 (한국투자증권 기준, 2024년 세율 적용)
   fees:
     buy_rate: 0.00015            # 매수 수수료 0.015%
-    sell_rate: 0.00315           # 매도 수수료 0.015% + 세금 0.30%
+    sell_rate: 0.00195           # 매도 수수료 0.015% + 증권거래세 0.18%
 
   # 슬리피지
   slippage:
@@ -21,33 +22,33 @@ trading:
     max_ticks: 3
 
 
-# 리스크 관리 설정 (공격적)
+# 리스크 관리 설정 (일 1% 목표 최적화)
 risk:
-  # === 일일 한도 (최소한의 안전장치) ===
-  daily_max_loss_pct: 5.0        # 하루 최대 손실 (%)
-  daily_max_trades: 20           # 일일 최대 거래 횟수
+  # === 일일 한도 ===
+  daily_max_loss_pct: 3.0        # 하루 최대 손실 3% (5%→3% 축소: 일 1% 목표 시 3일치 손실이 상한)
+  daily_max_trades: 15           # 일일 최대 거래 15회 (과잉매매 방지)
 
   # === 포지션 관리 ===
-  base_position_pct: 12.0        # 기본 포지션 비율 (%) — 종목당 100~200만원 범위
-  max_position_pct: 50.0         # 최대 포지션 비율 (%)
-  max_positions: 8               # 최대 동시 포지션 수 (상한)
-  min_cash_reserve_pct: 10.0     # 최소 현금 보유 (%)
-  min_position_value: 500000     # 최소 포지션 금액 (50만원 미만 매수 안 함)
+  base_position_pct: 15.0        # 기본 포지션 비율 15% (12→15: 집중 투자로 자본 효율↑)
+  max_position_pct: 35.0         # 최대 포지션 비율 35% (50→35: 단일 종목 리스크 제한)
+  max_positions: 5               # 최대 동시 포지션 5개 (8→5: 소수 정예, 관리 집중)
+  min_cash_reserve_pct: 15.0     # 최소 현금 보유 15% (10→15: 안전마진 확보)
+  min_position_value: 500000     # 최소 포지션 금액 (50만원)
   dynamic_max_positions: true    # 자산 규모에 따라 max_positions 동적 조정
 
-  # === 손절/익절 ===
-  default_stop_loss_pct: 2.0     # 기본 손절 (%)
-  default_take_profit_pct: 3.0   # 기본 익절 (%)
-  trailing_stop_pct: 1.5         # 트레일링 스탑 (%)
+  # === 손절/익절 (기본값, ExitManager에서 오버라이드) ===
+  default_stop_loss_pct: 2.5     # 기본 손절 2.5% (2→2.5: 노이즈 손절 감소)
+  default_take_profit_pct: 5.0   # 기본 익절 5.0% (3→5: 목표 수익 확대)
+  trailing_stop_pct: 1.5         # 트레일링 스탑 1.5%
 
   # === 특별 상황 ===
-  hot_theme_position_pct: 70.0   # 핫 테마 시 최대 포지션 (%)
+  hot_theme_position_pct: 50.0   # 핫 테마 시 최대 포지션 50% (70→50: 테마 집중 리스크 완화)
   momentum_multiplier: 1.5       # 강한 모멘텀 시 배팅 증가
 
 
 # 전략 설정
 strategies:
-  # 모멘텀 브레이크아웃
+  # 모멘텀 브레이크아웃 (주력 전략)
   momentum_breakout:
     enabled: true
     breakout_period: 20          # 돌파 기준 기간 (일)
@@ -61,18 +62,18 @@ strategies:
     weight_high_proximity: 20.0
     weight_theme: 10.0
 
-    # 청산 조건
-    stop_loss_pct: 2.0
+    # 청산 조건 (R:R = 5:2.5 = 2:1)
+    stop_loss_pct: 2.5           # 2→2.5: 노이즈 방어
     take_profit_pct: 5.0
     trailing_stop_pct: 1.5
 
-  # 테마 추종
+  # 테마 추종 (빠른 진입/탈출)
   theme_chasing:
     enabled: true
     min_theme_score: 70
     entry_window_minutes: 30
-    stop_loss_pct: 1.5
-    take_profit_pct: 3.0
+    stop_loss_pct: 2.0           # 1.5→2.0: 테마주 변동성 감안
+    take_profit_pct: 4.0         # 3→4: 테마 모멘텀 활용
     trailing_stop_pct: 1.0
 
   # 갭상승 추종
@@ -83,19 +84,20 @@ strategies:
     entry_delay_minutes: 30
     pullback_pct: 1.0
     min_volume_ratio: 2.0
-    stop_loss_pct: 1.5
+    stop_loss_pct: 2.0           # 1.5→2.0: 갭 변동성 감안
     take_profit_pct: 4.0
     trailing_stop_pct: 1.5
 
-  # 평균 회귀 (급락 반등)
+  # 평균 회귀 (급락 반등, 보조 전략)
   mean_reversion:
     enabled: true
     max_rsi: 30.0
     min_decline_pct: -10.0
     min_volume_ratio: 1.5
-    stop_loss_pct: 3.0
+    stop_loss_pct: 3.0           # 유지: 역추세 특성상 넓은 SL 필요
     take_profit_pct: 5.0
     trailing_stop_pct: 2.0
+    position_size_multiplier: 0.5  # 포지션 절반 (역추세 리스크 관리)
 
 
 # 브로커 설정
@@ -104,21 +106,16 @@ broker:
   kis:
     env: prod                    # prod, dev (모의투자)
     timeout_seconds: 15
-    # 인증 정보는 환경변수로 설정
-    # KIS_APPKEY, KIS_APPSECRET, KIS_CANO
 
 
 # 데이터 설정
 data:
-  # 실시간 데이터 소스
   realtime_source: kis_websocket
 
-  # 저장소
   storage:
-    type: file                   # file, postgresql, timescaledb
+    type: file
     file_path: ./data/prices
 
-  # 히스토리 데이터
   history:
     lookback_days: 60
     cache_enabled: true
@@ -126,7 +123,7 @@ data:
 
 # 로깅 설정
 logging:
-  level: INFO                    # DEBUG, INFO, WARNING, ERROR
+  level: INFO
   file_enabled: true
   file_path: ./logs
   rotation: 1 day
@@ -137,88 +134,76 @@ logging:
 notification:
   telegram:
     enabled: true
-    # 토큰과 채팅 ID는 환경변수로 설정
-    # TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
-  # 알림 조건
   alerts:
-    on_signal: false             # 신호 발생 시 (비활성)
-    on_order: false              # 주문 실행 시 (비활성)
-    on_fill: false               # 체결 시 (비활성)
-    on_risk_alert: false         # 리스크 경고 시 (비활성)
-    on_daily_summary: true       # 일일 요약 (20:30)
+    on_signal: false
+    on_order: false
+    on_fill: false
+    on_risk_alert: false
+    on_daily_summary: true
 
 
-# 분할 익절 관리자
+# 분할 익절 관리자 (R:R 최적화)
 exit_manager:
-  enable_partial_exit: true       # 분할 익절 활성화
+  enable_partial_exit: true
   first_exit_pct: 3.0             # 1차 익절 목표 (%)
-  first_exit_ratio: 0.5           # 1차 익절 수량 비율
+  first_exit_ratio: 0.3           # 30% 매도 (50→30: 수익 종목 더 보유)
   second_exit_pct: 5.0            # 2차 익절 목표 (%)
-  second_exit_ratio: 0.5          # 2차 익절 수량 비율 (나머지 전량)
-  stop_loss_pct: 2.0              # 손절 (%)
+  second_exit_ratio: 0.5          # 잔여 50% 매도 (=전체 35%)
+  stop_loss_pct: 2.5              # 손절 2.5% (2→2.5: 노이즈 방어)
   trailing_stop_pct: 1.5          # 트레일링 스탑 (%)
-  trailing_activate_pct: 2.0      # 트레일링 활성화 시점 (%)
-  include_fees: true              # 수수료 포함 계산
+  trailing_activate_pct: 3.0      # 트레일링 활성화 3% (2→3: 1차 익절과 동기화)
+  include_fees: true
 
 
 # 종목 스크리너
 screener:
-  scan_interval_minutes: 10       # 스캔 주기 (분)
-  min_volume_ratio: 2.0           # 최소 거래량 비율 (평균 대비)
-  min_change_pct: 1.0             # 최소 등락률 (%)
-  max_change_pct: 15.0            # 최대 등락률 (과열 방지)
-  min_market_cap: 1000            # 최소 시가총액 (억원)
+  scan_interval_minutes: 5        # 스캔 주기 5분 (10→5: 기회 빠른 포착)
+  min_volume_ratio: 2.0
+  min_change_pct: 1.0
+  max_change_pct: 15.0
+  min_market_cap: 1000
 
 
 # 테마 탐지기
 theme_detector:
-  scan_interval_minutes: 15       # 테마 스캔 주기 (분)
-  min_news_count: 3               # 최소 뉴스 개수
-  min_theme_score: 70.0           # 최소 테마 점수
+  scan_interval_minutes: 10       # 테마 스캔 10분 (15→10: 테마 초기 포착)
+  min_news_count: 3
+  min_theme_score: 70.0
 
 
 # US 시장 오버나이트 시그널
 us_market:
-  enabled: true                     # US 오버나이트 시그널 활성화
-  fetch_time: "07:30"               # 데이터 조회 시간 (참고용)
-  cache_ttl_hours: 24               # 캐시 유효 시간 (시간)
+  enabled: true
+  fetch_time: "07:30"
+  cache_ttl_hours: 24
 
 
 # 자가 진화 엔진
 evolution:
-  enabled: true                   # 진화 기능 활성화
-  analysis_days: 7                # 분석 기간 (일)
-  min_trades_for_evolution: 5     # 진화에 필요한 최소 거래 수
-  min_confidence_to_apply: 0.6    # 파라미터 적용 최소 신뢰도
-  auto_rollback_threshold: -2.0   # 자동 롤백 임계값 (승률 감소%)
-  evaluation_period_days: 7       # 변경 효과 평가 기간 (일)
-  send_telegram: false            # 진화 결과 텔레그램 알림 (비활성)
+  enabled: true
+  analysis_days: 7
+  min_trades_for_evolution: 5
+  min_confidence_to_apply: 0.6
+  auto_rollback_threshold: -2.0
+  evaluation_period_days: 7
+  send_telegram: false
 
 
 # 스케줄러 설정
 scheduler:
-  # 아침 레포트 시간 (HH:MM)
   morning_report_time: "08:00"
-
-  # 오후 결과 레포트 시간 (HH:MM)
   evening_report_time: "17:00"
-
-  # 자가 진화 실행 시간 (HH:MM)
   evolution_time: "20:30"
-
-  # NXT 종목 갱신 시간 (HH)
   nxt_refresh_hour: 6
-
-  # 뉴스 임팩트 NewsEvent 발행 임계값 (0~100)
   news_impact_threshold: 70
 
 
 # 대시보드 설정
 dashboard:
-  enabled: true                    # 대시보드 활성화
-  host: "0.0.0.0"                  # 바인딩 호스트
-  port: 8080                       # 포트
+  enabled: true
+  host: "0.0.0.0"
+  port: 8080
 
 
 # 워치리스트 (모니터링 종목)
