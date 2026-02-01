@@ -99,6 +99,7 @@ class TradeReviewer:
         self,
         days: int = 7,
         strategy: str = None,
+        daily_log_context: Dict[str, Any] = None,
     ) -> ReviewResult:
         """
         기간 복기
@@ -115,6 +116,13 @@ class TradeReviewer:
             trades = self.journal.get_closed_trades(days)
 
         if not trades:
+            # 거래 없어도 진화 컨텍스트는 요약에 포함
+            summary = ""
+            if daily_log_context:
+                summary = self._generate_summary_for_llm(
+                    [], 0, 0, 0, [], [], [],
+                    daily_log_context=daily_log_context,
+                )
             return ReviewResult(
                 period_start=start_date,
                 period_end=end_date,
@@ -124,6 +132,7 @@ class TradeReviewer:
                 total_pnl=0,
                 profit_factor=0,
                 max_drawdown_pct=0,
+                summary_for_llm=summary,
             )
 
         # 기본 통계 계산
@@ -164,7 +173,8 @@ class TradeReviewer:
         # LLM용 요약 생성
         summary = self._generate_summary_for_llm(
             trades, win_rate, avg_pnl_pct, profit_factor,
-            winning_patterns, losing_patterns, issues
+            winning_patterns, losing_patterns, issues,
+            daily_log_context=daily_log_context,
         )
 
         return ReviewResult(
@@ -545,7 +555,8 @@ class TradeReviewer:
         profit_factor: float,
         winning_patterns: List[Dict],
         losing_patterns: List[Dict],
-        issues: List[str]
+        issues: List[str],
+        daily_log_context: Dict[str, Any] = None,
     ) -> str:
         """LLM 분석용 요약 텍스트 생성"""
         # 일평균 지표 계산 (공휴일 포함 실제 영업일)
@@ -629,6 +640,38 @@ class TradeReviewer:
             lines.append(f"**최악 거래**: {worst.symbol} {worst.name}")
             lines.append(f"  - 수익률: {worst.pnl_pct:+.1f}%, 전략: {worst.entry_strategy}")
             lines.append(f"  - 청산 사유: {worst.exit_reason}")
+
+        # 진화 컨텍스트 병합 (차단 신호, 리스크 경고, 테마/스크리닝)
+        if daily_log_context:
+            blocked = daily_log_context.get("blocked_signals", {})
+            risk_alerts = daily_log_context.get("risk_alerts", {})
+            themes_count = daily_log_context.get("themes_detected", 0)
+            screenings_count = daily_log_context.get("screenings_run", 0)
+
+            lines.extend([
+                f"",
+                f"### 신호 차단 통계",
+                f"- 총 차단: {blocked.get('total', 0)}건",
+            ])
+            by_reason = blocked.get("by_reason", {})
+            for reason, count in sorted(by_reason.items(), key=lambda x: -x[1]):
+                lines.append(f"  - {reason}: {count}건")
+
+            if risk_alerts.get("total", 0) > 0:
+                lines.extend([
+                    f"",
+                    f"### 리스크 경고",
+                    f"- 총 경고: {risk_alerts['total']}건",
+                ])
+                for detail in risk_alerts.get("details", [])[:5]:
+                    lines.append(f"  - [{detail.get('type')}] {detail.get('message')}")
+
+            lines.extend([
+                f"",
+                f"### 테마/스크리닝 활동",
+                f"- 테마 탐지: {themes_count}회",
+                f"- 스크리닝 실행: {screenings_count}회",
+            ])
 
         return "\n".join(lines)
 

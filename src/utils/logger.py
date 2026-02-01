@@ -12,8 +12,10 @@ Loguru 기반 로깅 시스템
 """
 
 import json
+import os
+import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from loguru import logger
@@ -23,7 +25,7 @@ def setup_logger(
     log_level: str = "INFO",
     log_dir: Optional[str] = None,
     rotation: str = "1 day",
-    retention: str = "30 days",
+    retention: str = "7 days",
     enable_console: bool = True,
     enable_file: bool = True,
 ):
@@ -121,6 +123,88 @@ def setup_logger(
         )
 
     logger.info(f"로거 설정 완료: level={log_level}, dir={log_dir}")
+
+
+def cleanup_old_logs(log_base_dir: str, max_days: int = 7):
+    """
+    오래된 로그 파일/디렉터리 정리
+
+    - YYYYMMDD 형식 디렉터리 삭제
+    - 오래된 .log 파일 삭제
+    """
+    base = Path(log_base_dir)
+    if not base.exists():
+        return
+
+    cutoff = datetime.now() - timedelta(days=max_days)
+    cutoff_str = cutoff.strftime("%Y%m%d")
+    removed_dirs = 0
+    removed_files = 0
+
+    # YYYYMMDD 디렉터리 정리
+    for entry in base.iterdir():
+        if entry.is_dir() and re.match(r"^\d{8}$", entry.name):
+            if entry.name < cutoff_str:
+                try:
+                    import shutil
+                    shutil.rmtree(entry)
+                    removed_dirs += 1
+                except Exception as e:
+                    logger.warning(f"[cleanup] 디렉터리 삭제 실패: {entry} - {e}")
+
+    # base 디렉터리 내 오래된 .log 파일 정리
+    for entry in base.iterdir():
+        if entry.is_file() and entry.suffix == ".log":
+            try:
+                mtime = datetime.fromtimestamp(entry.stat().st_mtime)
+                if mtime < cutoff:
+                    entry.unlink()
+                    removed_files += 1
+            except Exception as e:
+                logger.warning(f"[cleanup] 파일 삭제 실패: {entry} - {e}")
+
+    if removed_dirs or removed_files:
+        logger.info(
+            f"[cleanup] 로그 정리 완료: 디렉터리 {removed_dirs}개, 파일 {removed_files}개 삭제 "
+            f"(기준: {max_days}일)"
+        )
+
+
+def cleanup_old_cache(max_days: int = 7):
+    """
+    오래된 캐시 JSON 파일 정리
+
+    - ~/.cache/ai_trader/journal/trades_*.json
+    - ~/.cache/ai_trader/evolution/advice_*.json
+    """
+    cache_base = Path.home() / ".cache" / "ai_trader"
+    if not cache_base.exists():
+        return
+
+    cutoff = datetime.now() - timedelta(days=max_days)
+    removed = 0
+
+    patterns = [
+        cache_base / "journal" / "trades_*.json",
+        cache_base / "evolution" / "advice_*.json",
+    ]
+
+    for pattern in patterns:
+        parent = pattern.parent
+        if not parent.exists():
+            continue
+        glob_pattern = pattern.name
+        for f in parent.glob(glob_pattern):
+            try:
+                mtime = datetime.fromtimestamp(f.stat().st_mtime)
+                if mtime < cutoff:
+                    f.unlink()
+                    removed += 1
+            except Exception as e:
+                logger.warning(f"[cleanup] 캐시 파일 삭제 실패: {f} - {e}")
+
+    if removed:
+        logger.info(f"[cleanup] 캐시 정리 완료: {removed}개 파일 삭제 (기준: {max_days}일)")
 
 
 def get_trade_logger():
@@ -453,6 +537,102 @@ class TradingLogger:
     def flush(self):
         """현재까지 기록 저장 (강제)"""
         self._save_daily_json()
+
+    # ============================================================
+    # 세션/포트폴리오/신호 차단 로그 (진화 시스템 연동)
+    # ============================================================
+
+    def log_session_change(
+        self,
+        new_session: str,
+        prev_session: str = "",
+        details: str = "",
+    ):
+        """세션 변경 상세 로깅"""
+        self._trade_logger.info(
+            f"[SESSION] {prev_session} → {new_session}"
+            + (f" | {details}" if details else "")
+        )
+        self._add_record("session_change", {
+            "new_session": new_session,
+            "prev_session": prev_session,
+            "details": details,
+        })
+
+    def log_portfolio_sync(
+        self,
+        ghost_removed: int,
+        new_added: int,
+        total_positions: int,
+        cash: float,
+        total_equity: float,
+    ):
+        """포트폴리오 동기화 결과 로깅"""
+        self._trade_logger.info(
+            f"[SYNC] 유령제거={ghost_removed} 신규추가={new_added} "
+            f"보유={total_positions}종목 | 현금={cash:,.0f}원 총자산={total_equity:,.0f}원"
+        )
+        self._add_record("portfolio_sync", {
+            "ghost_removed": ghost_removed,
+            "new_added": new_added,
+            "total_positions": total_positions,
+            "cash": cash,
+            "total_equity": total_equity,
+        })
+
+    def log_signal_blocked(
+        self,
+        symbol: str,
+        side: str,
+        reason: str,
+        price: float = 0,
+        score: float = 0,
+    ):
+        """신호 차단 로깅 (진화 학습 핵심 데이터)"""
+        self._trade_logger.info(
+            f"[BLOCKED] {symbol} {side} | 사유={reason} | "
+            f"가격={price:,.0f} 점수={score:.0f}"
+        )
+        self._add_record("signal_blocked", {
+            "symbol": symbol,
+            "side": side,
+            "reason": reason,
+            "price": price,
+            "score": score,
+        })
+
+    def get_evolution_context(self) -> Dict[str, Any]:
+        """
+        진화 시스템용 컨텍스트 데이터 반환
+
+        차단 통계, 리스크 경고, 테마/스크리닝 요약
+        """
+        blocked = [r for r in self._daily_records if r["type"] == "signal_blocked"]
+        risk_alerts = [r for r in self._daily_records if r["type"] == "risk_alert"]
+        themes = [r for r in self._daily_records if r["type"] == "theme"]
+        screenings = [r for r in self._daily_records if r["type"] == "screening"]
+
+        # 차단 사유별 통계
+        block_reasons: Dict[str, int] = {}
+        for b in blocked:
+            reason = b.get("reason", "unknown")
+            block_reasons[reason] = block_reasons.get(reason, 0) + 1
+
+        return {
+            "blocked_signals": {
+                "total": len(blocked),
+                "by_reason": block_reasons,
+            },
+            "risk_alerts": {
+                "total": len(risk_alerts),
+                "details": [
+                    {"type": r.get("alert_type"), "message": r.get("message")}
+                    for r in risk_alerts[:10]
+                ],
+            },
+            "themes_detected": len(themes),
+            "screenings_run": len(screenings),
+        }
 
 
 # 전역 인스턴스

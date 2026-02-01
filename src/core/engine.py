@@ -15,6 +15,8 @@ import sys
 
 from loguru import logger
 
+from src.utils.logger import trading_logger
+
 from .event import (
     Event, EventType,
     MarketDataEvent, QuoteEvent, SignalEvent, OrderEvent, FillEvent,
@@ -633,16 +635,31 @@ class RiskManager:
         if not self.engine.is_trading_hours():
             session = self.engine._get_current_session()
             logger.info(f"[리스크] 거래 시간 외 차단: {event.symbol} (세션={session.value})")
+            trading_logger.log_signal_blocked(
+                symbol=event.symbol, side=event.side.value,
+                reason=f"거래시간외({session.value})",
+                price=float(event.price or 0), score=event.score,
+            )
             return None
 
         # 이미 주문 진행 중인 종목 차단 (중복 신호 방지)
         if event.symbol in self._pending_orders:
             logger.debug(f"[리스크] 주문 진행 중 차단: {event.symbol}")
+            trading_logger.log_signal_blocked(
+                symbol=event.symbol, side=event.side.value,
+                reason="주문진행중",
+                price=float(event.price or 0), score=event.score,
+            )
             return None
 
         # 이미 포지션이 있는 종목 매수 차단
         if event.side == OrderSide.BUY and event.symbol in self.engine.portfolio.positions:
             logger.debug(f"[리스크] 기존 포지션 보유 차단: {event.symbol}")
+            trading_logger.log_signal_blocked(
+                symbol=event.symbol, side=event.side.value,
+                reason="기존포지션보유",
+                price=float(event.price or 0), score=event.score,
+            )
             return None
 
         # 매수 신호인 경우: 가용 현금 사전 체크 (로그 폭주 방지)
@@ -654,6 +671,11 @@ class RiskManager:
                         (now - self._last_cash_warn_time).total_seconds() > 60):
                     logger.warning(f"[리스크] 가용 현금 없음 - 매수 신호 무시 ({event.symbol})")
                     self._last_cash_warn_time = now
+                trading_logger.log_signal_blocked(
+                    symbol=event.symbol, side=event.side.value,
+                    reason="현금부족",
+                    price=float(event.price or 0), score=event.score,
+                )
                 return None
 
         # 주문 실패 쿨다운 체크
@@ -700,6 +722,11 @@ class RiskManager:
                 )
                 if not can_trade:
                     logger.warning(f"주문 거부 (리스크 검증): {order.symbol} - {reason}")
+                    trading_logger.log_signal_blocked(
+                        symbol=order.symbol, side=order.side.value,
+                        reason=f"리스크검증:{reason}",
+                        price=float(order.price or 0), score=event.score,
+                    )
                     return None
 
             can_trade, reason = self.engine.can_open_position(
@@ -709,6 +736,11 @@ class RiskManager:
             )
             if not can_trade:
                 logger.warning(f"주문 거부: {order.symbol} - {reason}")
+                trading_logger.log_signal_blocked(
+                    symbol=order.symbol, side=order.side.value,
+                    reason=f"엔진리스크:{reason}",
+                    price=float(order.price or 0), score=event.score,
+                )
                 return None
 
         logger.info(f"주문 생성: {order.side.value} {order.symbol} {order.quantity}주 @ {order.price}")
