@@ -330,6 +330,16 @@ class TradingBot(SchedulerMixin):
                 for name, strategy in self.strategy_manager.strategies.items():
                     self.strategy_evolver.register_strategy(name, strategy)
 
+                # 컴포넌트 등록 (ExitManager, RiskConfig)
+                if self.exit_manager:
+                    self.strategy_evolver.register_component(
+                        "exit_manager", self.exit_manager, "config"
+                    )
+                if self.config.trading.risk:
+                    self.strategy_evolver.register_component(
+                        "risk_config", self.config.trading.risk
+                    )
+
                 logger.info("자가 진화 엔진 초기화 완료")
 
             # 종목 스크리너 초기화
@@ -1023,7 +1033,14 @@ class TradingBot(SchedulerMixin):
             if self.strategy_evolver:
                 tasks.append(asyncio.create_task(self._run_evolution_scheduler(), name="evolution_scheduler"))
 
-            # 8. 대시보드 서버 실행
+            # 8. 코드 자동 진화 스케줄러 실행
+            code_evo_cfg = self.config.get("code_evolution") or {}
+            if code_evo_cfg.get("enabled", False):
+                tasks.append(asyncio.create_task(
+                    self._run_code_evolution_scheduler(), name="code_evolution"
+                ))
+
+            # 9. 대시보드 서버 실행
             dashboard_cfg = self.config.get("dashboard") or {}
             if dashboard_cfg.get("enabled", True):
                 self.dashboard = DashboardServer(

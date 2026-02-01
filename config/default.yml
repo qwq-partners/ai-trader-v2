@@ -190,6 +190,15 @@ evolution:
   send_telegram: false
 
 
+# 코드 자동 진화 (Claude Code CLI)
+code_evolution:
+  enabled: false                   # 기본 비활성화 (수동으로 활성화)
+  schedule_day: 5                  # 실행 요일 (0=월 ~ 6=일, 5=토)
+  schedule_hour: 10                # 실행 시각 (24시간)
+  max_changed_files: 10            # 최대 변경 파일 수
+  claude_timeout: 300              # Claude CLI 타임아웃 (초)
+
+
 # 스케줄러 설정
 scheduler:
   morning_report_time: "08:00"

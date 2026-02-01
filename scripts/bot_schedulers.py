@@ -698,6 +698,77 @@ class SchedulerMixin:
         except Exception as e:
             logger.error(f"포트폴리오 동기화 오류: {e}")
 
+    async def _run_code_evolution_scheduler(self):
+        """
+        코드 자동 진화 스케줄러
+
+        - 주 1회 토요일 지정 시간에 실행
+        - 또는 연속 롤백 3회 시 트리거
+        """
+        from src.core.evolution.code_evolver import get_code_evolver
+
+        code_evo_cfg = self.config.get("code_evolution") or {}
+        if not code_evo_cfg.get("enabled", False):
+            logger.info("[코드진화] 비활성화됨 (code_evolution.enabled=false)")
+            return
+
+        schedule_day = code_evo_cfg.get("schedule_day", 5)  # 0=월, 5=토
+        schedule_hour = code_evo_cfg.get("schedule_hour", 10)
+        last_run_date = None
+
+        code_evolver = get_code_evolver()
+
+        try:
+            while self.running:
+                now = datetime.now()
+                today = now.date()
+
+                # 토요일 지정 시간 (±15분)
+                scheduled_run = (
+                    now.weekday() == schedule_day
+                    and now.hour == schedule_hour
+                    and 0 <= now.minute < 15
+                    and last_run_date != today
+                )
+
+                # 연속 롤백 트리거
+                rollback_trigger = code_evolver.should_trigger_by_rollbacks
+
+                if scheduled_run or rollback_trigger:
+                    trigger = "scheduled" if scheduled_run else "rollback_threshold"
+                    logger.info(f"[코드진화] 스케줄러 트리거: {trigger}")
+
+                    try:
+                        result = await code_evolver.run_evolution(trigger_reason=trigger)
+
+                        if result["success"]:
+                            logger.info(f"[코드진화] 성공: {result['pr_url']}")
+                            # 텔레그램 알림
+                            try:
+                                await send_alert(
+                                    f"<b>[코드진화]</b> PR 생성\n"
+                                    f"사유: {trigger}\n"
+                                    f"변경: {result['changed_files']}개 파일\n"
+                                    f"PR: {result['pr_url']}"
+                                )
+                            except Exception:
+                                pass
+                        else:
+                            logger.warning(f"[코드진화] 실패: {result['message']}")
+
+                        last_run_date = today
+
+                    except Exception as e:
+                        logger.error(f"[코드진화] 실행 오류: {e}")
+                        last_run_date = today
+
+                await asyncio.sleep(60)
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"[코드진화] 스케줄러 오류: {e}")
+
     async def _run_portfolio_sync(self):
         """주기적 포트폴리오 동기화 루프"""
         await asyncio.sleep(30)  # 시작 후 30초 대기

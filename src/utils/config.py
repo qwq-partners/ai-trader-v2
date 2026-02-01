@@ -125,6 +125,71 @@ def load_dotenv(dotenv_path: Optional[str] = None):
         logger.debug(f".env 로드 실패: {e}")
 
 
+def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    """딕셔너리 deep merge (override가 base를 덮어씀)"""
+    result = dict(base)
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def _merge_evolved_overrides(raw: Dict[str, Any], config_path: Optional[str] = None) -> Dict[str, Any]:
+    """evolved_overrides.yml을 base config에 머지"""
+    if config_path:
+        override_path = Path(config_path).parent / "evolved_overrides.yml"
+    else:
+        project_root = Path(__file__).parent.parent.parent
+        override_path = project_root / "config" / "evolved_overrides.yml"
+
+    if not override_path.exists():
+        return raw
+
+    try:
+        with open(override_path, "r", encoding="utf-8") as f:
+            overrides = yaml.safe_load(f) or {}
+
+        if not overrides:
+            return raw
+
+        # 컴포넌트명 → config 섹션 매핑
+        section_map = {
+            "exit_manager": "exit_manager",
+            "risk_config": "risk",
+        }
+
+        merged = dict(raw)
+        for component, params in overrides.items():
+            if not isinstance(params, dict):
+                continue
+
+            # 매핑된 섹션명 사용, 없으면 strategies 하위로 처리
+            section = section_map.get(component)
+            if section:
+                if section not in merged:
+                    merged[section] = {}
+                merged[section] = _deep_merge(merged[section], params)
+            else:
+                # 전략 파라미터 → strategies.{component} 하위에 머지
+                if "strategies" not in merged:
+                    merged["strategies"] = {}
+                if component not in merged["strategies"]:
+                    merged["strategies"][component] = {}
+                merged["strategies"][component] = _deep_merge(
+                    merged["strategies"][component], params
+                )
+
+        count = sum(len(p) for p in overrides.values() if isinstance(p, dict))
+        logger.info(f"진화 오버라이드 머지: {override_path} ({count}개 파라미터)")
+        return merged
+
+    except Exception as e:
+        logger.warning(f"진화 오버라이드 머지 실패: {e}")
+        return raw
+
+
 @dataclass
 class AppConfig:
     """애플리케이션 전체 설정"""
@@ -133,12 +198,15 @@ class AppConfig:
 
     @classmethod
     def load(cls, config_path: Optional[str] = None, dotenv_path: Optional[str] = None) -> "AppConfig":
-        """설정 로드"""
+        """설정 로드 (default.yml → evolved_overrides.yml 머지)"""
         # .env 로드
         load_dotenv(dotenv_path)
 
         # YAML 로드
         raw = load_yaml_config(config_path)
+
+        # evolved_overrides.yml 머지 (진화 엔진이 최적화한 파라미터)
+        raw = _merge_evolved_overrides(raw, config_path)
 
         # TradingConfig 생성
         trading = create_trading_config(raw)

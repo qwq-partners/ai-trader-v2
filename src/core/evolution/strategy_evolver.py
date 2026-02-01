@@ -17,6 +17,7 @@ from .trade_reviewer import get_trade_reviewer, ReviewResult
 from .llm_strategist import (
     LLMStrategist, StrategyAdvice, ParameterAdjustment, get_llm_strategist
 )
+from .config_persistence import get_evolved_config_manager
 
 
 @dataclass
@@ -36,6 +37,13 @@ class ParameterChange:
     trades_after: int = 0
     win_rate_after: float = 0
     is_effective: Optional[bool] = None
+
+    # 복합 평가 지표
+    profit_factor_before: float = 0.0
+    profit_factor_after: float = 0.0
+    avg_daily_return_before: float = 0.0
+    avg_daily_return_after: float = 0.0
+    composite_score: float = 0.0
 
     def to_dict(self) -> Dict:
         return {
@@ -111,8 +119,13 @@ class StrategyEvolver:
         self.min_confidence_to_apply = 0.6   # 적용 최소 신뢰도
         self.auto_rollback_threshold = -5.0  # 승률 감소 시 롤백 임계값
 
+        # 컴포넌트 참조 (ExitManager, RiskConfig 등)
+        self._components: Dict[str, Any] = {}  # name -> component object
+        self._component_config_attrs: Dict[str, str] = {}  # name -> config attr name
+
         # 파라미터 변경 허용 범위 (bounds)
         self._param_bounds: Dict[str, Tuple[Any, Any]] = {
+            # 전략 파라미터
             "min_score": (30, 90),
             "stop_loss_pct": (0.5, 5.0),
             "take_profit_pct": (1.0, 10.0),
@@ -125,6 +138,17 @@ class StrategyEvolver:
             "min_theme_score": (30, 95),
             "max_rsi": (20, 50),
             "bb_threshold": (0.0, 0.5),
+            # RiskConfig 파라미터
+            "base_position_pct": (5.0, 30.0),
+            "max_position_pct": (15.0, 50.0),
+            "min_cash_reserve_pct": (5.0, 30.0),
+            "daily_max_loss_pct": (1.0, 5.0),
+            # ExitConfig 파라미터
+            "first_exit_pct": (1.5, 6.0),
+            "first_exit_ratio": (0.1, 0.5),
+            "second_exit_pct": (3.0, 10.0),
+            "second_exit_ratio": (0.3, 0.7),
+            "trailing_activate_pct": (1.5, 6.0),
         }
 
         logger.info(f"StrategyEvolver 초기화: {self.storage_dir}")
@@ -239,6 +263,43 @@ class StrategyEvolver:
 
         logger.info(f"전략 등록: {name}")
 
+    def register_component(
+        self,
+        name: str,
+        component: Any,
+        config_attr: str = "config",
+    ):
+        """
+        컴포넌트 등록 (ExitManager, RiskManager 등)
+
+        전략과 동일한 방식으로 파라미터 자동 조정 대상에 포함시킵니다.
+
+        Args:
+            name: 컴포넌트 이름 (e.g., "exit_manager", "risk_config")
+            component: 컴포넌트 객체 (config 속성을 가져야 함)
+            config_attr: config 속성명 (기본: "config")
+        """
+        self._components[name] = component
+        self._component_config_attrs[name] = config_attr
+
+        # config 객체에서 파라미터 추출
+        config_obj = getattr(component, config_attr, None)
+        if config_obj is None:
+            # component 자체가 config일 수 있음 (e.g., RiskConfig dataclass)
+            config_obj = component
+            self._component_config_attrs[name] = "__self__"
+
+        params = {
+            k: getattr(config_obj, k)
+            for k in dir(config_obj)
+            if not k.startswith('_') and not callable(getattr(config_obj, k))
+        }
+
+        # LLM 전략가에 현재 파라미터 전달
+        self.strategist.set_current_params(name, params)
+
+        logger.info(f"컴포넌트 등록: {name} ({len(params)}개 파라미터)")
+
     async def evolve(
         self,
         days: int = 7,
@@ -318,11 +379,22 @@ class StrategyEvolver:
         return advice
 
     def _find_param_key(self, param_name: str) -> Optional[str]:
-        """파라미터 키 찾기"""
+        """파라미터 키 찾기 (전략 + 컴포넌트)"""
         # 이미 "strategy.param" 형식이면 그대로 반환
         if "." in param_name:
+            prefix, attr = param_name.split(".", 1)
             if param_name in self._param_setters:
                 return param_name
+            # 전략에서 찾기
+            if prefix in self._strategies:
+                strategy = self._strategies[prefix]
+                if hasattr(strategy, 'config') and hasattr(strategy.config, attr):
+                    return param_name
+            # 컴포넌트에서 찾기
+            if prefix in self._components:
+                config_obj = self._get_component_config(prefix)
+                if config_obj and hasattr(config_obj, attr):
+                    return param_name
             return None
 
         # 등록된 모든 전략에서 찾기
@@ -336,7 +408,23 @@ class StrategyEvolver:
             if hasattr(strategy, 'config') and hasattr(strategy.config, param_name):
                 return full_key
 
+        # 등록된 모든 컴포넌트에서 찾기
+        for comp_name in self._components:
+            config_obj = self._get_component_config(comp_name)
+            if config_obj and hasattr(config_obj, param_name):
+                return f"{comp_name}.{param_name}"
+
         return None
+
+    def _get_component_config(self, comp_name: str) -> Any:
+        """컴포넌트의 config 객체 반환"""
+        component = self._components.get(comp_name)
+        if component is None:
+            return None
+        config_attr = self._component_config_attrs.get(comp_name, "config")
+        if config_attr == "__self__":
+            return component
+        return getattr(component, config_attr, None)
 
     def _apply_parameter_change(
         self,
@@ -368,17 +456,26 @@ class StrategyEvolver:
             # setter 함수가 있으면 사용
             if param_key in self._param_setters:
                 self._param_setters[param_key](new_value)
-            # config 직접 수정
+            # 전략 config 직접 수정
             elif strategy_name in self._strategies:
                 strategy = self._strategies[strategy_name]
                 if hasattr(strategy, 'config') and hasattr(strategy.config, param_name):
                     setattr(strategy.config, param_name, new_value)
                 else:
                     return False
+            # 컴포넌트 config 수정
+            elif strategy_name in self._components:
+                config_obj = self._get_component_config(strategy_name)
+                if config_obj and hasattr(config_obj, param_name):
+                    setattr(config_obj, param_name, new_value)
+                else:
+                    return False
             else:
                 return False
 
-            # 변경 기록
+            # 변경 기록 (복합 지표 포함)
+            profit_factor = getattr(current_review, 'profit_factor', 0.0)
+            avg_pnl_pct = getattr(current_review, 'avg_pnl_pct', 0.0)
             change = ParameterChange(
                 timestamp=datetime.now(),
                 strategy=strategy_name,
@@ -389,6 +486,8 @@ class StrategyEvolver:
                 source="llm",
                 trades_before=current_review.total_trades,
                 win_rate_before=current_review.win_rate,
+                profit_factor_before=profit_factor,
+                avg_daily_return_before=avg_pnl_pct,
             )
 
             self.state.active_changes.append(change)
@@ -399,18 +498,81 @@ class StrategyEvolver:
                 f"(사유: {reason})"
             )
 
+            # 영속화: evolved_overrides.yml에 저장
+            try:
+                config_mgr = get_evolved_config_manager()
+                config_mgr.save_override(strategy_name, param_name, new_value)
+            except Exception as pe:
+                logger.warning(f"[진화] 영속화 실패 (런타임 변경은 유지): {pe}")
+
             return True
 
         except Exception as e:
             logger.error(f"[진화] 파라미터 변경 실패: {param_key} - {e}")
             return False
 
+    def _calculate_composite_score(
+        self,
+        change: 'ParameterChange',
+        strategy_trades: List,
+    ) -> float:
+        """
+        복합 평가 점수 계산
+
+        가중치:
+        - 승률 변화: 30%
+        - 손익비 변화: 30%
+        - 일평균 수익률: 25%
+        - 연속 손실 감소: 15%
+
+        Returns:
+            복합 점수 (-100 ~ +100)
+        """
+        # 승률 변화 (30%)
+        win_rate_diff = change.win_rate_after - change.win_rate_before
+        win_rate_score = min(max(win_rate_diff * 5, -100), 100)  # ±20%p → ±100
+
+        # 손익비 변화 (30%)
+        pf_diff = change.profit_factor_after - change.profit_factor_before
+        pf_score = min(max(pf_diff * 50, -100), 100)  # ±2.0 → ±100
+
+        # 일평균 수익률 변화 (25%)
+        daily_diff = change.avg_daily_return_after - change.avg_daily_return_before
+        daily_score = min(max(daily_diff * 100, -100), 100)  # ±1%p → ±100
+
+        # 연속 손실 (15%) — 현재 거래에서 연속 손실 추정
+        max_consecutive_losses = 0
+        current_streak = 0
+        for trade in strategy_trades:
+            if not trade.is_win:
+                current_streak += 1
+                max_consecutive_losses = max(max_consecutive_losses, current_streak)
+            else:
+                current_streak = 0
+
+        # 연속 손실 3회 이하면 +, 5회 이상이면 -
+        loss_score = max(-100, min(100, (3 - max_consecutive_losses) * 33))
+
+        composite = (
+            win_rate_score * 0.30 +
+            pf_score * 0.30 +
+            daily_score * 0.25 +
+            loss_score * 0.15
+        )
+
+        return round(composite, 1)
+
     async def evaluate_changes(self) -> List[Dict]:
         """
-        변경 효과 평가
+        변경 효과 평가 (복합 점수 기반)
 
         적용된 변경 사항들의 효과를 평가하고,
         비효율적인 변경은 롤백합니다.
+
+        복합 점수 기준:
+        - > +10: 효과적 (유지)
+        - <= -20: 자동 롤백
+        - 그 사이: 비효율적 (제거, 유지하지 않음)
         """
         results = []
 
@@ -434,18 +596,31 @@ class StrategyEvolver:
             wins = len([t for t in strategy_trades if t.is_win])
             current_win_rate = wins / len(strategy_trades) * 100 if strategy_trades else 0
 
+            # 손익비 계산
+            total_profit = sum(t.pnl for t in strategy_trades if t.is_win)
+            total_loss = abs(sum(t.pnl for t in strategy_trades if not t.is_win))
+            current_pf = total_profit / total_loss if total_loss > 0 else 2.0
+
+            # 일평균 수익률 계산
+            total_pnl_pct = sum(getattr(t, 'pnl_pct', 0) for t in strategy_trades)
+            current_daily_return = total_pnl_pct / max(days_since, 1)
+
+            # 성과 기록
             change.trades_after = len(strategy_trades)
             change.win_rate_after = current_win_rate
+            change.profit_factor_after = current_pf
+            change.avg_daily_return_after = current_daily_return
 
-            # 효과 판단
-            win_rate_diff = current_win_rate - change.win_rate_before
+            # 복합 점수 계산
+            composite = self._calculate_composite_score(change, strategy_trades)
+            change.composite_score = composite
 
-            if win_rate_diff > 1.0:
+            # 복합 점수 기반 판정
+            if composite > 10:
                 change.is_effective = True
                 self.state.successful_changes += 1
                 result_str = "효과적"
-            elif win_rate_diff <= self.auto_rollback_threshold:
-                # 롤백 실행
+            elif composite <= -20:
                 change.is_effective = False
                 await self._rollback_change(change)
                 result_str = "롤백됨"
@@ -460,14 +635,18 @@ class StrategyEvolver:
                 "new_value": change.new_value,
                 "win_rate_before": change.win_rate_before,
                 "win_rate_after": current_win_rate,
-                "win_rate_diff": win_rate_diff,
+                "profit_factor_before": change.profit_factor_before,
+                "profit_factor_after": current_pf,
+                "avg_daily_return_after": current_daily_return,
+                "composite_score": composite,
                 "result": result_str,
             }
             results.append(result)
 
             logger.info(
                 f"[진화] 변경 평가: {change.parameter} -> {result_str} "
-                f"(승률 {change.win_rate_before:.1f}% -> {current_win_rate:.1f}%)"
+                f"(복합={composite:+.1f}, 승률 {change.win_rate_before:.1f}→{current_win_rate:.1f}%, "
+                f"PF {change.profit_factor_before:.2f}→{current_pf:.2f})"
             )
 
             # 평가 완료된 항목 제거
@@ -492,12 +671,24 @@ class StrategyEvolver:
                 if hasattr(strategy, 'config') and hasattr(strategy.config, change.parameter):
                     setattr(strategy.config, change.parameter, change.old_value)
                     rolled_back = True
+            elif change.strategy in self._components:
+                config_obj = self._get_component_config(change.strategy)
+                if config_obj and hasattr(config_obj, change.parameter):
+                    setattr(config_obj, change.parameter, change.old_value)
+                    rolled_back = True
 
             if not rolled_back:
                 logger.warning(f"[진화] 롤백 대상 없음: {param_key} (setter/config 미등록)")
                 return
 
             self.state.rolled_back_changes += 1
+
+            # 영속화에서 제거
+            try:
+                config_mgr = get_evolved_config_manager()
+                config_mgr.remove_override(change.strategy, change.parameter)
+            except Exception as pe:
+                logger.warning(f"[진화] 영속화 롤백 실패: {pe}")
 
             # 롤백 기록
             rollback_record = ParameterChange(
