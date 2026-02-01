@@ -317,8 +317,9 @@ class RiskManager:
         """체결 이벤트 처리"""
         events = []
 
-        # 일일 통계 업데이트
-        self.daily_stats.trades += 1
+        # 일일 통계 업데이트 (매수 체결만 카운트 — 분할 익절이 한도를 소모하지 않도록)
+        if fill_event.side == OrderSide.BUY:
+            self.daily_stats.trades += 1
 
         # 일일 손실 체크 (현재 자산 기준)
         equity = portfolio.total_equity

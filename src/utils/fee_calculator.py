@@ -3,15 +3,15 @@ AI Trading Bot v2 - 수수료 계산기
 
 실제 손익 계산 시 수수료(위탁수수료 + 제세금)를 포함합니다.
 
-한국투자증권 기준:
-- 매수 수수료: 0.015%
-- 매도 수수료: 0.015%
-- 매도 세금: 0.18% (2024년 기준, 코스피/코스닥)
-  - 증권거래세: 0.18% (2024년 이후)
-  - 농어촌특별세: 폐지됨
+한국투자증권 BanKIS 온라인 기준 (2026년 1월~):
+- 매수 수수료: 0.0140527% (유관기관 제비용 포함)
+- 매도 수수료: 0.0130527% (유관기관 제비용 포함)
+- 증권거래세: 0.20% (2026.1.1~ 코스피/코스닥 통일)
+  - 코스피: 증권거래세 0.05% + 농어촌특별세 0.15%
+  - 코스닥: 증권거래세 0.20%
 
-총 매도 비용: 약 0.195%
-왕복 거래 비용: 약 0.21%
+총 매도 비용: 약 0.213%
+왕복 거래 비용: 약 0.227%
 """
 
 from decimal import Decimal
@@ -22,9 +22,9 @@ from dataclasses import dataclass
 @dataclass
 class FeeConfig:
     """수수료 설정"""
-    buy_commission_rate: Decimal = Decimal("0.00015")   # 매수 수수료 0.015%
-    sell_commission_rate: Decimal = Decimal("0.00015")  # 매도 수수료 0.015%
-    sell_tax_rate: Decimal = Decimal("0.0018")          # 증권거래세 0.18% (2024년)
+    buy_commission_rate: Decimal = Decimal("0.000140527")   # 매수 수수료 0.0140527% (한투 BanKIS)
+    sell_commission_rate: Decimal = Decimal("0.000130527")  # 매도 수수료 0.0130527% (한투 BanKIS)
+    sell_tax_rate: Decimal = Decimal("0.002")               # 증권거래세 0.20% (2026.1.1~)
 
     @property
     def total_sell_rate(self) -> Decimal:
