@@ -9,7 +9,7 @@ import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, date, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Callable
+from typing import Dict, List, Optional, Any, Callable, Tuple
 from loguru import logger
 
 from .trade_journal import get_trade_journal
@@ -110,6 +110,22 @@ class StrategyEvolver:
         self.evaluation_period_days = 7      # 변경 효과 평가 기간
         self.min_confidence_to_apply = 0.6   # 적용 최소 신뢰도
         self.auto_rollback_threshold = -5.0  # 승률 감소 시 롤백 임계값
+
+        # 파라미터 변경 허용 범위 (bounds)
+        self._param_bounds: Dict[str, Tuple[Any, Any]] = {
+            "min_score": (30, 90),
+            "stop_loss_pct": (0.5, 5.0),
+            "take_profit_pct": (1.0, 10.0),
+            "trailing_stop_pct": (0.5, 5.0),
+            "volume_surge_ratio": (1.0, 5.0),
+            "min_change_pct": (0.5, 5.0),
+            "max_change_pct": (5.0, 30.0),
+            "min_gap_pct": (1.0, 5.0),
+            "pullback_pct": (0.3, 3.0),
+            "min_theme_score": (30, 95),
+            "max_rsi": (20, 50),
+            "bb_threshold": (0.0, 0.5),
+        }
 
         logger.info(f"StrategyEvolver 초기화: {self.storage_dir}")
 
@@ -333,6 +349,21 @@ class StrategyEvolver:
         """파라미터 변경 적용"""
         try:
             strategy_name, param_name = param_key.split(".", 1)
+
+            # bounds 검증 (극단값 방지)
+            if param_name in self._param_bounds:
+                min_val, max_val = self._param_bounds[param_name]
+                try:
+                    clamped = type(old_value)(max(min_val, min(max_val, float(new_value))))
+                    if clamped != new_value:
+                        logger.warning(
+                            f"[진화] 파라미터 범위 보정: {param_key} "
+                            f"{new_value} → {clamped} (범위: {min_val}~{max_val})"
+                        )
+                        new_value = clamped
+                except (ValueError, TypeError):
+                    logger.error(f"[진화] 파라미터 타입 오류: {param_key} = {new_value}")
+                    return False
 
             # setter 함수가 있으면 사용
             if param_key in self._param_setters:

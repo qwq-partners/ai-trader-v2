@@ -184,8 +184,8 @@ class ThemeChasingStrategy(BaseStrategy):
             if theme_name in self._active_themes:
                 theme = self._active_themes[theme_name]
 
-                # 테마 신선도 체크
-                age_minutes = (datetime.now() - theme.detected_at).total_seconds() / 60
+                # 테마 신선도 체크 (last_updated 기준: on_theme()에서 갱신됨)
+                age_minutes = (datetime.now() - theme.last_updated).total_seconds() / 60
                 if age_minutes > self.theme_config.max_theme_age_minutes:
                     continue
 

@@ -92,6 +92,7 @@ class TradingBot(SchedulerMixin):
         # 종목별 전략 매핑 (ExitManager 등록 시 사용)
         self._symbol_strategy: Dict[str, str] = {}
         self._exit_pending_symbols: Set[str] = set()  # ExitManager 매도 중복 방지
+        self._pause_resume_at: Optional[datetime] = None  # 자동 재개 타이머
         self._watch_symbols_lock = asyncio.Lock()
         self._portfolio_lock = asyncio.Lock()
 
@@ -607,6 +608,12 @@ class TradingBot(SchedulerMixin):
         if not self.exit_manager or not self.broker:
             return
 
+        # 자동 재개 체크 (청산 실패 후 일시정지 → 타이머 만료 시 재개)
+        if self._pause_resume_at and datetime.now() >= self._pause_resume_at:
+            self._pause_resume_at = None
+            self.engine.resume()
+            logger.info("[엔진] 자동 재개: 일시정지 타이머 만료")
+
         try:
             # 이미 ExitManager 매도 주문이 진행 중이면 중복 방지
             if symbol in self._exit_pending_symbols:
@@ -657,17 +664,18 @@ class TradingBot(SchedulerMixin):
                     # 주문 실패 시 pending 해제 (다음 시세에서 재시도 가능)
                     self._exit_pending_symbols.discard(symbol)
                     logger.error(f"[청산 주문 실패] {symbol} - {result} (3회 시도 후)")
-                    # 청산 실패는 리스크 급증 → 신규 매수 차단
+                    # 청산 실패는 리스크 급증 → 신규 매수 차단 (5분 후 자동 재개)
                     self.engine.pause()
+                    self._pause_resume_at = datetime.now() + timedelta(minutes=5)
                     logger.critical(
                         f"[엔진 일시정지] 청산 실패로 신규 매수 차단: {symbol} "
-                        f"(수동 확인 후 재개 필요)"
+                        f"(5분 후 자동 재개 또는 수동 재개)"
                     )
                     await self._send_error_alert(
                         "CRITICAL",
-                        f"청산 주문 실패 → 엔진 일시정지: {symbol} {quantity}주",
+                        f"청산 주문 실패 → 엔진 일시정지(5분): {symbol} {quantity}주",
                         f"사유: {result}\n이유: {reason}\n"
-                        f"수동 확인 후 대시보드 또는 API로 재개 필요"
+                        f"5분 후 자동 재개 (수동 재개도 가능)"
                     )
 
         except Exception as e:

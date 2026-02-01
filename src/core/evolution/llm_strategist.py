@@ -367,6 +367,13 @@ class LLMStrategist:
             raw_response=response,
         )
 
+    def _get_current_param(self, param_name: str, default: Any = None) -> Any:
+        """현재 전략 파라미터에서 값 조회 (모든 전략에서 검색)"""
+        for strategy_params in self._current_params.values():
+            if param_name in strategy_params:
+                return strategy_params[param_name]
+        return default
+
     def _create_fallback_advice(self, review: ReviewResult, days: int) -> StrategyAdvice:
         """LLM 실패 시 기본 분석 결과 (일 1% 목표 기준)"""
         # 일평균 수익률 추정 (공휴일 포함)
@@ -389,13 +396,14 @@ class LLMStrategist:
             f"{'달성' if daily_avg_pct >= 1.0 else f'부족분: {1.0 - daily_avg_pct:.2f}%p'})"
         )
 
-        # 승률 기반 인사이트
+        # 승률 기반 인사이트 (실제 파라미터 참조)
         if review.win_rate < 40:
             insights.append(f"승률 {review.win_rate:.1f}%로 낮음 - 일 1% 달성을 위해 진입 조건 강화 필요")
+            cur_min_score = self._get_current_param("min_score", 60)
             param_adjustments.append(ParameterAdjustment(
                 parameter="min_score",
-                current_value=60,
-                suggested_value=70,
+                current_value=cur_min_score,
+                suggested_value=min(cur_min_score + 10, 90),
                 reason="낮은 승률 개선을 위해 진입 기준 상향 (일 1% 달성 필수)",
                 confidence=0.7,
                 expected_impact="신호 수 감소, 승률 향상 → 일 수익률 개선 기대",
@@ -406,10 +414,11 @@ class LLMStrategist:
         # 손익비 기반 인사이트
         if review.profit_factor < 1.0:
             insights.append(f"손익비 {review.profit_factor:.2f}로 손실 초과 - 손절 관리 시급")
+            cur_sl = self._get_current_param("stop_loss_pct", 2.0)
             param_adjustments.append(ParameterAdjustment(
                 parameter="stop_loss_pct",
-                current_value=2.0,
-                suggested_value=1.5,
+                current_value=cur_sl,
+                suggested_value=max(cur_sl - 0.5, 0.5),
                 reason="손실 제한으로 손익비 개선 (일 1% 달성 전제조건)",
                 confidence=0.6,
                 expected_impact="개별 손실 감소 → 손익비 1.0 이상으로 개선",

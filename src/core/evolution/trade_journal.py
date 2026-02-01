@@ -79,10 +79,13 @@ class TradeRecord:
     @classmethod
     def from_dict(cls, data: Dict) -> "TradeRecord":
         """딕셔너리에서 생성"""
-        # datetime 파싱
+        # datetime 파싱 (개별 필드 실패 시 None 처리)
         for key in ["entry_time", "exit_time", "created_at", "updated_at"]:
             if data.get(key) and isinstance(data[key], str):
-                data[key] = datetime.fromisoformat(data[key])
+                try:
+                    data[key] = datetime.fromisoformat(data[key])
+                except (ValueError, TypeError):
+                    data[key] = None
         return cls(**data)
 
 
@@ -128,12 +131,17 @@ class TradeJournal:
                         data = json.load(f)
 
                     for trade_dict in data.get("trades", []):
-                        trade = TradeRecord.from_dict(trade_dict)
-                        self._trades[trade.id] = trade
+                        try:
+                            trade = TradeRecord.from_dict(trade_dict)
+                            self._trades[trade.id] = trade
 
-                        if trade_date == today:
-                            self._today_trades.append(trade.id)
+                            if trade_date == today:
+                                self._today_trades.append(trade.id)
+                        except Exception as te:
+                            logger.warning(f"거래 레코드 파싱 실패 (건너뜀): {te}")
 
+                except json.JSONDecodeError as e:
+                    logger.error(f"거래 파일 손상 ({file_path}): {e}")
                 except Exception as e:
                     logger.warning(f"거래 로드 실패 ({file_path}): {e}")
 
