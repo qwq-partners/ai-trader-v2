@@ -553,6 +553,10 @@ class SchedulerMixin:
                             event = FillEvent.from_fill(fill, source="kis_broker")
                             await self.engine.emit(event)
 
+                    # 성공 시 에러 카운터 리셋
+                    if hasattr(self, '_fill_check_errors') and self._fill_check_errors > 0:
+                        self._fill_check_errors = 0
+
                 except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                     logger.warning(f"체결 확인 네트워크 오류: {e}")
                     if not hasattr(self, '_fill_check_errors'):

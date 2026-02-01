@@ -279,18 +279,18 @@ class ExitManager:
 
         state = self._states[symbol]
 
-        # 실현 손익 계산
-        pnl, _ = self.fee_calc.calculate_net_pnl(
-            state.entry_price, fill_price, sold_quantity
-        )
-        state.total_realized_pnl += pnl
-
-        # 남은 수량 업데이트 (과다 체결 방어)
+        # 남은 수량 업데이트 (과다 체결 방어) — PnL 계산 전에 보정
         if sold_quantity > state.remaining_quantity:
             logger.warning(
                 f"[ExitManager] {symbol} 매도수량({sold_quantity}) > 보유수량({state.remaining_quantity}), 보정"
             )
             sold_quantity = state.remaining_quantity
+
+        # 실현 손익 계산 (보정된 수량 기준)
+        pnl, _ = self.fee_calc.calculate_net_pnl(
+            state.entry_price, fill_price, sold_quantity
+        )
+        state.total_realized_pnl += pnl
         state.remaining_quantity -= sold_quantity
 
         logger.info(

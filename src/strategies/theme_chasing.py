@@ -258,11 +258,15 @@ class ThemeChasingStrategy(BaseStrategy):
         score = self._calculate_entry_score(hot_theme_score, change_pct, vol_ratio)
         score = max(0.0, min(score + news_bonus + supply_bonus, 100.0))
 
+        # min_score 미달 시 진입 횟수 차감 없이 조기 반환
+        if score < self.config.min_score:
+            return None
+
         # 목표가 & 손절가
         target_price = Decimal(str(price * (1 + self.theme_config.take_profit_pct / 100)))
         stop_price = Decimal(str(price * (1 - self.theme_config.stop_loss_pct / 100)))
 
-        # 진입 횟수 증가
+        # 진입 횟수 증가 (min_score 통과 후에만)
         self._theme_entries[hot_theme.name] = self._theme_entries.get(hot_theme.name, 0) + 1
 
         # 포지션-테마 매핑 저장 (청산 시 테마 쿨다운 체크용)

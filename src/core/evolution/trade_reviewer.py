@@ -131,12 +131,13 @@ class TradeReviewer:
         losses = [t for t in trades if not t.is_win]
 
         total_profit = sum(t.pnl for t in wins) if wins else 0
-        total_loss = abs(sum(t.pnl for t in losses)) if losses else 1
+        total_loss = abs(sum(t.pnl for t in losses)) if losses else 0
 
         win_rate = len(wins) / len(trades) * 100 if trades else 0
         avg_pnl_pct = sum(t.pnl_pct for t in trades) / len(trades) if trades else 0
         total_pnl = sum(t.pnl for t in trades)
-        profit_factor = total_profit / total_loss if total_loss > 0 else 0
+        # 손실 0원 시 profit_factor 상한 99.9 (LLM 왜곡 방지)
+        profit_factor = min(total_profit / total_loss, 99.9) if total_loss > 0 else (99.9 if total_profit > 0 else 0)
 
         # 최대 낙폭 계산
         max_drawdown = self._calculate_max_drawdown(trades)
@@ -549,8 +550,10 @@ class TradeReviewer:
         """LLM 분석용 요약 텍스트 생성"""
         # 일평균 지표 계산 (공휴일 포함 실제 영업일)
         total_pnl = sum(t.pnl for t in trades)
-        if len(trades) >= 2:
-            sorted_trades = sorted(trades, key=lambda t: t.entry_time or datetime.min)
+        # entry_time이 None인 레코드 제외 (손상 데이터 방어)
+        valid_trades = [t for t in trades if t.entry_time]
+        if len(valid_trades) >= 2:
+            sorted_trades = sorted(valid_trades, key=lambda t: t.entry_time)
             start_d = sorted_trades[0].entry_time.date()
             end_d = sorted_trades[-1].exit_time.date() if sorted_trades[-1].exit_time else date.today()
         else:

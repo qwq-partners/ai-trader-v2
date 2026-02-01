@@ -538,6 +538,10 @@ class KISWebSocketFeed:
                     if not success:
                         await asyncio.sleep(self.config.reconnect_delay)
                         continue
+                    # 재연결 성공 시 카운터 리셋
+                    if self._reconnect_count > 0:
+                        logger.info(f"WebSocket 재연결 성공 (시도 {self._reconnect_count}회 후)")
+                        self._reconnect_count = 0
 
                 async for msg in self._ws:
                     if msg.type == aiohttp.WSMsgType.TEXT:
@@ -585,10 +589,6 @@ class KISWebSocketFeed:
                     logger.info(f"재연결 시도 ({self._reconnect_count})... (대기: {delay:.0f}초)")
 
                 await asyncio.sleep(delay)
-
-                # 30회 성공적 재연결 후 카운터 리셋
-                if self._reconnect_count > 30 and self._connected:
-                    self._reconnect_count = 0
 
         await self.disconnect()
 
@@ -665,6 +665,10 @@ class KISWebSocketFeed:
             symbol = fields[0].zfill(6)
             time_str = fields[1]          # HHMMSS
             price = int(fields[2])        # 현재가
+
+            # 0원/음수 체결가 필터 (데이터 이상)
+            if price <= 0:
+                return
             change_sign = fields[3]       # 전일대비부호
             change = int(fields[4])       # 전일대비
             change_pct = float(fields[5]) # 전일대비율

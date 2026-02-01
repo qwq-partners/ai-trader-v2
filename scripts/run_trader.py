@@ -92,6 +92,7 @@ class TradingBot(SchedulerMixin):
         # 종목별 전략 매핑 (ExitManager 등록 시 사용)
         self._symbol_strategy: Dict[str, str] = {}
         self._exit_pending_symbols: Set[str] = set()  # ExitManager 매도 중복 방지
+        self._exit_pending_timestamps: Dict[str, datetime] = {}  # 매도 pending 타임스탬프
         self._pause_resume_at: Optional[datetime] = None  # 자동 재개 타이머
         self._watch_symbols_lock = asyncio.Lock()
         self._portfolio_lock = asyncio.Lock()
@@ -615,6 +616,15 @@ class TradingBot(SchedulerMixin):
             logger.info("[엔진] 자동 재개: 일시정지 타이머 만료")
 
         try:
+            # stale pending 클린업 (3분 이상 체결 미확인 시 해제)
+            if self._exit_pending_timestamps:
+                stale_cutoff = datetime.now() - timedelta(minutes=3)
+                stale = [s for s, t in self._exit_pending_timestamps.items() if t < stale_cutoff]
+                for s in stale:
+                    self._exit_pending_symbols.discard(s)
+                    self._exit_pending_timestamps.pop(s, None)
+                    logger.warning(f"[청산 pending] {s} 타임아웃 해제 (3분 초과)")
+
             # 이미 ExitManager 매도 주문이 진행 중이면 중복 방지
             if symbol in self._exit_pending_symbols:
                 return
@@ -638,6 +648,7 @@ class TradingBot(SchedulerMixin):
 
                 # ExitManager 전용 pending 선등록 (중복 매도 방지, submit await 중 race condition 차단)
                 self._exit_pending_symbols.add(symbol)
+                self._exit_pending_timestamps[symbol] = datetime.now()
 
                 # 브로커에 주문 제출 (실패 시 최대 2회 재시도)
                 success = False
@@ -663,6 +674,7 @@ class TradingBot(SchedulerMixin):
                 else:
                     # 주문 실패 시 pending 해제 (다음 시세에서 재시도 가능)
                     self._exit_pending_symbols.discard(symbol)
+                    self._exit_pending_timestamps.pop(symbol, None)
                     logger.error(f"[청산 주문 실패] {symbol} - {result} (3회 시도 후)")
                     # 청산 실패는 리스크 급증 → 신규 매수 차단 (5분 후 자동 재개)
                     self.engine.pause()
@@ -860,6 +872,7 @@ class TradingBot(SchedulerMixin):
             # ExitManager 매도 pending 해제 (체결 확인)
             if fill.side.value.upper() == "SELL":
                 self._exit_pending_symbols.discard(fill.symbol)
+                self._exit_pending_timestamps.pop(fill.symbol, None)
 
             # 분할 익절 관리자 업데이트
             if self.exit_manager:
@@ -1021,7 +1034,18 @@ class TradingBot(SchedulerMixin):
                 tasks.append(asyncio.create_task(self.dashboard.run(), name="dashboard"))
 
             # 모든 태스크 실행
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # 핵심 태스크 예외 검사 (좀비 상태 방지)
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    task_name = tasks[i].get_name() if hasattr(tasks[i], 'get_name') else f"task-{i}"
+                    logger.error(f"[태스크 종료] {task_name} 예외 발생: {result}")
+                    await self._send_error_alert(
+                        "CRITICAL",
+                        f"핵심 태스크 비정상 종료: {task_name}",
+                        str(result)
+                    )
 
         except Exception as e:
             logger.exception(f"실행 오류: {e}")

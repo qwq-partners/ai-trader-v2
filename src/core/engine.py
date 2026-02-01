@@ -731,6 +731,7 @@ class RiskManager:
         if remaining <= 0:
             self._pending_orders.discard(event.symbol)
             self._pending_quantities.pop(event.symbol, None)
+            self._pending_timestamps.pop(event.symbol, None)
         else:
             self._pending_quantities[event.symbol] = remaining
             logger.info(f"[리스크] 부분 체결: {event.symbol} 잔여 {remaining}주")
