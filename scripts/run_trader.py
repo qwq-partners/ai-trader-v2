@@ -1143,6 +1143,10 @@ class TradingBot(SchedulerMixin):
 
             # 2. WebSocket 피드 실행 (실시간 모드)
             if self.ws_feed:
+                # 보유 종목을 우선순위로 설정 (항상 구독)
+                if self.engine.portfolio.positions:
+                    self.ws_feed.set_priority_symbols(list(self.engine.portfolio.positions.keys()))
+                    logger.info(f"[WS] 보유 종목 {len(self.engine.portfolio.positions)}개 우선 구독 설정")
                 tasks.append(asyncio.create_task(self._run_ws_feed(), name="ws_feed"))
 
             # 3. 테마 탐지 루프 실행
