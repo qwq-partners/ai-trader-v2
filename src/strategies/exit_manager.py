@@ -3,10 +3,16 @@ AI Trading Bot v2 - 분할 익절/청산 관리자
 
 포지션별로 분할 익절을 관리합니다.
 
-분할 익절 전략:
-1. +3% 도달 → 30% 익절
-2. +5% 도달 → 잔여의 50% (전체 35%) 추가 익절
-3. 나머지 35% → 트레일링 스탑으로 수익 극대화
+분할 익절 전략 (3단계):
+1. +2% 도달 → 25% 익절 (빠른 수익 확보)
+2. +4% 도달 → 35% 추가 익절 (안정적 수익)
+3. +6% 도달 → 20% 추가 익절 (큰 수익 추구)
+4. 나머지 20% → 트레일링 스탑으로 수익 극대화
+
+ATR 기반 동적 손절:
+- 변동성 낮음(ATR 1%) → 2.5% 손절
+- 변동성 보통(ATR 2%) → 4.0% 손절
+- 변동성 높음(ATR 3%+) → 5.0% 손절 (상한)
 
 수수료 포함 계산으로 실제 순수익 기준 청산
 """
@@ -20,14 +26,16 @@ from loguru import logger
 
 from ..core.types import Position, OrderSide, Signal, SignalStrength
 from ..utils.fee_calculator import FeeCalculator, get_fee_calculator
+from ..indicators.atr import calculate_atr, calculate_dynamic_stop_loss
 
 
 class ExitStage(Enum):
     """익절 단계"""
     NONE = "none"               # 익절 전
-    FIRST = "first"             # 1차 익절 (30%)
+    FIRST = "first"             # 1차 익절 (25%)
     SECOND = "second"           # 2차 익절 (35%)
-    TRAILING = "trailing"       # 트레일링 (나머지 35%)
+    THIRD = "third"             # 3차 익절 (20%)
+    TRAILING = "trailing"       # 트레일링 (나머지 20%)
 
 
 @dataclass
@@ -36,20 +44,28 @@ class ExitConfig:
     # 분할 익절 설정
     enable_partial_exit: bool = True
 
-    # 1차 익절 (30%) — 수익 종목을 더 오래 보유하여 R:R 개선
-    first_exit_pct: float = 3.0       # 목표 수익률 (%)
-    first_exit_ratio: float = 0.3     # 청산 비율 (30%)
+    # 1차 익절 (25%) — 빠른 수익 확보
+    first_exit_pct: float = 2.0       # 목표 수익률 (%)
+    first_exit_ratio: float = 0.25    # 청산 비율 (25%)
 
-    # 2차 익절 (잔여의 50% = 전체의 35%)
-    second_exit_pct: float = 5.0      # 목표 수익률 (%)
-    second_exit_ratio: float = 0.5    # 남은 물량의 50% = 전체의 35%
+    # 2차 익절 (35% 추가 = 전체 60%)
+    second_exit_pct: float = 4.0      # 목표 수익률 (%)
+    second_exit_ratio: float = 0.47   # 남은 75%의 47% = 전체의 35%
 
-    # 손절 — 노이즈 손절 감소를 위해 확대
-    stop_loss_pct: float = 2.5        # 최대 손실률 (%)
+    # 3차 익절 (20% 추가 = 전체 80%)
+    third_exit_pct: float = 6.0       # 목표 수익률 (%)
+    third_exit_ratio: float = 0.5     # 남은 40%의 50% = 전체의 20%
 
-    # 트레일링 스탑 — 1차 익절과 동일 시점에 활성화 (조기 청산 방지)
+    # 손절 — ATR 기반 동적 손절
+    stop_loss_pct: float = 2.5        # 기본 손실률 (%), ATR 없을 때 사용
+    enable_dynamic_stop: bool = True  # ATR 기반 동적 손절 활성화
+    atr_multiplier: float = 2.0       # ATR 배수
+    min_stop_pct: float = 2.5         # 최소 손절폭 (%)
+    max_stop_pct: float = 5.0         # 최대 손절폭 (%)
+
+    # 트레일링 스탑 — 1차 익절과 동일 시점에 활성화
     trailing_stop_pct: float = 1.5    # 고점 대비 하락률 (%)
-    trailing_activate_pct: float = 3.0  # 트레일링 활성화 수익률 (1차 익절과 동일)
+    trailing_activate_pct: float = 2.0  # 트레일링 활성화 수익률 (1차 익절과 동일)
 
     # 수수료 포함 계산
     include_fees: bool = True
@@ -69,6 +85,9 @@ class PositionExitState:
     # 전략별 청산 파라미터 (None이면 글로벌 ExitConfig 사용)
     stop_loss_pct: Optional[float] = None
     trailing_stop_pct: Optional[float] = None
+    # ATR 기반 동적 손절
+    atr_pct: Optional[float] = None
+    dynamic_stop_pct: Optional[float] = None
 
 
 class ExitManager:
@@ -90,6 +109,7 @@ class ExitManager:
         position: Position,
         stop_loss_pct: Optional[float] = None,
         trailing_stop_pct: Optional[float] = None,
+        price_history: Optional[Dict[str, List[Decimal]]] = None,
     ):
         """
         포지션 등록
@@ -98,6 +118,8 @@ class ExitManager:
             position: 포지션 객체
             stop_loss_pct: 전략별 손절 비율 (None이면 글로벌 config 사용)
             trailing_stop_pct: 전략별 트레일링 비율 (None이면 글로벌 config 사용)
+            price_history: 가격 히스토리 {"high": [...], "low": [...], "close": [...]}
+                           ATR 계산용, None이면 고정 손절 사용
         """
         if position.symbol in self._states:
             # 추가매수: 수량/평단가 변경 반영
@@ -118,16 +140,47 @@ class ExitManager:
                 )
             return
 
+        # ATR 계산 및 동적 손절 설정
+        atr_pct = None
+        dynamic_stop = None
+        if self.config.enable_dynamic_stop and price_history:
+            try:
+                highs = price_history.get("high", [])
+                lows = price_history.get("low", [])
+                closes = price_history.get("close", [])
+
+                if highs and lows and closes:
+                    atr_pct = calculate_atr(highs, lows, closes, period=14)
+                    if atr_pct:
+                        dynamic_stop = calculate_dynamic_stop_loss(
+                            atr_pct,
+                            min_stop=self.config.min_stop_pct,
+                            max_stop=self.config.max_stop_pct,
+                            multiplier=self.config.atr_multiplier
+                        )
+                        logger.info(
+                            f"[ExitManager] {position.symbol} ATR 기반 손절: "
+                            f"ATR={atr_pct:.2f}% → 손절={dynamic_stop:.2f}%"
+                        )
+            except Exception as e:
+                logger.warning(f"[ExitManager] {position.symbol} ATR 계산 실패: {e}")
+
         # 현재 수익률 기반으로 초기 단계 결정 (재시작/재등록 시)
         initial_stage = ExitStage.NONE
         current_price = position.current_price or position.avg_price
         if position.avg_price and position.avg_price > 0 and current_price > position.avg_price:
             pnl_pct = float((current_price - position.avg_price) / position.avg_price * 100)
-            if pnl_pct >= self.config.second_exit_pct:
+            if pnl_pct >= self.config.third_exit_pct:
                 initial_stage = ExitStage.TRAILING
                 logger.info(
                     f"[ExitManager] {position.symbol} 수익률 +{pnl_pct:.1f}% → "
                     f"트레일링 단계로 등록 (고점={current_price:,.0f}원)"
+                )
+            elif pnl_pct >= self.config.second_exit_pct:
+                initial_stage = ExitStage.THIRD
+                logger.info(
+                    f"[ExitManager] {position.symbol} 수익률 +{pnl_pct:.1f}% → "
+                    f"3차 익절 완료 단계로 등록"
                 )
             elif pnl_pct >= self.config.first_exit_pct:
                 initial_stage = ExitStage.FIRST
@@ -145,10 +198,14 @@ class ExitManager:
             highest_price=current_price,
             stop_loss_pct=stop_loss_pct,
             trailing_stop_pct=trailing_stop_pct,
+            atr_pct=atr_pct,
+            dynamic_stop_pct=dynamic_stop,
         )
+
+        effective_stop = dynamic_stop or stop_loss_pct or self.config.stop_loss_pct
         logger.debug(
             f"[ExitManager] 포지션 등록: {position.symbol} "
-            f"(SL={stop_loss_pct or self.config.stop_loss_pct}%, "
+            f"(SL={effective_stop:.2f}%, "
             f"TS={trailing_stop_pct or self.config.trailing_stop_pct}%, "
             f"stage={initial_stage.value})"
         )
@@ -182,12 +239,13 @@ class ExitManager:
         else:
             net_pnl_pct = float((current_price - state.entry_price) / state.entry_price * 100)
 
-        # 1. 손절 체크 (최우선, 전략별 파라미터 우선)
-        sl_pct = state.stop_loss_pct or self.config.stop_loss_pct
+        # 1. 손절 체크 (최우선, 동적 손절 → 전략별 → 글로벌 순서)
+        sl_pct = state.dynamic_stop_pct or state.stop_loss_pct or self.config.stop_loss_pct
         if net_pnl_pct <= -sl_pct:
+            atr_info = f", ATR={state.atr_pct:.2f}%" if state.atr_pct else ""
             return self._create_exit(
                 state, "sell_all", state.remaining_quantity,
-                f"손절: {net_pnl_pct:.2f}% (수수료 포함)"
+                f"손절: {net_pnl_pct:.2f}% (SL={sl_pct:.2f}%{atr_info})"
             )
 
         # 2. 분할 익절
@@ -214,9 +272,9 @@ class ExitManager:
         current_price: Decimal,
         net_pnl_pct: float
     ) -> Optional[Tuple[str, int, str]]:
-        """분할 익절 체크"""
+        """분할 익절 체크 (3단계)"""
 
-        # 1차 익절: 아직 1차 익절 전이고, 수익률 도달
+        # 1차 익절: +2% 도달 → 25% 매도
         if state.current_stage == ExitStage.NONE:
             if net_pnl_pct >= self.config.first_exit_pct:
                 exit_qty = max(1, int(state.original_quantity * self.config.first_exit_ratio))
@@ -229,17 +287,40 @@ class ExitManager:
                     f"1차 익절 ({self.config.first_exit_ratio*100:.0f}%): {net_pnl_pct:.2f}%"
                 )
 
-        # 2차 익절: 1차 완료 후, 추가 수익률 도달
+        # 2차 익절: +4% 도달 → 35% 추가 매도
         elif state.current_stage == ExitStage.FIRST:
             if net_pnl_pct >= self.config.second_exit_pct:
                 exit_qty = max(1, int(state.remaining_quantity * self.config.second_exit_ratio))
                 exit_qty = min(exit_qty, state.remaining_quantity)
 
-                state.current_stage = ExitStage.TRAILING
+                state.current_stage = ExitStage.SECOND
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
                 return self._create_exit(
                     state, action, exit_qty,
-                    f"2차 익절: {net_pnl_pct:.2f}%"
+                    f"2차 익절 ({self.config.second_exit_ratio*100:.0f}%): {net_pnl_pct:.2f}%"
+                )
+
+        # 3차 익절: +6% 도달 → 20% 추가 매도
+        elif state.current_stage == ExitStage.SECOND:
+            if net_pnl_pct >= self.config.third_exit_pct:
+                exit_qty = max(1, int(state.remaining_quantity * self.config.third_exit_ratio))
+                exit_qty = min(exit_qty, state.remaining_quantity)
+
+                state.current_stage = ExitStage.THIRD
+                action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
+                return self._create_exit(
+                    state, action, exit_qty,
+                    f"3차 익절 ({self.config.third_exit_ratio*100:.0f}%): {net_pnl_pct:.2f}%"
+                )
+
+        # 3차 익절 완료 후 트레일링으로 전환
+        elif state.current_stage == ExitStage.THIRD:
+            # 3차 익절 후 일정 수익률 이상이면 트레일링 단계로
+            if net_pnl_pct >= self.config.third_exit_pct + 1.0:
+                state.current_stage = ExitStage.TRAILING
+                logger.info(
+                    f"[ExitManager] {state.symbol} 트레일링 단계 진입 "
+                    f"(+{net_pnl_pct:.2f}%, 고점={state.highest_price:,.0f}원)"
                 )
 
         return None

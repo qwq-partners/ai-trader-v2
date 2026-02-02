@@ -53,8 +53,8 @@ strategies:
     enabled: true  # 3단계: 단독 활성화
     breakout_period: 20          # 돌파 기준 기간 (일)
     confirm_candles: 2           # 돌파 확인 캔들 수
-    min_breakout_pct: 1.0        # 최소 돌파 비율 (0.5→1.0: 진입 조건 강화)
-    volume_surge_ratio: 3.0      # 거래량 급증 기준 (2.0→3.0: 강화)
+    min_breakout_pct: 0.5        # 최소 돌파 비율 (백테스트 최적화: 1.0→0.5)
+    volume_surge_ratio: 2.5      # 거래량 급증 기준 (백테스트 최적화: 3.0→2.5)
 
     # 점수 가중치
     weight_price_momentum: 40.0
@@ -143,16 +143,29 @@ notification:
     on_daily_summary: true
 
 
-# 분할 익절 관리자 (R:R 최적화)
+# 분할 익절 관리자 (3단계 익절 + ATR 기반 동적 손절)
 exit_manager:
   enable_partial_exit: true
-  first_exit_pct: 3.0             # 1차 익절 목표 (%)
-  first_exit_ratio: 0.3           # 30% 매도 (50→30: 수익 종목 더 보유)
-  second_exit_pct: 5.0            # 2차 익절 목표 (%)
-  second_exit_ratio: 0.5          # 잔여 50% 매도 (=전체 35%)
-  stop_loss_pct: 2.5              # 손절 2.5% (2→2.5: 노이즈 방어)
-  trailing_stop_pct: 1.5          # 트레일링 스탑 (%)
-  trailing_activate_pct: 3.0      # 트레일링 활성화 3% (2→3: 1차 익절과 동기화)
+
+  # 3단계 익절 시스템
+  first_exit_pct: 2.0             # 1차 익절 +2% (빠른 수익 확보)
+  first_exit_ratio: 0.25          # 25% 매도
+  second_exit_pct: 4.0            # 2차 익절 +4% (안정적 수익)
+  second_exit_ratio: 0.47         # 잔여 75%의 47% = 전체 35% 매도
+  third_exit_pct: 6.0             # 3차 익절 +6% (큰 수익 추구)
+  third_exit_ratio: 0.5           # 잔여 40%의 50% = 전체 20% 매도
+
+  # ATR 기반 동적 손절 (변동성 대응)
+  stop_loss_pct: 2.5              # 기본 손절 (ATR 없을 때)
+  enable_dynamic_stop: true       # ATR 기반 동적 손절 활성화
+  atr_multiplier: 2.0             # ATR × 2.0
+  min_stop_pct: 2.5               # 최소 손절폭 (%)
+  max_stop_pct: 5.0               # 최대 손절폭 (%)
+
+  # 트레일링 스탑
+  trailing_stop_pct: 1.5          # 고점 대비 하락률 (%)
+  trailing_activate_pct: 2.0      # 트레일링 활성화 (1차 익절과 동일)
+
   include_fees: true
 
 

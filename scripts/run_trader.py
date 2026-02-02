@@ -14,7 +14,7 @@ import aiohttp
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, Optional, Set
+from typing import Dict, Optional, Set, List
 
 # 프로젝트 루트를 path에 추가
 project_root = Path(__file__).parent.parent
@@ -345,7 +345,8 @@ class TradingBot(SchedulerMixin):
             # 기존 포지션을 ExitManager에 등록 (초기화 순서: 포지션 로드 → ExitManager 생성 후 보완)
             if self.engine.portfolio.positions:
                 for symbol, position in self.engine.portfolio.positions.items():
-                    self.exit_manager.register_position(position)
+                    price_history = self._get_price_history_for_atr(symbol)
+                    self.exit_manager.register_position(position, price_history=price_history)
                 logger.info(
                     f"기존 포지션 {len(self.engine.portfolio.positions)}개 ExitManager 등록 완료"
                 )
@@ -472,9 +473,10 @@ class TradingBot(SchedulerMixin):
                             f"(현재가: {position.current_price:,.0f}원, 수익률: {pnl_pct:+.2f}%)"
                         )
 
-                    # 분할 익절 관리자에 등록
+                    # 분할 익절 관리자에 등록 (ATR 기반 동적 손절)
                     if self.exit_manager:
-                        self.exit_manager.register_position(position)
+                        price_history = self._get_price_history_for_atr(symbol)
+                        self.exit_manager.register_position(position, price_history=price_history)
 
                     # 감시 종목에 추가
                     if symbol not in self._watch_symbols:
@@ -1033,15 +1035,17 @@ class TradingBot(SchedulerMixin):
                     # 매도 체결 시 상태 업데이트
                     self.exit_manager.on_fill(fill.symbol, fill.quantity, fill.price)
                 elif fill.side.value.upper() == "BUY":
-                    # 매수 체결 시 새 포지션 등록 (전략별 청산 파라미터 전달)
+                    # 매수 체결 시 새 포지션 등록 (전략별 청산 파라미터 + ATR 전달)
                     position = self.engine.portfolio.positions.get(fill.symbol)
                     if position:
                         strategy_name = self._symbol_strategy.get(fill.symbol, "")
                         exit_params = self._strategy_exit_params.get(strategy_name, {})
+                        price_history = self._get_price_history_for_atr(fill.symbol)
                         self.exit_manager.register_position(
                             position,
                             stop_loss_pct=exit_params.get("stop_loss_pct"),
                             trailing_stop_pct=exit_params.get("trailing_stop_pct"),
+                            price_history=price_history,
                         )
 
                         # TradeJournal 진입 기록 (진화 기능용)
@@ -1353,6 +1357,34 @@ class TradingBot(SchedulerMixin):
 
         except Exception as e:
             logger.warning(f"NXT 종목 로드 실패: {e}")
+
+    def _get_price_history_for_atr(self, symbol: str) -> Optional[Dict[str, List[Decimal]]]:
+        """
+        ATR 계산용 히스토리 데이터 가져오기
+
+        Returns:
+            {"high": [...], "low": [...], "close": [...]} 또는 None
+        """
+        if not hasattr(self, 'market_data') or not self.market_data:
+            return None
+
+        try:
+            # 일봉 데이터 가져오기 (최근 20일, ATR 14일 + 여유)
+            bars = self.market_data.get_daily_bars(symbol, lookback=20)
+            if not bars or len(bars) < 15:
+                return None
+
+            # 최신 → 과거 순서로 정렬 (ATR 계산 함수 요구사항)
+            bars_sorted = sorted(bars, key=lambda x: x.timestamp, reverse=True)
+
+            return {
+                "high": [bar.high for bar in bars_sorted],
+                "low": [bar.low for bar in bars_sorted],
+                "close": [bar.close for bar in bars_sorted],
+            }
+        except Exception as e:
+            logger.debug(f"[ATR] {symbol} 히스토리 데이터 로드 실패: {e}")
+            return None
 
     def _get_current_session(self) -> MarketSession:
         """현재 시간 기반 세션 판단"""
