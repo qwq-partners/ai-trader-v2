@@ -31,7 +31,7 @@ risk:
   # === 포지션 관리 ===
   base_position_pct: 10.0        # 기본 포지션 비율 10% (15→10: 3단계 리스크 축소)
   max_position_pct: 20.0         # 최대 포지션 비율 20% (25→20: 단일 종목 리스크 축소)
-  max_positions: 2               # 최대 동시 포지션 2개 (0→2: 3단계 제한적 재시작)
+  max_positions: 10              # 최대 동시 포지션 10개 (2→10: 기존 5개 수용 + 여유 확보)
   min_cash_reserve_pct: 5.0      # 최소 현금 보유 5% (15→5: 신규 진입 여력 확보)
   min_position_value: 500000     # 최소 포지션 금액 (50만원)
   dynamic_max_positions: true    # 자산 규모에 따라 max_positions 동적 조정
