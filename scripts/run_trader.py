@@ -93,6 +93,8 @@ class TradingBot(SchedulerMixin):
         self._strategy_exit_params: Dict[str, Dict[str, float]] = {}
         # 종목별 전략 매핑 (ExitManager 등록 시 사용)
         self._symbol_strategy: Dict[str, str] = {}
+        # 종목별 신호 정보 (TradeJournal 기록용)
+        self._symbol_signals: Dict[str, Any] = {}
         self._exit_pending_symbols: Set[str] = set()  # ExitManager 매도 중복 방지
         self._exit_pending_timestamps: Dict[str, datetime] = {}  # 매도 pending 타임스탬프
         self._pause_resume_at: Optional[datetime] = None  # 자동 재개 타이머
@@ -997,6 +999,30 @@ class TradingBot(SchedulerMixin):
                         pnl_pct=pnl_pct,
                         reason=reason,
                     )
+
+                    # TradeJournal 청산 기록 (진화 기능용)
+                    if self.trade_journal:
+                        try:
+                            # 청산 타입 결정
+                            exit_type = "unknown"
+                            if "손절" in reason:
+                                exit_type = "stop_loss"
+                            elif "익절" in reason or "트레일링" in reason:
+                                exit_type = "take_profit"
+                            elif "시간" in reason or "종료" in reason:
+                                exit_type = "time_exit"
+
+                            self.trade_journal.record_exit(
+                                symbol=fill.symbol,
+                                exit_time=fill.timestamp,
+                                exit_price=float(fill.price),
+                                quantity=fill.quantity,
+                                exit_type=exit_type,
+                                pnl=float(pnl)
+                            )
+                            logger.debug(f"[TradeJournal] 청산 기록: {fill.symbol} {exit_type} {pnl:+,.0f}원")
+                        except Exception as je:
+                            logger.warning(f"[TradeJournal] 청산 기록 실패: {je}")
                 except Exception as e:
                     logger.warning(f"EXIT 로그 기록 실패: {e}")
 
@@ -1016,6 +1042,22 @@ class TradingBot(SchedulerMixin):
                             stop_loss_pct=exit_params.get("stop_loss_pct"),
                             trailing_stop_pct=exit_params.get("trailing_stop_pct"),
                         )
+
+                        # TradeJournal 진입 기록 (진화 기능용)
+                        if self.trade_journal:
+                            try:
+                                self.trade_journal.record_entry(
+                                    symbol=fill.symbol,
+                                    entry_time=fill.timestamp,
+                                    entry_price=float(fill.price),
+                                    quantity=fill.quantity,
+                                    strategy=strategy_name or "unknown",
+                                    reason=getattr(fill, 'reason', '') or "매수체결",
+                                    signal_score=0  # TODO: Order에 score 필드 추가 필요
+                                )
+                                logger.debug(f"[TradeJournal] 진입 기록: {fill.symbol} {strategy_name}")
+                            except Exception as e:
+                                logger.warning(f"[TradeJournal] 진입 기록 실패: {e}")
 
             # 거래 저널 기록 (자가 진화용)
             if self.trade_journal:
