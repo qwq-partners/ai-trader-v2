@@ -246,10 +246,11 @@ class TradingBot(SchedulerMixin):
             momentum_cfg = self.config.get("strategies", "momentum_breakout") or {}
             if momentum_cfg.get("enabled", True):
                 momentum_strategy = MomentumBreakoutStrategy(MomentumConfig(
+                    min_breakout_pct=momentum_cfg.get("min_breakout_pct", 1.0),
+                    volume_surge_ratio=momentum_cfg.get("volume_surge_ratio", 3.0),
                     stop_loss_pct=momentum_cfg.get("stop_loss_pct", 2.5),
                     take_profit_pct=momentum_cfg.get("take_profit_pct", 5.0),
                     trailing_stop_pct=momentum_cfg.get("trailing_stop_pct", 1.5),
-                    volume_surge_ratio=momentum_cfg.get("volume_surge_ratio", 2.0),
                 ))
                 self.strategy_manager.register_strategy("momentum_breakout", momentum_strategy)
                 logger.info("모멘텀 브레이크아웃 전략 등록")

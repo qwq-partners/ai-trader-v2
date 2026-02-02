@@ -74,6 +74,14 @@ class MomentumBreakoutStrategy(BaseStrategy):
         # 테마 정보 (외부에서 주입)
         self._hot_themes: Dict[str, float] = {}  # 종목 -> 테마 점수
 
+        # 중복 신호 방지
+        self._last_signal_time: Dict[str, datetime] = {}  # 종목별 마지막 신호 시각
+        self._signal_cooldown: int = 300  # 5분 쿨다운 (초)
+
+        # 손절 후 재진입 방지
+        self._recently_stopped: Dict[str, datetime] = {}  # 손절한 종목
+        self._stop_penalty: int = 1800  # 30분 페널티 (초)
+
     async def generate_signal(
         self,
         symbol: str,
@@ -114,6 +122,18 @@ class MomentumBreakoutStrategy(BaseStrategy):
         """진입 신호 체크"""
         if not self._is_trading_time():
             return None
+
+        # 중복 신호 방지: 쿨다운 체크
+        if symbol in self._last_signal_time:
+            elapsed = (datetime.now() - self._last_signal_time[symbol]).total_seconds()
+            if elapsed < self._signal_cooldown:
+                return None  # 쿨다운 중
+
+        # 손절 후 재진입 방지: 페널티 기간 체크
+        if symbol in self._recently_stopped:
+            elapsed = (datetime.now() - self._recently_stopped[symbol]).total_seconds()
+            if elapsed < self._stop_penalty:
+                return None  # 재진입 금지 기간
 
         price = float(current_price)
 
@@ -163,6 +183,9 @@ class MomentumBreakoutStrategy(BaseStrategy):
             f"거래량 {vol_ratio:.1f}x, "
             f"점수 {score:.0f}"
         )
+
+        # 마지막 신호 시각 기록 (중복 방지용)
+        self._last_signal_time[symbol] = datetime.now()
 
         return self.create_signal(
             symbol=symbol,
