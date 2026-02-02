@@ -725,6 +725,12 @@ class TradingBot(SchedulerMixin):
                 if success:
                     order_type_str = "LIMIT" if is_auction else "MARKET"
                     logger.info(f"[청산 주문 성공] {symbol} {quantity}주 ({order_type_str}) -> 주문번호: {result}")
+
+                    # 손절인 경우 RiskManager에 기록 (재진입 방지)
+                    if "손절" in reason and self.engine.risk_manager:
+                        self.engine.risk_manager._stop_loss_today[symbol] = datetime.now()
+                        logger.info(f"[재진입금지] {symbol} 손절 기록 (60분간 재진입 차단)")
+
                     trading_logger.log_order(
                         symbol=symbol,
                         side="SELL",
