@@ -520,9 +520,10 @@ class TradingBot(SchedulerMixin):
             except Exception as e:
                 logger.warning(f"스크리너 초기 실행 실패: {e}")
 
-        # 중복 제거
-        self._watch_symbols = list(set(watch_cfg))
-        logger.info(f"감시 종목 {len(self._watch_symbols)}개 로드")
+        # 중복 제거 (기존 보유 종목 보존!)
+        existing = self._watch_symbols or []
+        self._watch_symbols = list(set(existing + watch_cfg))
+        logger.info(f"감시 종목 {len(self._watch_symbols)}개 로드 (보유종목 {len(existing)}개 포함)")
 
     async def _preload_price_history(self):
         """전략용 과거 일봉 데이터 사전 로드"""
