@@ -718,7 +718,8 @@ class RiskManager:
             if self._risk_validator:
                 can_trade, reason = self._risk_validator.can_open_position(
                     order.symbol, order.side, order.quantity,
-                    order.price or Decimal("0"), self.engine.portfolio
+                    order.price or Decimal("0"), self.engine.portfolio,
+                    strategy_type=order.strategy  # 차등 리스크 관리용
                 )
                 if not can_trade:
                     logger.warning(f"주문 거부 (리스크 검증): {order.symbol} - {reason}")

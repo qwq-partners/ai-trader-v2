@@ -9,6 +9,8 @@ from datetime import datetime, date
 from decimal import Decimal
 from typing import Dict, List, Optional, Tuple, Any
 from loguru import logger
+import json
+from pathlib import Path
 
 from ..core.types import (
     Order, Position, Portfolio, Signal, RiskMetrics, RiskConfig,
@@ -49,14 +51,26 @@ class RiskManager:
         self.config = config
         self.initial_capital = initial_capital
 
+        # 일일 손익 저장 경로
+        cache_dir = Path.home() / ".cache" / "ai_trader"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        self._daily_stats_path = cache_dir / "daily_stats.json"
+
         # 리스크 메트릭스
         self.metrics = RiskMetrics()
 
         # 일일 통계
         self.daily_stats = DailyStats(peak_equity=initial_capital)
 
+        # 일일 손익 로드 (프로세스 재시작 시)
+        self._load_daily_stats()
+
         # 경고 임계값
         self._warn_threshold_pct = config.daily_max_loss_pct * 0.7  # 70%에서 경고
+
+        # 당일 재진입 금지: 손절된 종목 추적 (symbol -> 손절 시각)
+        self._stop_loss_today: Dict[str, datetime] = {}
+        self._cooldown_minutes = 60  # 손절 후 재진입 금지 시간 (분)
 
         max_pos = self.get_effective_max_positions(initial_capital)
         logger.info(
@@ -105,7 +119,7 @@ class RiskManager:
         current_price: Decimal
     ) -> int:
         """
-        신호 강도에 따른 포지션 크기 계산
+        신호 강도에 따른 포지션 크기 계산 (하락장 축소 포함)
 
         Args:
             signal: 매매 신호
@@ -122,7 +136,7 @@ class RiskManager:
         if equity <= 0:
             return 0
 
-        # 기본 포지션 비율 (config에서 가져옴, 기본 10%)
+        # 기본 포지션 비율 (config에서 가져옴, 기본 15%)
         base_pct = Decimal(str(self.config.base_position_pct / 100))
 
         # 신호 강도에 따른 조정
@@ -133,9 +147,19 @@ class RiskManager:
             SignalStrength.WEAK: Decimal("0.5"),
         }.get(signal.strength, Decimal("1.0"))
 
+        # 하락장 포지션 축소 (-3% ~ -5% 구간에서 50% 축소)
+        daily_pnl_pct = float(portfolio.daily_pnl / equity * 100) if equity > 0 else 0.0
+        drawdown_multiplier = Decimal("1.0")
+        if -5.0 < daily_pnl_pct <= -self.config.daily_max_loss_pct:
+            drawdown_multiplier = Decimal("0.5")  # 50% 축소
+            logger.debug(
+                f"[포지션축소] 일일손실 {daily_pnl_pct:.1f}% → "
+                f"포지션 50% 축소"
+            )
+
         # 최종 포지션 비율
         position_pct = min(
-            base_pct * strength_multiplier,
+            base_pct * strength_multiplier * drawdown_multiplier,
             Decimal(str(self.config.max_position_pct / 100))
         )
 
@@ -179,20 +203,57 @@ class RiskManager:
         self,
         entry_price: Decimal,
         side: OrderSide,
-        volatility: Optional[float] = None
+        volatility: Optional[float] = None,
+        symbol: Optional[str] = None,
+        market_cap: Optional[float] = None
     ) -> Decimal:
         """
-        손절 가격 계산
+        손절 가격 계산 (대형주 손절 완화 포함)
 
         Args:
             entry_price: 진입가
             side: 매매 방향
             volatility: 변동성 (선택, ATR 기반)
+            symbol: 종목 코드 (대형주 판단용)
+            market_cap: 시가총액 (억원, 대형주 판단용)
 
         Returns:
             손절가
         """
         stop_pct = self.config.default_stop_loss_pct / 100
+
+        # 대형주 손절 완화 (KOSPI200, 시총 1조 이상)
+        is_large_cap = False
+        if symbol:
+            # KOSPI200 대형주 목록 (시총 상위)
+            large_caps = {
+                '005930',  # 삼성전자
+                '000660',  # SK하이닉스
+                '373220',  # LG에너지솔루션
+                '207940',  # 삼성바이오로직스
+                '005380',  # 현대차
+                '000270',  # 기아
+                '051910',  # LG화학
+                '006400',  # 삼성SDI
+                '035420',  # NAVER
+                '035720',  # 카카오
+                '068270',  # 셀트리온
+                '028260',  # 삼성물산
+                '105560',  # KB금융
+                '055550',  # 신한지주
+                '086790',  # 하나금융지주
+                '316140',  # 우리금융지주
+            }
+            is_large_cap = symbol in large_caps
+
+        # 시가총액 기준 (1조 이상)
+        if market_cap and market_cap >= 10000:  # 1조 = 10000억
+            is_large_cap = True
+
+        # 대형주는 손절폭 확대 (2.5% → 3.5%)
+        if is_large_cap:
+            stop_pct = max(stop_pct, 0.035)  # 최소 3.5%
+            logger.debug(f"[손절완화] {symbol} 대형주 → 손절폭 {stop_pct*100:.1f}%")
 
         # 변동성 기반 조정 (선택적)
         if volatility and volatility > 5:
@@ -259,55 +320,105 @@ class RiskManager:
         side: OrderSide,
         quantity: int,
         price: Decimal,
-        portfolio: Portfolio
+        portfolio: Portfolio,
+        strategy_type: str = ""
     ) -> Tuple[bool, str]:
         """
         포지션 오픈 가능 여부 체크
 
+        Args:
+            strategy_type: 전략 타입 (차등 리스크 관리용)
+
         Returns:
             (가능 여부, 거부 사유)
         """
-        # 1. 일일 손실 한도 체크
-        if self._is_daily_loss_limit_hit(portfolio):
-            return False, f"일일 손실 한도 도달 ({self.config.daily_max_loss_pct}%)"
+        # 1. 당일 재진입 금지 체크 (손절 후 쿨다운)
+        if symbol in self._stop_loss_today:
+            stop_time = self._stop_loss_today[symbol]
+            elapsed = (datetime.now() - stop_time).total_seconds() / 60
+            if elapsed < self._cooldown_minutes:
+                remaining = int(self._cooldown_minutes - elapsed)
+                return False, f"손절 후 재진입 금지 ({remaining}분 남음)"
 
-        # 2. 일일 거래 횟수 체크
+        # 2. 일일 손실 한도 체크 (차등 리스크 관리)
+        if self._is_daily_loss_limit_hit(portfolio, strategy_type):
+            equity = portfolio.total_equity
+            daily_pnl_pct = float(portfolio.daily_pnl / equity * 100) if equity > 0 else 0.0
+            if daily_pnl_pct <= -5.0:
+                return False, f"일일 손실 한도 초과 ({daily_pnl_pct:.1f}%) - 전면 차단"
+            else:
+                return False, f"일일 손실 한도 도달 ({daily_pnl_pct:.1f}%) - 방어적 전략만 허용"
+
+        # 3. 일일 거래 횟수 체크
         if self.daily_stats.trades >= self.config.daily_max_trades:
             return False, f"일일 거래 횟수 한도 ({self.config.daily_max_trades}회)"
 
-        # 3. 최대 포지션 수 체크 (동적 계산)
+        # 4. 최대 포지션 수 체크 (동적 계산)
         effective_max = self.get_effective_max_positions(portfolio.total_equity)
         if symbol not in portfolio.positions:
             if len(portfolio.positions) >= effective_max:
                 return False, f"최대 포지션 수 도달 ({len(portfolio.positions)}/{effective_max}개)"
 
-        # 4. 포지션 크기 체크
+        # 5. 포지션 크기 체크
         position_value = price * quantity
         max_value = portfolio.total_equity * Decimal(str(self.config.max_position_pct / 100))
         if position_value > max_value:
             return False, f"포지션 크기 초과 ({position_value:,.0f} > {max_value:,.0f})"
 
-        # 5. 현금 체크 (매수 시)
+        # 6. 현금 체크 (매수 시)
         if side == OrderSide.BUY:
             required = position_value * Decimal("1.001")  # 수수료 여유
             available = self._get_available_cash(portfolio)
             if required > available:
                 return False, f"현금 부족 ({available:,.0f} < {required:,.0f})"
 
-        # 6. 연속 손실 체크
+        # 7. 연속 손실 체크
         if self.daily_stats.consecutive_losses >= 5:
             return False, f"연속 손실 ({self.daily_stats.consecutive_losses}회) - 거래 중단"
 
         return True, ""
 
-    def _is_daily_loss_limit_hit(self, portfolio: Portfolio) -> bool:
-        """일일 손실 한도 도달 여부 (현재 자산 기준)"""
+    def _is_daily_loss_limit_hit(self, portfolio: Portfolio, strategy_type: str = "") -> bool:
+        """
+        일일 손실 한도 도달 여부 (차등 리스크 관리)
+
+        Args:
+            portfolio: 포트폴리오
+            strategy_type: 전략 타입 (mean_reversion, defensive 등)
+
+        Returns:
+            차단 여부
+        """
         equity = portfolio.total_equity
         if equity <= 0:
             return False
 
         daily_pnl_pct = float(portfolio.daily_pnl / equity * 100)
-        return daily_pnl_pct <= -self.config.daily_max_loss_pct
+
+        # 1단계: -3% ~ -5% → 방어적 전략만 허용
+        if -5.0 < daily_pnl_pct <= -self.config.daily_max_loss_pct:
+            # 방어적 전략은 허용 (역추세, 저평가 대형주)
+            defensive_strategies = {'mean_reversion', 'defensive', 'value_large_cap'}
+            if strategy_type in defensive_strategies:
+                logger.debug(
+                    f"[차등리스크] 손실 {daily_pnl_pct:.1f}% → "
+                    f"방어적 전략 '{strategy_type}' 허용"
+                )
+                return False  # 차단하지 않음
+            else:
+                logger.debug(
+                    f"[차등리스크] 손실 {daily_pnl_pct:.1f}% → "
+                    f"공격적 전략 '{strategy_type}' 차단"
+                )
+                return True  # 차단
+
+        # 2단계: -5% 이상 → 완전 차단
+        if daily_pnl_pct <= -5.0:
+            logger.warning(f"[차등리스크] 손실 {daily_pnl_pct:.1f}% → 모든 전략 차단")
+            return True
+
+        # 손실 3% 미만 → 정상 거래
+        return False
 
     # ============================================================
     # 이벤트 처리
@@ -375,6 +486,13 @@ class RiskManager:
 
         # 손절 체크
         if position.stop_loss and price <= position.stop_loss:
+            # 당일 재진입 금지: 손절 종목 기록
+            self._stop_loss_today[position.symbol] = datetime.now()
+            logger.info(
+                f"[재진입금지] {position.symbol} 손절 기록 "
+                f"({self._cooldown_minutes}분간 재진입 차단)"
+            )
+
             return StopTriggeredEvent(
                 source="risk_manager",
                 symbol=position.symbol,
@@ -417,11 +535,23 @@ class RiskManager:
     # ============================================================
 
     def reset_daily_stats(self):
-        """일일 통계 초기화"""
+        """일일 통계 초기화 (날짜 변경 시에만)"""
+        today = date.today()
+
+        # 같은 날이면 리셋하지 않음
+        if self.daily_stats.date == today:
+            logger.debug(f"일일 통계 유지 (같은 날: {today})")
+            return
+
+        # 날짜가 변경된 경우만 리셋
+        logger.info(f"날짜 변경: {self.daily_stats.date} → {today}, 일일 통계 초기화")
         self.daily_stats = DailyStats(peak_equity=self.initial_capital)
         self.metrics = RiskMetrics()
         self.metrics.can_trade = True
-        logger.info("일일 리스크 통계 초기화")
+        self._stop_loss_today.clear()  # 손절 목록 초기화
+
+        # 리셋 후 저장
+        self._save_daily_stats()
 
     def record_trade_result(self, pnl: Decimal):
         """거래 결과 기록"""
@@ -434,6 +564,9 @@ class RiskManager:
 
         self.daily_stats.total_pnl += pnl
         self.metrics.consecutive_losses = self.daily_stats.consecutive_losses
+
+        # 일일 손익 저장
+        self._save_daily_stats()
 
     def get_risk_summary(self) -> Dict[str, Any]:
         """리스크 요약"""
@@ -448,3 +581,58 @@ class RiskManager:
             ),
             "total_pnl": float(self.daily_stats.total_pnl),
         }
+
+    # ============================================================
+    # 일일 손익 영속화
+    # ============================================================
+
+    def _save_daily_stats(self):
+        """일일 손익을 파일에 저장"""
+        try:
+            data = {
+                "date": self.daily_stats.date.isoformat(),
+                "trades": self.daily_stats.trades,
+                "wins": self.daily_stats.wins,
+                "losses": self.daily_stats.losses,
+                "total_pnl": str(self.daily_stats.total_pnl),
+                "consecutive_losses": self.daily_stats.consecutive_losses,
+                "peak_equity": str(self.daily_stats.peak_equity),
+            }
+            with open(self._daily_stats_path, 'w') as f:
+                json.dump(data, f, indent=2)
+            logger.debug(f"일일 손익 저장 완료: {data['total_pnl']}원")
+        except Exception as e:
+            logger.error(f"일일 손익 저장 실패: {e}")
+
+    def _load_daily_stats(self):
+        """일일 손익을 파일에서 로드"""
+        try:
+            if not self._daily_stats_path.exists():
+                logger.debug("일일 손익 파일 없음 (신규 시작)")
+                return
+
+            with open(self._daily_stats_path, 'r') as f:
+                data = json.load(f)
+
+            saved_date = date.fromisoformat(data["date"])
+            today = date.today()
+
+            # 날짜가 다르면 리셋 (새로운 날)
+            if saved_date != today:
+                logger.info(f"날짜 변경 감지: {saved_date} → {today}, 일일 손익 리셋")
+                return
+
+            # 같은 날이면 복원
+            self.daily_stats.trades = data["trades"]
+            self.daily_stats.wins = data["wins"]
+            self.daily_stats.losses = data["losses"]
+            self.daily_stats.total_pnl = Decimal(data["total_pnl"])
+            self.daily_stats.consecutive_losses = data["consecutive_losses"]
+            self.daily_stats.peak_equity = Decimal(data["peak_equity"])
+
+            logger.info(
+                f"일일 손익 복원: {self.daily_stats.total_pnl:,.0f}원 "
+                f"(거래 {self.daily_stats.trades}회, 승 {self.daily_stats.wins} / 패 {self.daily_stats.losses})"
+            )
+        except Exception as e:
+            logger.error(f"일일 손익 로드 실패: {e}")
