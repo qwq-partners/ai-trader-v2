@@ -29,9 +29,9 @@ risk:
   daily_max_trades: 15           # 일일 최대 거래 15회 (과잉매매 방지)
 
   # === 포지션 관리 ===
-  base_position_pct: 15.0        # 기본 포지션 비율 15% (12→15: 집중 투자로 자본 효율↑)
-  max_position_pct: 25.0         # 최대 포지션 비율 25% (35→25: 단일 종목 리스크 축소, SK하이닉스 사례 반영)
-  max_positions: 0               # 최대 동시 포지션 0개 (보호 모드: 신규 진입 차단)
+  base_position_pct: 10.0        # 기본 포지션 비율 10% (15→10: 3단계 리스크 축소)
+  max_position_pct: 20.0         # 최대 포지션 비율 20% (25→20: 단일 종목 리스크 축소)
+  max_positions: 2               # 최대 동시 포지션 2개 (0→2: 3단계 제한적 재시작)
   min_cash_reserve_pct: 5.0      # 최소 현금 보유 5% (15→5: 신규 진입 여력 확보)
   min_position_value: 500000     # 최소 포지션 금액 (50만원)
   dynamic_max_positions: true    # 자산 규모에 따라 max_positions 동적 조정
@@ -50,11 +50,11 @@ risk:
 strategies:
   # 모멘텀 브레이크아웃 (주력 전략)
   momentum_breakout:
-    enabled: false  # 보호 모드: 비활성화
+    enabled: true  # 3단계: 단독 활성화
     breakout_period: 20          # 돌파 기준 기간 (일)
     confirm_candles: 2           # 돌파 확인 캔들 수
-    min_breakout_pct: 0.5        # 최소 돌파 비율 (%)
-    volume_surge_ratio: 2.0      # 거래량 급증 기준
+    min_breakout_pct: 1.0        # 최소 돌파 비율 (0.5→1.0: 진입 조건 강화)
+    volume_surge_ratio: 3.0      # 거래량 급증 기준 (2.0→3.0: 강화)
 
     # 점수 가중치
     weight_price_momentum: 40.0
