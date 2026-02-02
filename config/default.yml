@@ -30,9 +30,9 @@ risk:
 
   # === 포지션 관리 ===
   base_position_pct: 15.0        # 기본 포지션 비율 15% (12→15: 집중 투자로 자본 효율↑)
-  max_position_pct: 35.0         # 최대 포지션 비율 35% (50→35: 단일 종목 리스크 제한)
+  max_position_pct: 25.0         # 최대 포지션 비율 25% (35→25: 단일 종목 리스크 축소, SK하이닉스 사례 반영)
   max_positions: 5               # 최대 동시 포지션 5개 (8→5: 소수 정예, 관리 집중)
-  min_cash_reserve_pct: 15.0     # 최소 현금 보유 15% (10→15: 안전마진 확보)
+  min_cash_reserve_pct: 5.0      # 최소 현금 보유 5% (15→5: 신규 진입 여력 확보)
   min_position_value: 500000     # 최소 포지션 금액 (50만원)
   dynamic_max_positions: true    # 자산 규모에 따라 max_positions 동적 조정
 
