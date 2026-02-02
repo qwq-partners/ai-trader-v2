@@ -31,7 +31,7 @@ risk:
   # === 포지션 관리 ===
   base_position_pct: 15.0        # 기본 포지션 비율 15% (12→15: 집중 투자로 자본 효율↑)
   max_position_pct: 25.0         # 최대 포지션 비율 25% (35→25: 단일 종목 리스크 축소, SK하이닉스 사례 반영)
-  max_positions: 5               # 최대 동시 포지션 5개 (8→5: 소수 정예, 관리 집중)
+  max_positions: 0               # 최대 동시 포지션 0개 (보호 모드: 신규 진입 차단)
   min_cash_reserve_pct: 5.0      # 최소 현금 보유 5% (15→5: 신규 진입 여력 확보)
   min_position_value: 500000     # 최소 포지션 금액 (50만원)
   dynamic_max_positions: true    # 자산 규모에 따라 max_positions 동적 조정
@@ -50,7 +50,7 @@ risk:
 strategies:
   # 모멘텀 브레이크아웃 (주력 전략)
   momentum_breakout:
-    enabled: true
+    enabled: false  # 보호 모드: 비활성화
     breakout_period: 20          # 돌파 기준 기간 (일)
     confirm_candles: 2           # 돌파 확인 캔들 수
     min_breakout_pct: 0.5        # 최소 돌파 비율 (%)
@@ -69,7 +69,7 @@ strategies:
 
   # 테마 추종 (빠른 진입/탈출)
   theme_chasing:
-    enabled: true
+    enabled: false  # 보호 모드: 비활성화
     min_theme_score: 70
     entry_window_minutes: 30
     stop_loss_pct: 2.0           # 1.5→2.0: 테마주 변동성 감안
@@ -78,7 +78,7 @@ strategies:
 
   # 갭상승 추종
   gap_and_go:
-    enabled: true
+    enabled: false  # 보호 모드: 비활성화
     min_gap_pct: 2.0
     max_gap_pct: 10.0
     entry_delay_minutes: 30
@@ -90,7 +90,7 @@ strategies:
 
   # 평균 회귀 (급락 반등, 보조 전략)
   mean_reversion:
-    enabled: true
+    enabled: false  # 보호 모드: 비활성화
     max_rsi: 30.0
     min_decline_pct: -10.0
     min_volume_ratio: 1.5
