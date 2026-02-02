@@ -746,9 +746,7 @@ class ThemeDetector:
             try:
                 top_stocks = await self._stock_master.get_top_stocks(80)
                 if top_stocks:
-                    return "\n".join(
-                        [f"  {name}={code}" for name, code in top_stocks]
-                    )
+                    return "\n".join([f"  {s}" for s in top_stocks])
             except Exception as e:
                 logger.debug(f"[ThemeDetector] stock_master 힌트 로드 실패: {e}")
 
