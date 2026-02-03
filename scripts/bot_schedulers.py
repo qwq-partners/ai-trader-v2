@@ -786,8 +786,9 @@ class SchedulerMixin:
         """
         코드 자동 진화 스케줄러
 
-        - 주 1회 토요일 지정 시간에 실행
+        - 매일 또는 주 1회 지정 시간에 실행 (schedule_daily 설정)
         - 또는 연속 롤백 3회 시 트리거
+        - auto_merge=true 시 자동 머지 + 봇 재시작
         """
         from src.core.evolution.code_evolver import get_code_evolver
 
@@ -796,8 +797,10 @@ class SchedulerMixin:
             logger.info("[코드진화] 비활성화됨 (code_evolution.enabled=false)")
             return
 
-        schedule_day = code_evo_cfg.get("schedule_day", 5)  # 0=월, 5=토
+        schedule_daily = code_evo_cfg.get("schedule_daily", False)  # 매일 실행 여부
+        schedule_day = code_evo_cfg.get("schedule_day", 5)  # 0=월, 5=토 (주간 실행 시)
         schedule_hour = code_evo_cfg.get("schedule_hour", 10)
+        auto_merge = code_evo_cfg.get("auto_merge", False)  # 자동 머지 여부
         last_run_date = None
 
         code_evolver = get_code_evolver()
@@ -807,13 +810,22 @@ class SchedulerMixin:
                 now = datetime.now()
                 today = now.date()
 
-                # 토요일 지정 시간 (±15분)
-                scheduled_run = (
-                    now.weekday() == schedule_day
-                    and now.hour == schedule_hour
-                    and 0 <= now.minute < 15
-                    and last_run_date != today
-                )
+                # 스케줄 조건: 매일 or 특정 요일
+                if schedule_daily:
+                    # 매일 지정 시간 (±15분)
+                    scheduled_run = (
+                        now.hour == schedule_hour
+                        and 0 <= now.minute < 15
+                        and last_run_date != today
+                    )
+                else:
+                    # 주 1회 특정 요일 지정 시간 (±15분)
+                    scheduled_run = (
+                        now.weekday() == schedule_day
+                        and now.hour == schedule_hour
+                        and 0 <= now.minute < 15
+                        and last_run_date != today
+                    )
 
                 # 연속 롤백 트리거
                 rollback_trigger = code_evolver.should_trigger_by_rollbacks
@@ -823,28 +835,63 @@ class SchedulerMixin:
                     logger.info(f"[코드진화] 스케줄러 트리거: {trigger}")
 
                     try:
-                        result = await code_evolver.run_evolution(trigger_reason=trigger)
+                        result = await code_evolver.run_evolution(
+                            trigger_reason=trigger,
+                            auto_merge=auto_merge,
+                        )
 
                         if result["success"]:
                             logger.info(f"[코드진화] 성공: {result['pr_url']}")
+
                             # 텔레그램 알림
                             try:
-                                await send_alert(
+                                msg = (
                                     f"<b>[코드진화]</b> PR 생성\n"
                                     f"사유: {trigger}\n"
                                     f"변경: {result['changed_files']}개 파일\n"
                                     f"PR: {result['pr_url']}"
                                 )
+                                if result.get("auto_merged"):
+                                    msg += "\n✅ 자동 머지 완료"
+                                await send_alert(msg)
                             except Exception:
                                 pass
+
+                            # 자동 머지 성공 시 봇 재시작
+                            if result.get("auto_merged"):
+                                logger.info("[코드진화] 자동 머지 완료 → 5초 후 봇 재시작")
+                                await send_alert(
+                                    "<b>[코드진화]</b> 자동 머지 완료\n"
+                                    "5초 후 봇 재시작..."
+                                )
+                                await asyncio.sleep(5)
+                                # 봇 재시작 (main 복귀 후 프로세스 종료 → systemd/supervisor가 재시작)
+                                logger.warning("[코드진화] 봇 재시작 중...")
+                                os._exit(0)  # 즉시 종료 (systemd/cron이 재시작)
+
                         else:
                             logger.warning(f"[코드진화] 실패: {result['message']}")
+                            # 실패 텔레그램 알림
+                            try:
+                                await send_alert(
+                                    f"<b>[코드진화]</b> 실패\n"
+                                    f"사유: {result['message'][:200]}"
+                                )
+                            except Exception:
+                                pass
 
                         last_run_date = today
 
                     except Exception as e:
                         logger.error(f"[코드진화] 실행 오류: {e}")
                         last_run_date = today
+                        try:
+                            await send_alert(
+                                f"<b>[코드진화]</b> 실행 오류\n"
+                                f"{str(e)[:200]}"
+                            )
+                        except Exception:
+                            pass
 
                 await asyncio.sleep(60)
 
@@ -861,7 +908,7 @@ class SchedulerMixin:
                 await self._sync_portfolio()
             except Exception as e:
                 logger.error(f"동기화 루프 오류: {e}")
-            await asyncio.sleep(300)  # 5분마다 동기화
+            await asyncio.sleep(120)  # 2분마다 동기화 (KIS API 응답 지연 대응)
 
     async def _run_log_cleanup(self):
         """

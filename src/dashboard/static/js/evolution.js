@@ -24,7 +24,8 @@ async function loadEvolution() {
 
         renderSummary(evo.summary);
         renderInsights(evo.insights);
-        renderChangesTable(evo.parameter_changes);
+        renderRecommendations(evo.parameter_adjustments || []);  // AI 추천
+        renderChangesTable(evo.parameter_changes);  // 적용된 변경
         renderAvoid(evo.avoid_situations);
         renderFocus(evo.focus_opportunities);
         renderOutlook(evo.next_week_outlook);
@@ -77,6 +78,48 @@ function renderInsights(insights) {
     el.innerHTML = insights.map((text, i) =>
         `<div class="insight-item"><span class="insight-num">${i + 1}</span>${escapeHtml(text)}</div>`
     ).join('');
+}
+
+function renderRecommendations(recs) {
+    const el = document.getElementById('evo-recommendations');
+    if (!recs || recs.length === 0) {
+        el.innerHTML = '<div style="padding: 20px 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">추천 내용 없음</div>';
+        currentRecommendations = [];
+        return;
+    }
+
+    // 전역 변수에 저장 (반영 버튼에서 사용)
+    currentRecommendations = recs;
+
+    el.innerHTML = recs.map((rec, idx) => {
+        const confPct = rec.confidence != null ? Math.round(rec.confidence * 100) : 0;
+        return `<div class="recommendation-card">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
+                <div style="flex: 1;">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+                        <span class="badge badge-purple" style="font-size:0.65rem;">${escapeHtml(rec.strategy || '')}</span>
+                        <span class="rec-param">${escapeHtml(rec.parameter || '')}</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                        <span class="mono" style="font-size:0.85rem;color:var(--text-muted);">${formatValue(rec.current_value)}</span>
+                        <span class="arrow-to">&rarr;</span>
+                        <span class="mono" style="font-size:0.9rem;color:var(--accent-green);font-weight:600;">${formatValue(rec.suggested_value)}</span>
+                        <div class="conf-gauge">
+                            <div class="conf-bar-bg" style="width: 60px;">
+                                <div class="conf-bar-fill ${confBarColor(confPct)}" style="width:${confPct}%"></div>
+                            </div>
+                            <span class="mono" style="font-size:0.72rem;">${confPct}%</span>
+                        </div>
+                    </div>
+                    <div class="rec-reason">${escapeHtml(rec.reason || '이유 없음')}</div>
+                </div>
+                <button class="btn-apply" onclick="applyParameterChange(${idx})" data-rec-idx="${idx}">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    반영
+                </button>
+            </div>
+        </div>`;
+    }).join('');
 }
 
 function renderChangesTable(changes) {
@@ -210,6 +253,64 @@ function effectBadge(isEffective) {
     if (isEffective === true) return '<span class="eff-badge eff-effective">효과적</span>';
     if (isEffective === false) return '<span class="eff-badge eff-ineffective">비효과적</span>';
     return '<span class="eff-badge eff-pending">평가중</span>';
+}
+
+// ----------------------------------------------------------
+// 파라미터 변경 반영
+// ----------------------------------------------------------
+
+let currentRecommendations = [];
+
+async function applyParameterChange(idx) {
+    if (!currentRecommendations[idx]) {
+        alert('추천 데이터를 찾을 수 없습니다.');
+        return;
+    }
+
+    const rec = currentRecommendations[idx];
+    const confirmMsg = `파라미터 변경을 반영하시겠습니까?\n\n` +
+        `전략: ${rec.strategy}\n` +
+        `파라미터: ${rec.parameter}\n` +
+        `${rec.current_value} → ${rec.suggested_value}\n\n` +
+        `변경 후 봇이 자동 재시작됩니다.`;
+
+    if (!confirm(confirmMsg)) {
+        return;
+    }
+
+    const btn = event.target.closest('.btn-apply');
+    btn.disabled = true;
+    btn.textContent = '적용 중...';
+
+    try {
+        const response = await fetch('/api/evolution/apply', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                strategy: rec.strategy,
+                parameter: rec.parameter,
+                new_value: rec.suggested_value,
+                reason: rec.reason,
+            }),
+        });
+
+        const result = await response.json();
+
+        if (response.ok && result.success) {
+            alert('파라미터가 적용되었습니다.\n봇이 재시작됩니다...');
+            // 3초 후 새로고침 (봇 재시작 대기)
+            setTimeout(() => window.location.reload(), 3000);
+        } else {
+            alert('적용 실패: ' + (result.message || '알 수 없는 오류'));
+            btn.disabled = false;
+            btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> 반영';
+        }
+    } catch (e) {
+        console.error('Apply parameter error:', e);
+        alert('적용 중 오류 발생: ' + e.message);
+        btn.disabled = false;
+        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> 반영';
+    }
 }
 
 // ----------------------------------------------------------

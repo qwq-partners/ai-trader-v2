@@ -540,7 +540,7 @@ class StrategyManager:
                             continue
                         signals.append(SignalEvent.from_signal(signal, source=name))
                 except Exception as e:
-                    logger.error(f"전략 오류 ({name}): {e}")
+                    logger.exception(f"전략 오류 ({name}): {e}")
 
         if signals:
             self.engine.stats.signals_generated += len(signals)

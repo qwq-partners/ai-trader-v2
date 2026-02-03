@@ -124,12 +124,16 @@ class MomentumBreakoutStrategy(BaseStrategy):
             return None
 
         # 중복 신호 방지: 쿨다운 체크
+        if not isinstance(self._last_signal_time, dict):
+            self._last_signal_time = {}
         if symbol in self._last_signal_time:
             elapsed = (datetime.now() - self._last_signal_time[symbol]).total_seconds()
             if elapsed < self._signal_cooldown:
                 return None  # 쿨다운 중
 
         # 손절 후 재진입 방지: 페널티 기간 체크
+        if not isinstance(self._recently_stopped, dict):
+            self._recently_stopped = {}
         if symbol in self._recently_stopped:
             elapsed = (datetime.now() - self._recently_stopped[symbol]).total_seconds()
             if elapsed < self._stop_penalty:

@@ -289,3 +289,196 @@ INITIAL_CAPITAL (기본 500000)
 | 승률 | 44.4% | **63.6%** | **+19.2%p** |
 | 거래 횟수 | 9회 | 11회 | +22% |
 | 손익비 | 1.92:1 | 1.59:1 | -17% |
+
+## 트러블슈팅 가이드
+
+### 1. 포트폴리오 동기화 이슈
+
+#### 근본 원인: KIS API 응답 지연
+- **문제**: 실제 청산 체결 후 몇 분간 API가 이전 상태(보유 중) 반환
+- **증상**: 청산 완료 후에도 포트폴리오에 종목이 남아있는 "유령 포지션" 발생
+- **예시**: 10:00~10:01 청산 체결 → 10:00:45 동기화 시 여전히 "보유 중"으로 응답
+
+#### 해결 방법
+1. **청산 실패 시 실제 보유 수량 재확인** (`run_trader.py` lines 753-771)
+   ```python
+   # 청산 실패 시 실제 보유 수량 재확인 (유령 포지션 제거)
+   actual_positions = await self.broker.get_positions()
+   if symbol not in actual_positions or actual_positions[symbol].quantity == 0:
+       # 유령 포지션 제거
+       del self.engine.portfolio.positions[symbol]
+       self.exit_manager._states.pop(symbol, None)
+   ```
+
+2. **동기화 주기 단축** (`bot_schedulers.py`)
+   - 기존: 5분(300초) → 개선: 2분(120초)
+   - KIS API 응답 지연에 더 빠르게 대응
+
+3. **엔진 일시정지 회피**
+   - 유령 포지션 감지 시 엔진 일시정지 스킵
+   - 실제 보유 종목만 재시도 대상으로 제한
+
+#### 예방 체크리스트
+- [ ] 청산 후 2~3분 이내 포트폴리오 동기화 확인
+- [ ] 유령 포지션 발생 시 자동 제거 로직 정상 작동 확인
+- [ ] 엔진 일시정지 무한 루프 방지 로직 확인
+- [ ] DEBUG 로그로 API 응답 시간 모니터링
+
+---
+
+### 2. WebSocket 중복 프로세스 문제
+
+#### 증상
+- 에러: `"ALREADY IN USE appkey"` (msg_cd=OPSP8996)
+- 원인: 여러 개의 `run_trader.py` 프로세스가 동시 실행되어 동일한 appkey로 WebSocket 연결 시도
+
+#### 해결 방법
+```bash
+# 1. 모든 run_trader.py 프로세스 확인
+ps aux | grep run_trader.py
+
+# 2. 중복 프로세스 전체 종료
+pkill -9 -f "run_trader.py"
+
+# 3. 단일 인스턴스만 재시작
+python scripts/run_trader.py
+```
+
+#### 예방
+- 봇 재시작 전 항상 기존 프로세스 확인
+- systemd나 supervisor 사용 시 중복 실행 방지 설정
+- `.pid` 파일로 단일 인스턴스 보장 (TODO)
+
+---
+
+### 3. 전략 타입 안전성 이슈
+
+#### 증상
+- 에러: `"argument of type 'datetime.datetime' is not iterable"`
+- 원인: 딕셔너리 속성이 datetime 객체로 덮어씌워져 `in` 연산자 사용 시 타입 에러 발생
+
+#### 해결 방법 (`momentum.py` lines 127-140)
+```python
+# 방어적 타입 체크 추가
+if not isinstance(self._last_signal_time, dict):
+    self._last_signal_time = {}
+if symbol in self._last_signal_time:
+    elapsed = (datetime.now() - self._last_signal_time[symbol]).total_seconds()
+    if elapsed < self._signal_cooldown:
+        return None
+
+if not isinstance(self._recently_stopped, dict):
+    self._recently_stopped = {}
+if symbol in self._recently_stopped:
+    elapsed = (datetime.now() - self._recently_stopped[symbol]).total_seconds()
+    if elapsed < self._stop_penalty:
+        return None
+```
+
+#### 예방
+- 클래스 속성 초기화 시 타입 명시 (`Dict[str, datetime]`)
+- 속성 재할당 전 타입 검증
+- 유닛 테스트로 타입 안전성 보장
+
+---
+
+### 4. DEBUG 로그 활성화
+
+#### 언제 사용하나?
+- 익절/손절 로직 디버깅
+- 포트폴리오 동기화 이슈 추적
+- 전략 신호 생성 과정 분석
+- API 응답 지연 측정
+
+#### 활성화 방법
+```bash
+# 실행 시 로그 레벨 지정
+python scripts/run_trader.py --log-level DEBUG
+
+# 또는 config/default.yml 수정
+logging:
+  level: DEBUG  # INFO → DEBUG
+```
+
+#### 주요 DEBUG 로그 포인트
+- `[ExitManager]`: 익절/손절 조건 체크
+- `[Engine]`: 전략 실행 및 신호 처리
+- `[KIS Broker]`: API 요청/응답 상세
+- `[Portfolio]`: 포지션 변경 추적
+- `[청산 실패]`: 청산 재시도 과정
+
+---
+
+### 5. 일반적인 문제 해결
+
+#### 매수가 실행되지 않을 때
+1. **거래 가능 시간 확인**: 09:05~15:20 범위 내인가?
+2. **최소 점수 확인**: 종목 점수 >= 60점?
+3. **리스크 한도 확인**:
+   - 일일 손실 -3% 초과 시 거래 중단
+   - 최대 포지션 10개 도달
+   - 현금 부족 (최소 5% 예비금)
+4. **신호 쿨다운**: 5분 쿨다운 중인가? (momentum 전략)
+5. **손절 페널티**: 30분 재진입 금지 기간인가? (momentum 전략)
+
+#### 체결 확인 안 될 때
+- `check_fills` 스케줄러 정상 동작 확인 (5초 주기)
+- KIS API 접근성 확인 (`broker.get_orders()` 호출)
+- 주문 ID 일치 여부 확인 (로그에서 `order_id` 추적)
+
+#### 익절/손절이 작동하지 않을 때
+1. **ExitManager 활성화 확인**: `config/default.yml`에서 `enabled: true`
+2. **포지션 동기화**: 실제 보유 수량과 봇 포지션 일치 여부
+3. **DEBUG 로그**: `[ExitManager]` 태그로 조건 체크 과정 확인
+4. **ATR 계산**: 충분한 캔들 데이터 수집되었는가? (최소 14봉)
+
+#### 로그 확인 명령어
+```bash
+# 실시간 로그 모니터링
+tail -f logs/$(date +%Y%m%d)/trader_$(date +%Y%m%d).log
+
+# 특정 패턴 검색
+grep "ExitManager" logs/$(date +%Y%m%d)/trader_$(date +%Y%m%d).log
+grep "청산" logs/$(date +%Y%m%d)/trader_$(date +%Y%m%d).log
+grep "ERROR" logs/$(date +%Y%m%d)/trader_$(date +%Y%m%d).log
+```
+
+---
+
+### 6. 긴급 상황 대응
+
+#### 봇이 멈췄을 때
+1. 로그 확인: `tail -100 logs/$(date +%Y%m%d)/trader_$(date +%Y%m%d).log`
+2. 프로세스 상태: `ps aux | grep run_trader.py`
+3. WebSocket 연결: 로그에서 "WebSocket 연결 성공" 확인
+4. 재시작: `pkill -9 -f "run_trader.py" && python scripts/run_trader.py`
+
+#### 손실이 급증할 때
+- 수동으로 엔진 일시정지: 대시보드 또는 직접 프로세스 종료
+- 포지션 수동 청산: KIS HTS 또는 MTS 사용
+- 리스크 한도 재확인: `config/default.yml`의 `max_daily_loss_pct` 설정
+
+#### API 오류가 반복될 때
+- KIS 토큰 갱신: `~/.cache/ai_trader/kis_token_*.json` 삭제 후 재시작
+- API 키 검증: `.env` 파일의 `KIS_APPKEY`, `KIS_APPSECRET` 확인
+- 서비스 점검: KIS Open API 공지사항 확인
+
+---
+
+## 재발 방지 원칙
+
+### 코드 수정 시
+1. **방어적 프로그래밍**: 타입 체크, None 체크, 예외 처리
+2. **DEBUG 로그 먼저**: 문제 재현 → 로그 분석 → 수정
+3. **근본 원인 파악**: 증상이 아닌 원인 해결
+4. **문서화**: CLAUDE.md 업데이트로 지식 축적
+
+### 배포 전
+1. **Dry-run 테스트**: `--dry-run` 모드로 충분히 검증
+2. **로그 레벨 DEBUG**: 첫 실행 시 상세 로그로 모니터링
+3. **단계적 배포**: 파라미터 변경 시 소량으로 시작
+
+### 운영 중
+1. **정기 모니터링**: 포트폴리오 동기화, API 응답 시간
+2. **이상 징후 즉시 대응**: 유령 포지션, 중복 프로세스
+3. **일일 복기**: 로그 검토, 진화 시스템 피드백 확인

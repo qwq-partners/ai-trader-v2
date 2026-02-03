@@ -179,6 +179,41 @@
         .delay-4 { animation-delay: 0.24s; }
         .delay-5 { animation-delay: 0.30s; }
         .delay-6 { animation-delay: 0.36s; }
+
+        /* Recommendation card */
+        .recommendation-card {
+            background: rgba(52,211,153,0.04); border: 1px solid rgba(52,211,153,0.15);
+            border-radius: 12px; padding: 16px; margin-bottom: 12px;
+            transition: all 0.2s;
+        }
+        .recommendation-card:hover {
+            background: rgba(52,211,153,0.06); border-color: rgba(52,211,153,0.25);
+        }
+        .rec-param {
+            font-family: 'JetBrains Mono', monospace; font-size: 0.88rem;
+            color: var(--accent-cyan); font-weight: 500;
+        }
+        .rec-reason {
+            font-size: 0.82rem; color: var(--text-secondary); line-height: 1.6;
+            margin: 8px 0; padding-left: 12px; border-left: 2px solid rgba(52,211,153,0.2);
+        }
+        .btn-apply {
+            padding: 6px 16px; border-radius: 8px; font-size: 0.78rem; font-weight: 600;
+            color: #fff; background: linear-gradient(135deg, var(--accent-green), #10b981);
+            border: none; cursor: pointer; transition: all 0.2s;
+            box-shadow: 0 2px 8px rgba(52,211,153,0.25);
+            display: inline-flex; align-items: center; gap: 6px;
+        }
+        .btn-apply:hover {
+            box-shadow: 0 4px 12px rgba(52,211,153,0.35);
+            transform: translateY(-1px);
+        }
+        .btn-apply:active {
+            transform: translateY(0);
+        }
+        .btn-apply:disabled {
+            opacity: 0.5; cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
@@ -282,11 +317,22 @@
             </div>
         </div>
 
-        <!-- Parameter Changes Table (AS-IS / TO-BE) -->
+        <!-- Parameter Recommendations (AI Suggestions with Apply Button) -->
+        <div class="card animate-in delay-4" style="padding: 24px; margin-bottom: 16px;">
+            <div class="card-header">
+                <span class="dot" style="background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green);"></span>
+                파라미터 추천 (AI 제안)
+            </div>
+            <div id="evo-recommendations">
+                <div style="padding: 20px 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">추천 내용 없음</div>
+            </div>
+        </div>
+
+        <!-- Parameter Changes Table (AS-IS / TO-BE) - Applied Changes -->
         <div class="card animate-in delay-4" style="padding: 24px; margin-bottom: 16px;">
             <div class="card-header">
                 <span class="dot" style="background: var(--accent-cyan); box-shadow: 0 0 8px var(--accent-cyan);"></span>
-                파라미터 변경 (AS-IS / TO-BE)
+                파라미터 변경 (적용된 변경사항)
             </div>
             <div style="overflow-x: auto;">
                 <table class="evo-table" style="width: 100%; text-align: left; border-collapse: collapse;">

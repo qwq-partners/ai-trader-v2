@@ -751,6 +751,26 @@ class TradingBot(SchedulerMixin):
                     if self.engine.risk_manager:
                         self.engine.risk_manager.clear_pending(symbol)
                     logger.error(f"[청산 주문 실패] {symbol} - {result} (3회 시도 후)")
+
+                    # 청산 실패 시 실제 보유 수량 재확인 (유령 포지션 제거)
+                    logger.info(f"[포지션 재확인] {symbol} 실제 보유 수량 조회 중...")
+                    try:
+                        actual_positions = await self.broker.get_positions()
+                        if symbol not in actual_positions or actual_positions[symbol].quantity == 0:
+                            logger.warning(
+                                f"[유령 포지션 제거] {symbol} - 실제 계좌에 없음 (API 응답 지연 의심)"
+                            )
+                            if symbol in self.engine.portfolio.positions:
+                                del self.engine.portfolio.positions[symbol]
+                            if self.exit_manager and hasattr(self.exit_manager, '_states'):
+                                self.exit_manager._states.pop(symbol, None)
+                            # 유령 포지션이었으므로 엔진 일시정지 불필요
+                            logger.info(f"[포지션 정리 완료] {symbol} 유령 포지션 제거됨, 엔진 계속 동작")
+                            return  # 유령 포지션이므로 엔진 일시정지 스킵
+                    except Exception as e:
+                        logger.error(f"[포지션 재확인 실패] {symbol}: {e}")
+
+                    # 실제 보유 중인데 청산 실패한 경우만 엔진 일시정지
                     # 청산 실패는 리스크 급증 → 신규 매수 차단 (5분 후 자동 재개)
                     self.engine.pause()
                     self._pause_resume_at = datetime.now() + timedelta(minutes=5)
@@ -1016,12 +1036,11 @@ class TradingBot(SchedulerMixin):
                                 exit_type = "time_exit"
 
                             self.trade_journal.record_exit(
-                                symbol=fill.symbol,
-                                exit_time=fill.timestamp,
+                                trade_id=fill.symbol,
                                 exit_price=float(fill.price),
-                                quantity=fill.quantity,
+                                exit_quantity=fill.quantity,
+                                exit_reason=reason,
                                 exit_type=exit_type,
-                                pnl=float(pnl)
                             )
                             logger.debug(f"[TradeJournal] 청산 기록: {fill.symbol} {exit_type} {pnl:+,.0f}원")
                         except Exception as je:
@@ -1210,7 +1229,7 @@ class TradingBot(SchedulerMixin):
             if self.broker:
                 tasks.append(asyncio.create_task(self._run_fill_check(), name="fill_checker"))
 
-            # 4-1. 포트폴리오 동기화 루프 (5분마다 KIS API와 동기화)
+            # 4-1. 포트폴리오 동기화 루프 (2분마다 KIS API와 동기화)
             if self.broker:
                 tasks.append(asyncio.create_task(self._run_portfolio_sync(), name="portfolio_sync"))
 

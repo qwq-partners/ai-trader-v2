@@ -438,7 +438,8 @@ class DashboardDataCollector:
                 "confidence": 0,
             },
             "insights": [],
-            "parameter_changes": [],
+            "parameter_adjustments": [],  # AI 추천 (아직 적용 안 됨)
+            "parameter_changes": [],  # 적용된 변경사항
             "avoid_situations": [],
             "focus_opportunities": [],
             "next_week_outlook": "",
@@ -490,24 +491,17 @@ class DashboardDataCollector:
             result["focus_opportunities"] = advice.get("focus_opportunities", [])
             result["next_week_outlook"] = advice.get("next_week_outlook", "")
 
-            # advice에 parameter_adjustments가 있고 evolver에서 못 가져온 경우 보충
-            if not result["parameter_changes"] and advice.get("parameter_adjustments"):
+            # advice에 parameter_adjustments가 있으면 추천으로 추가
+            if advice.get("parameter_adjustments"):
                 for adj in advice["parameter_adjustments"]:
-                    result["parameter_changes"].append({
+                    result["parameter_adjustments"].append({
                         "strategy": adj.get("strategy", ""),
                         "parameter": adj.get("parameter", ""),
-                        "as_is": adj.get("current_value"),
-                        "to_be": adj.get("suggested_value"),
+                        "current_value": adj.get("current_value"),
+                        "suggested_value": adj.get("suggested_value"),
                         "reason": adj.get("reason", ""),
-                        "source": "llm",
                         "confidence": adj.get("confidence"),
                         "expected_impact": adj.get("expected_impact"),
-                        "is_effective": None,
-                        "win_rate_before": None,
-                        "win_rate_after": None,
-                        "trades_before": None,
-                        "trades_after": None,
-                        "timestamp": advice.get("analysis_date"),
                     })
 
         return _serialize(result)
