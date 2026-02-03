@@ -180,14 +180,19 @@ class OpenAIClient(BaseLLMClient):
         try:
             session = await self._get_session()
 
-            # Thinking 모델(gpt-5.2 등)은 max_completion_tokens 사용, temperature 미지원
-            is_thinking = model.startswith("gpt-5") and "mini" not in model
+            # GPT-5 시리즈 모두 max_completion_tokens 사용 (OpenAI API v2 정책)
+            # Thinking 모델(gpt-5.2 등)만 temperature 미지원
+            is_gpt5 = model.startswith("gpt-5")
+            is_thinking_no_temp = is_gpt5 and "mini" not in model
+
             body = {"model": model, "messages": messages}
-            if is_thinking:
+            if is_gpt5:
                 body["max_completion_tokens"] = max_tokens
             else:
-                body["temperature"] = temperature
                 body["max_tokens"] = max_tokens
+
+            if not is_thinking_no_temp:
+                body["temperature"] = temperature
 
             async with session.post(
                 f"{self.base_url}/chat/completions",
