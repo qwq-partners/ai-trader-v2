@@ -385,6 +385,18 @@ class ExitManager:
         """모든 포지션 상태 조회"""
         return self._states.copy()
 
+    def remove_position(self, symbol: str) -> bool:
+        """포지션 상태 제거 (유령 포지션 정리용)
+
+        Returns:
+            bool: 제거 성공 여부
+        """
+        if symbol in self._states:
+            del self._states[symbol]
+            logger.debug(f"[ExitManager] 포지션 상태 제거: {symbol}")
+            return True
+        return False
+
 
 # 전역 인스턴스
 _exit_manager: Optional[ExitManager] = None

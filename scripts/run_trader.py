@@ -87,13 +87,14 @@ class TradingBot(SchedulerMixin):
         self.strategy_evolver = None
 
         # 감시 종목
-        self._watch_symbols: list = []
+        self._watch_symbols: List[str] = []
 
         # 전략별 청산 파라미터 (ExitManager에 전달용)
         self._strategy_exit_params: Dict[str, Dict[str, float]] = {}
         # 종목별 전략 매핑 (ExitManager 등록 시 사용)
         self._symbol_strategy: Dict[str, str] = {}
         # 종목별 신호 정보 (TradeJournal 기록용)
+        # TODO: Signal 타입으로 교체 필요
         self._symbol_signals: Dict[str, Any] = {}
         self._exit_pending_symbols: Set[str] = set()  # ExitManager 매도 중복 방지
         self._exit_pending_timestamps: Dict[str, datetime] = {}  # 매도 pending 타임스탬프
@@ -762,8 +763,8 @@ class TradingBot(SchedulerMixin):
                             )
                             if symbol in self.engine.portfolio.positions:
                                 del self.engine.portfolio.positions[symbol]
-                            if self.exit_manager and hasattr(self.exit_manager, '_states'):
-                                self.exit_manager._states.pop(symbol, None)
+                            if self.exit_manager:
+                                self.exit_manager.remove_position(symbol)
                             # 유령 포지션이었으므로 엔진 일시정지 불필요
                             logger.info(f"[포지션 정리 완료] {symbol} 유령 포지션 제거됨, 엔진 계속 동작")
                             return  # 유령 포지션이므로 엔진 일시정지 스킵
@@ -1357,19 +1358,13 @@ class TradingBot(SchedulerMixin):
             if self.broker and hasattr(self.broker, 'get_nxt_symbols'):
                 nxt_symbols = await self.broker.get_nxt_symbols()
 
-            # 없으면 기본 대형주/ETF 목록 사용
+            # 없으면 설정 파일의 기본 목록 사용
             if not nxt_symbols:
-                # 코스피200 + 주요 ETF (예시)
-                nxt_symbols = [
-                    # 대형주
-                    "005930", "000660", "005380", "035420", "000270",
-                    "005490", "035720", "051910", "006400", "028260",
-                    "207940", "068270", "096770", "003670", "034730",
-                    # 주요 ETF
-                    "069500", "102110", "233740", "114800", "122630",
-                    "252670", "091160", "091170", "229200", "305540",
-                ]
-                logger.info(f"NXT 기본 종목 목록 사용: {len(nxt_symbols)}개")
+                nxt_symbols = self.config.get("nxt_default_symbols", [])
+                if nxt_symbols:
+                    logger.info(f"NXT 기본 종목 목록 사용 (설정 파일): {len(nxt_symbols)}개")
+                else:
+                    logger.warning("NXT 기본 종목 목록 없음")
 
             if self.ws_feed:
                 self.ws_feed.set_nxt_symbols(nxt_symbols)
