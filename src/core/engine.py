@@ -26,7 +26,8 @@ from .event import (
 )
 from .types import (
     Order, Fill, Position, Portfolio, Signal, RiskMetrics,
-    OrderSide, OrderStatus, OrderType, TradingConfig, RiskConfig, MarketSession
+    OrderSide, OrderStatus, OrderType, TradingConfig, RiskConfig, MarketSession,
+    StrategyType, TimeHorizon
 )
 
 
@@ -775,8 +776,6 @@ class RiskManager:
         Returns:
             (base_position_pct, max_position_pct, pool_equity) 튜플
         """
-        from ..core.types import TimeHorizon
-
         # 전략 → 타임 호라이즌 매핑
         strategy_horizon_map = {
             StrategyType.MOMENTUM_BREAKOUT: TimeHorizon.SWING,
