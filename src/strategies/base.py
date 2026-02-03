@@ -5,6 +5,7 @@ AI Trading Bot v2 - 전략 베이스 클래스
 """
 
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -59,9 +60,9 @@ class BaseStrategy(ABC):
         self._signals_generated: int = 0
         self._last_signal_time: Optional[datetime] = None
 
-        # 데이터 캐시 (최대 500 종목 - 오래된 항목 자동 제거)
-        self._price_history: Dict[str, List[Price]] = {}
-        self._indicators: Dict[str, Dict[str, float]] = {}
+        # 데이터 캐시 (LRU: 최대 500 종목, 오래 미접근 종목 자동 제거)
+        self._price_history: OrderedDict[str, List[Price]] = OrderedDict()
+        self._indicators: OrderedDict[str, Dict[str, float]] = OrderedDict()
         self._max_cache_symbols = 500
 
         # 지표 재계산 방지용: 종목별 마지막 캔들 타임스탬프 / 마지막 계산 시각
@@ -177,8 +178,9 @@ class BaseStrategy(ABC):
 
         symbol = symbol.zfill(6)
         self._price_history[symbol] = list(prices)
+        self._price_history.move_to_end(symbol)  # LRU 갱신
 
-        # 지표 사전 계산
+        # 지표 사전 계산 (내부에서 LRU 갱신 및 evict 처리)
         self._calculate_indicators(symbol)
         logger.debug(f"[{self.name}] {symbol} 히스토리 {len(prices)}일 로드, 지표 계산 완료")
 
@@ -204,6 +206,8 @@ class BaseStrategy(ABC):
                 if price.low < last.low:
                     last.low = price.low
                 last.volume = price.volume
+                # LRU 갱신: 접근한 종목을 최신으로 이동
+                self._price_history.move_to_end(symbol)
                 return
             else:
                 # 새로운 날짜면 새 캔들 추가
@@ -214,6 +218,9 @@ class BaseStrategy(ABC):
         # 최대 200개 유지
         if len(history) > 200:
             self._price_history[symbol] = history[-200:]
+
+        # LRU 갱신
+        self._price_history.move_to_end(symbol)
 
     def _get_elapsed_trading_fraction(self) -> float:
         """
@@ -337,16 +344,22 @@ class BaseStrategy(ABC):
         all_highs = [float(p.high) for p in history]
         indicators["high_52w"] = max(all_highs) if all_highs else closes[-1]
 
-        # LRU 갱신: 삭제 후 재삽입으로 맨 끝(최신)으로 이동
-        self._indicators.pop(symbol, None)
+        # 지표 저장 및 LRU 갱신
         self._indicators[symbol] = indicators
+        self._indicators.move_to_end(symbol)
 
         # 캐시 크기 제한 (LRU: 가장 오래 미접근 종목부터 제거)
-        if len(self._indicators) > self._max_cache_symbols:
-            excess = len(self._indicators) - self._max_cache_symbols
-            for key in list(self._indicators.keys())[:excess]:
-                del self._indicators[key]
-                self._price_history.pop(key, None)
+        self._evict_lru_if_needed()
+
+    def _evict_lru_if_needed(self):
+        """LRU 캐시 크기 제한 적용 (오래 미접근 종목부터 제거)"""
+        while len(self._indicators) > self._max_cache_symbols:
+            # OrderedDict의 첫 번째 항목 = 가장 오래 미접근
+            oldest_symbol = next(iter(self._indicators))
+            del self._indicators[oldest_symbol]
+            self._price_history.pop(oldest_symbol, None)
+            self._last_candle_ts.pop(oldest_symbol, None)
+            self._last_calc_time.pop(oldest_symbol, None)
 
     def _calculate_rsi(self, prices: List[float], period: int = 14) -> float:
         """
@@ -383,8 +396,14 @@ class BaseStrategy(ABC):
         return 100 - (100 / (1 + rs))
 
     def get_indicators(self, symbol: str) -> Dict[str, float]:
-        """지표 조회"""
-        return self._indicators.get(symbol, {})
+        """지표 조회 (LRU 갱신)"""
+        indicators = self._indicators.get(symbol, {})
+        if symbol in self._indicators:
+            # LRU 갱신: 접근한 종목을 최신으로 이동
+            self._indicators.move_to_end(symbol)
+            if symbol in self._price_history:
+                self._price_history.move_to_end(symbol)
+        return indicators
 
     def get_stats(self) -> Dict[str, Any]:
         """전략 통계"""

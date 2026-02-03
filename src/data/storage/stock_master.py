@@ -224,14 +224,11 @@ class StockMaster:
             stock["kospi200_yn"] = "Y" if ticker in kospi200 else "N"
             stock["kosdaq150_yn"] = "Y" if ticker in kosdaq150 else "N"
 
-        # DB에 저장 (전체 교체)
+        # DB에 저장 (UPSERT: 증분 갱신)
         try:
             async with self.pool.acquire() as conn:
                 async with conn.transaction():
-                    # 기존 데이터 삭제
-                    await conn.execute("DELETE FROM kr_stock_master")
-
-                    # 새 데이터 삽입
+                    # UPSERT: 종목 정보 삽입 또는 업데이트
                     rows = [
                         (
                             s["ticker"],
@@ -240,7 +237,7 @@ class StockMaster:
                             s["corp_cls"],
                             s["kospi200_yn"],
                             s["kosdaq150_yn"],
-                            datetime.now(),  # timezone-naive로 수정
+                            datetime.now(),  # timezone-naive
                         )
                         for s in unique_stocks.values()
                     ]
@@ -250,6 +247,13 @@ class StockMaster:
                         INSERT INTO kr_stock_master
                         (ticker, corp_name, market, corp_cls, kospi200_yn, kosdaq150_yn, updated_at)
                         VALUES ($1, $2, $3, $4, $5, $6, $7)
+                        ON CONFLICT (ticker) DO UPDATE SET
+                            corp_name = EXCLUDED.corp_name,
+                            market = EXCLUDED.market,
+                            corp_cls = EXCLUDED.corp_cls,
+                            kospi200_yn = EXCLUDED.kospi200_yn,
+                            kosdaq150_yn = EXCLUDED.kosdaq150_yn,
+                            updated_at = EXCLUDED.updated_at
                         """,
                         rows,
                     )
@@ -300,6 +304,59 @@ class StockMaster:
             await self._load_cache()
 
         return code in self._ticker_set
+
+    async def validate_tickers_batch(self, codes: List[str]) -> Set[str]:
+        """코드 배치 검증
+
+        Args:
+            codes: 검증할 종목코드 리스트
+
+        Returns:
+            유효한 종목코드 집합
+        """
+        await self._ensure_connected()
+
+        if not self._cache_loaded:
+            await self._load_cache()
+
+        return {code for code in codes if code in self._ticker_set}
+
+    async def lookup_tickers_batch(self, names: List[str]) -> Dict[str, str]:
+        """종목명 배치 변환
+
+        Args:
+            names: 종목명 리스트
+
+        Returns:
+            {종목명: 종목코드} 딕셔너리
+        """
+        await self._ensure_connected()
+
+        if not self._cache_loaded:
+            await self._load_cache()
+
+        result = {}
+        not_found = []
+
+        # 1차: 캐시에서 정확 매칭
+        for name in names:
+            if name in self._name_cache:
+                result[name] = self._name_cache[name]
+            else:
+                not_found.append(name)
+
+        # 2차: ILIKE 검색 (캐시 미스만)
+        if not_found:
+            async with self.pool.acquire() as conn:
+                for name in not_found:
+                    row = await conn.fetchrow(
+                        "SELECT ticker FROM kr_stock_master WHERE corp_name ILIKE $1 LIMIT 1",
+                        name,
+                    )
+                    if row:
+                        result[name] = row["ticker"]
+
+        return result
 
     async def get_top_stocks(self, limit: int = 80) -> List[str]:
         """KOSPI200 + KOSDAQ150 종목 (LLM 힌트용)"""

@@ -48,6 +48,16 @@ risk:
 
 # 전략 설정
 strategies:
+  # 전략 공통 기본값 (각 전략은 이 값을 상속하고, 필요 시 오버라이드)
+  defaults:
+    holding_period_days: 5       # 기본 보유 기간 (스윙)
+    stop_loss_pct: 8.0           # 기본 손절 (스윙 변동성 수용)
+    take_profit_pct: 20.0        # 기본 익절 (트렌드 완주)
+    trailing_stop_pct: 5.0       # 기본 트레일링 스탑
+    min_volume_ratio: 2.0        # 기본 거래량 비율
+    min_score: 60.0              # 기본 최소 신호 점수
+    position_size_multiplier: 1.0  # 기본 포지션 크기 배율
+
   # 모멘텀 브레이크아웃 (주력 전략: 진짜 스윙 3~7일)
   momentum_breakout:
     enabled: true  # 주력 활성화
