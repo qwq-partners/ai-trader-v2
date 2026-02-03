@@ -146,6 +146,25 @@ class CodeEvolver:
                     f"변경 파일 {len(changed_files)}개 > 최대 {self.max_changed_files}개 — 거부"
                 )
 
+            # 5-1. 금지된 파일 변경 감지
+            forbidden_patterns = [
+                "config/default.yml",
+                "config/production.yml",
+                ".env",
+                "requirements.txt",
+                "pyproject.toml",
+                "setup.py",
+                "docker-compose.yml",
+            ]
+            forbidden_changes = [
+                f for f in changed_files
+                if any(pattern in f for pattern in forbidden_patterns)
+            ]
+            if forbidden_changes:
+                raise RuntimeError(
+                    f"금지된 파일 변경 감지: {', '.join(forbidden_changes)}"
+                )
+
             # 6. py_compile 검증
             compile_errors = self._verify_syntax(changed_files)
             if compile_errors:
@@ -239,6 +258,7 @@ class CodeEvolver:
             "trading_performance": {},
             "evolution_failures": [],
             "recent_errors": [],
+            "error_patterns": {},  # 에러 패턴 분석
         }
 
         # 거래 성과 수집
@@ -270,24 +290,43 @@ class CodeEvolver:
         except Exception as e:
             logger.debug(f"[코드진화] 진화 이력 수집 실패: {e}")
 
-        # 최근 에러 로그 수집
+        # 최근 에러 로그 수집 + 패턴 분석
         try:
             log_dir = self.project_root / "logs"
             if log_dir.exists():
-                # 가장 최근 로그 디렉토리
+                error_counts = {}  # 에러 메시지 -> 발생 횟수
+
+                # 가장 최근 로그 디렉토리 (최근 3일)
                 log_dirs = sorted(log_dir.iterdir(), reverse=True)
                 for ld in log_dirs[:3]:
-                    for log_file in ld.glob("*.log"):
+                    if not ld.is_dir():
+                        continue
+                    for log_file in ld.glob("error_*.log"):  # error 로그만
                         try:
                             content = log_file.read_text(encoding="utf-8", errors="ignore")
-                            errors = [
-                                line.strip() for line in content.split("\n")
-                                if "ERROR" in line or "CRITICAL" in line
-                            ]
-                            context["recent_errors"].extend(errors[-5:])
+                            for line in content.split("\n"):
+                                if "ERROR" in line or "CRITICAL" in line:
+                                    # 에러 메시지 추출 (파일:라인:메시지 형식)
+                                    parts = line.split(" | ")
+                                    if len(parts) >= 3:
+                                        error_msg = parts[-1].strip()
+                                        # 에러 메시지 정규화 (숫자/ID 제거)
+                                        normalized = error_msg[:100]
+                                        error_counts[normalized] = error_counts.get(normalized, 0) + 1
+
+                                        # 최근 에러도 저장 (중복 제거)
+                                        if len(context["recent_errors"]) < 10:
+                                            context["recent_errors"].append(line.strip())
                         except Exception:
                             pass
-                context["recent_errors"] = context["recent_errors"][:10]
+
+                # 에러 패턴 분석: 반복 발생 에러 식별
+                if error_counts:
+                    # 발생 횟수 기준 정렬
+                    sorted_errors = sorted(error_counts.items(), key=lambda x: x[1], reverse=True)
+                    context["error_patterns"] = {
+                        msg: count for msg, count in sorted_errors[:5] if count > 1
+                    }
         except Exception as e:
             logger.debug(f"[코드진화] 에러 로그 수집 실패: {e}")
 
@@ -298,6 +337,7 @@ class CodeEvolver:
         perf = context.get("trading_performance", {})
         failures = context.get("evolution_failures", [])
         errors = context.get("recent_errors", [])
+        error_patterns = context.get("error_patterns", {})
 
         prompt_parts = [
             "# AI Trading Bot v2 코드 개선 요청",
@@ -306,7 +346,7 @@ class CodeEvolver:
             "한국 주식 시장 자동 매매 봇입니다.",
             "일 1% 수익률을 목표로 모멘텀/테마/갭/평균회귀 전략을 사용합니다.",
             "",
-            "## 현재 거래 성과",
+            "## 현재 거래 성과 (최근 2주)",
             f"- 총 거래: {perf.get('total_trades', 'N/A')}건",
             f"- 승률: {perf.get('win_rate', 'N/A')}%",
             f"- 손익비: {perf.get('profit_factor', 'N/A')}",
@@ -314,12 +354,17 @@ class CodeEvolver:
         ]
 
         if perf.get("issues"):
-            prompt_parts.append("\n## 식별된 문제점")
+            prompt_parts.append("\n## 식별된 문제점 (자동 분석)")
             for issue in perf["issues"]:
                 prompt_parts.append(f"- {issue}")
 
+        if error_patterns:
+            prompt_parts.append("\n## 반복 발생 에러 (우선 수정 필요)")
+            for error_msg, count in error_patterns.items():
+                prompt_parts.append(f"- [{count}회] {error_msg[:150]}")
+
         if failures:
-            prompt_parts.append("\n## 파라미터 진화 실패 이력 (최근)")
+            prompt_parts.append("\n## 파라미터 진화 실패 이력 (참고)")
             for f in failures[:3]:
                 prompt_parts.append(
                     f"- {f.get('strategy','')}.{f.get('parameter','')}: "
@@ -327,27 +372,49 @@ class CodeEvolver:
                     f"(사유: {f.get('reason','')})"
                 )
 
-        if errors:
-            prompt_parts.append("\n## 최근 에러 로그")
-            for err in errors[:5]:
-                prompt_parts.append(f"- {err[:200]}")
+        if errors and not error_patterns:
+            prompt_parts.append("\n## 최근 에러 로그 (샘플)")
+            for err in errors[:3]:
+                prompt_parts.append(f"- {err[:150]}")
 
         prompt_parts.extend([
             "",
-            "## 개선 요청",
-            "위 데이터를 분석하여 다음 중 가장 효과적인 개선을 1~3가지 수행해주세요:",
-            "1. 전략 로직 개선 (진입/청산 조건 최적화)",
-            "2. 리스크 관리 강화 (연속 손실 방지, 포지션 사이징)",
-            "3. 버그 수정 (에러 로그 기반)",
-            "4. 신호 품질 향상 (필터 추가, 노이즈 제거)",
+            "## 개선 우선순위",
+            "위 데이터를 분석하여 다음 우선순위로 개선해주세요:",
             "",
-            "## 제약 조건 (필수)",
-            "- src/ 디렉토리 내 Python 파일만 수정",
-            "- 변경 파일 10개 이하",
-            "- 기존 인터페이스(함수 시그니처, 클래스 구조) 유지",
-            "- config/default.yml 수정 금지",
-            "- 새 의존성 추가 금지",
-            "- 각 변경에 주석으로 변경 사유 기록",
+            "**1순위: 버그 수정** (반복 발생 에러가 있는 경우)",
+            "- 에러 패턴을 분석하여 근본 원인 파악",
+            "- Traceback이 가리키는 파일/함수 수정",
+            "- 방어 코드 추가 (None 체크, 타입 검증 등)",
+            "",
+            "**2순위: 거래 성과 개선** (승률 < 45% 또는 손익비 < 1.5인 경우)",
+            "- 전략 진입/청산 조건 최적화",
+            "- 손절/익절 로직 강화",
+            "- 신호 품질 필터 추가 (거래량, 변동성 체크)",
+            "",
+            "**3순위: 리스크 관리** (문제점이 식별된 경우)",
+            "- 연속 손실 방지 로직",
+            "- 포지션 사이징 개선",
+            "- 일일 손실 한도 강화",
+            "",
+            "**4순위: 코드 품질** (다른 이슈가 없는 경우)",
+            "- 중복 코드 제거",
+            "- 타입 힌트 추가",
+            "- 로깅 개선",
+            "",
+            "## 제약 조건 (필수 준수)",
+            "- ✅ src/ 디렉토리 내 Python 파일만 수정",
+            "- ✅ 변경 파일 10개 이하",
+            "- ✅ 기존 인터페이스(함수 시그니처, 클래스 이름, 메서드 이름) 유지",
+            "- ❌ config/default.yml, requirements.txt, .env 수정 금지",
+            "- ❌ 새 패키지 의존성 추가 금지",
+            "- ❌ 데이터베이스 스키마 변경 금지",
+            "- 📝 각 변경에 주석으로 변경 사유 기록 필수",
+            "",
+            "## 기대 결과",
+            "1~3개의 구체적인 개선 완료",
+            "py_compile 통과",
+            "기존 기능 유지",
         ])
 
         return "\n".join(prompt_parts)
