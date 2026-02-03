@@ -765,6 +765,48 @@ class RiskManager:
 
         return None
 
+    def _get_hybrid_params(self, strategy: StrategyType, total_equity: Decimal) -> tuple[float, float, Decimal]:
+        """하이브리드 모드: 전략별 타임 호라이즌에 따른 자금 풀 파라미터 반환
+
+        Args:
+            strategy: 전략 타입
+            total_equity: 총 자산
+
+        Returns:
+            (base_position_pct, max_position_pct, pool_equity) 튜플
+        """
+        from ..core.types import TimeHorizon
+
+        # 전략 → 타임 호라이즌 매핑
+        strategy_horizon_map = {
+            StrategyType.MOMENTUM_BREAKOUT: TimeHorizon.SWING,
+            StrategyType.GAP_AND_GO: TimeHorizon.SWING,
+            StrategyType.THEME_CHASING: TimeHorizon.SHORT_TERM,
+            StrategyType.MEAN_REVERSION: TimeHorizon.DAY,
+            StrategyType.SCALPING: TimeHorizon.DAY,
+        }
+
+        time_horizon = strategy_horizon_map.get(strategy, TimeHorizon.SWING)
+        hybrid = self.config.hybrid
+
+        # 타임 호라이즌별 파라미터
+        if time_horizon == TimeHorizon.DAY:
+            pool_pct = hybrid.day_trading_pct / 100
+            base_pct = hybrid.day_base_position_pct / 100
+            max_pct = hybrid.day_max_position_pct / 100
+        elif time_horizon == TimeHorizon.SHORT_TERM:
+            pool_pct = hybrid.short_term_pct / 100
+            base_pct = hybrid.short_term_base_position_pct / 100
+            max_pct = hybrid.short_term_max_position_pct / 100
+        else:  # SWING
+            pool_pct = hybrid.swing_pct / 100
+            base_pct = hybrid.swing_base_position_pct / 100
+            max_pct = hybrid.swing_max_position_pct / 100
+
+        pool_equity = total_equity * Decimal(str(pool_pct))
+
+        return base_pct, max_pct, pool_equity
+
     def _calculate_position_size(self, signal: SignalEvent) -> int:
         """포지션 크기 계산 (자본 활용률 최적화, 분할익절 최소 수량 보장)"""
         equity = self.engine.portfolio.total_equity
@@ -773,8 +815,14 @@ class RiskManager:
         if price <= 0 or equity <= 0:
             return 0
 
-        # 설정 기반 기본 비율 (RiskConfig.base_position_pct)
-        base_pct = self.config.base_position_pct / 100
+        # 하이브리드 모드: 타임 호라이즌별 자금 풀 사용
+        if self.config.hybrid.enabled:
+            base_pct, max_pct, pool_equity = self._get_hybrid_params(signal.strategy, equity)
+        else:
+            # 기존 방식
+            base_pct = self.config.base_position_pct / 100
+            max_pct = self.config.max_position_pct / 100
+            pool_equity = equity
 
         # 신호 강도에 따른 조정
         multiplier = {
@@ -784,9 +832,9 @@ class RiskManager:
             "weak": 0.5
         }.get(signal.strength.value, 1.0)
 
-        # 비율 기반 포지션 금액
-        position_pct = min(base_pct * multiplier, self.config.max_position_pct / 100)
-        pct_value = equity * Decimal(str(position_pct))
+        # 비율 기반 포지션 금액 (풀 내에서 계산)
+        position_pct = min(base_pct * multiplier, max_pct)
+        pct_value = pool_equity * Decimal(str(position_pct))
 
         # 가용 현금 (수수료 여유분, 예약 현금 차감)
         available = self.engine.get_available_cash() - self._reserved_cash

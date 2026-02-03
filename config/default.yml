@@ -45,6 +45,22 @@ risk:
   hot_theme_position_pct: 50.0   # 핫 테마 시 최대 포지션 50% (70→50: 테마 집중 리스크 완화)
   momentum_multiplier: 1.5       # 강한 모멘텀 시 배팅 증가
 
+  # === 하이브리드 전략 (타임 호라이즌별 자금 배분) ===
+  hybrid:
+    enabled: true               # 하이브리드 모드 활성화
+    day_trading_pct: 20.0       # 데이 트레이딩 자금 20%
+    short_term_pct: 30.0        # 단기 전략 자금 30%
+    swing_pct: 50.0             # 스윙 전략 자금 50%
+
+    # 타임 호라이즌별 포지션 크기
+    day_base_position_pct: 10.0         # 데이: 작은 포지션 (빠른 회전)
+    short_term_base_position_pct: 15.0  # 단기: 중간 포지션
+    swing_base_position_pct: 18.0       # 스윙: 큰 포지션 (집중 투자)
+
+    day_max_position_pct: 20.0          # 데이: 최대 20%
+    short_term_max_position_pct: 30.0   # 단기: 최대 30%
+    swing_max_position_pct: 35.0        # 스윙: 최대 35%
+
 
 # 전략 설정
 strategies:
@@ -61,6 +77,7 @@ strategies:
   # 모멘텀 브레이크아웃 (주력 전략: 진짜 스윙 3~7일)
   momentum_breakout:
     enabled: true  # 주력 활성화
+    time_horizon: swing          # 타임 호라이즌: 스윙 (50% 자금 풀)
     holding_period_days: 5       # 목표 보유 기간 5일 (스윙)
     breakout_period: 20          # 돌파 기준 기간 (일)
     confirm_candles: 2           # 돌파 확인 캔들 수
@@ -76,21 +93,23 @@ strategies:
     # 청산 조건 (진짜 스윙: 대폭 확대)
     stop_loss_pct: 8.0           # 3→8: 일중 변동성 흡수
     take_profit_pct: 20.0        # 7→20: 트렌드 완주
-    trailing_stop_pct: 5.0       # 3→5: 고점 대비 5% 하락 허용
+    trailing_stop_pct: 7.0       # 5→7: 스윙 트레일링 스탑 (하이브리드 전략)
 
-  # 테마 추종 (중기 2~4일로 확대)
+  # 테마 추종 (단기 2~4일)
   theme_chasing:
-    enabled: true                # 활성화 (중기 전략)
-    holding_period_days: 3       # 목표 보유 기간 3일 (2→3: 스윙 전환)
+    enabled: true                # 활성화 (단기 전략)
+    time_horizon: short_term     # 타임 호라이즌: 단기 (30% 자금 풀)
+    holding_period_days: 3       # 목표 보유 기간 3일 (단기)
     min_theme_score: 70
     entry_window_minutes: 30
-    stop_loss_pct: 6.0           # 2.5→6: 스윙 변동성 수용
+    stop_loss_pct: 6.0           # 2.5→6: 변동성 수용
     take_profit_pct: 15.0        # 5→15: 테마 지속 수익 확대
-    trailing_stop_pct: 4.0       # 2→4: 중기 여유 확보
+    trailing_stop_pct: 3.0       # 4→3: 단기 트레일링 스탑 (하이브리드 전략)
 
   # 갭상승 추종 (진짜 스윙 3~7일)
   gap_and_go:
     enabled: true                # 활성화 (스윙 전략)
+    time_horizon: swing          # 타임 호라이즌: 스윙 (50% 자금 풀)
     holding_period_days: 5       # 목표 보유 기간 5일 (스윙)
     min_gap_pct: 2.0
     max_gap_pct: 10.0
@@ -99,17 +118,19 @@ strategies:
     min_volume_ratio: 2.8        # 2.0→2.8: 거래량 확인 강화
     stop_loss_pct: 8.0           # 3→8: 일중 변동성 흡수
     take_profit_pct: 20.0        # 7→20: 트렌드 완주
-    trailing_stop_pct: 5.0       # 3→5: 고점 대비 5% 하락 허용
+    trailing_stop_pct: 7.0       # 5→7: 스윙 트레일링 스탑 (하이브리드 전략)
 
   # 평균 회귀 (급락 반등, 보조 전략)
   mean_reversion:
     enabled: false  # 보호 모드: 비활성화
+    time_horizon: day            # 타임 호라이즌: 데이 (20% 자금 풀)
+    holding_period_days: 1       # 목표 보유 기간 1일 (데이 트레이딩)
     max_rsi: 30.0
     min_decline_pct: -10.0
     min_volume_ratio: 1.5
     stop_loss_pct: 3.0           # 유지: 역추세 특성상 넓은 SL 필요
     take_profit_pct: 5.0
-    trailing_stop_pct: 2.0
+    trailing_stop_pct: 2.0       # 데이 트레이딩: 빠른 청산
     position_size_multiplier: 0.5  # 포지션 절반 (역추세 리스크 관리)
 
 

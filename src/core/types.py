@@ -86,6 +86,13 @@ class StrategyType(str, Enum):
     SCALPING = "scalping"
 
 
+class TimeHorizon(str, Enum):
+    """전략 타임 호라이즌 (보유 기간)"""
+    DAY = "day"                # 데이 트레이딩 (1일 이내)
+    SHORT_TERM = "short_term"  # 단기 (2-4일)
+    SWING = "swing"            # 스윙 (5-10일)
+
+
 # ============================================================
 # 데이터 클래스 (Data Classes)
 # ============================================================
@@ -407,6 +414,24 @@ class RiskMetrics:
 # ============================================================
 
 @dataclass
+class HybridConfig:
+    """하이브리드 전략 설정 (타임 호라이즌별 자금 배분)"""
+    enabled: bool = False                 # 하이브리드 모드 활성화
+    day_trading_pct: float = 20.0        # 데이 트레이딩 자금 비율 (%)
+    short_term_pct: float = 30.0         # 단기 전략 자금 비율 (%)
+    swing_pct: float = 50.0              # 스윙 전략 자금 비율 (%)
+
+    # 타임 호라이즌별 포지션 설정
+    day_base_position_pct: float = 10.0      # 데이: 작은 포지션 (빠른 회전)
+    short_term_base_position_pct: float = 15.0  # 단기: 중간 포지션
+    swing_base_position_pct: float = 20.0    # 스윙: 큰 포지션 (집중 투자)
+
+    day_max_position_pct: float = 20.0
+    short_term_max_position_pct: float = 30.0
+    swing_max_position_pct: float = 40.0
+
+
+@dataclass
 class RiskConfig:
     """리스크 설정"""
     # 일일 한도
@@ -429,6 +454,9 @@ class RiskConfig:
     # 특별 상황
     hot_theme_position_pct: float = 50.0
     momentum_multiplier: float = 1.5
+
+    # 하이브리드 전략
+    hybrid: HybridConfig = field(default_factory=HybridConfig)
 
 
 @dataclass
