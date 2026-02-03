@@ -239,7 +239,7 @@ class StockMaster:
                         s["corp_cls"],
                         s["kospi200_yn"],
                         s["kosdaq150_yn"],
-                        datetime.now(timezone.utc),
+                        datetime.now(),  # timezone-naive로 수정
                     )
                     for s in unique_stocks.values()
                 ]
