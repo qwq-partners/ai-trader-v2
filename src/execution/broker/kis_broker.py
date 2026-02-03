@@ -1233,6 +1233,9 @@ class KISBroker(BaseBroker):
                             commission=self.calculate_commission(
                                 order.side, new_qty, Decimal(str(ccld_price))
                             ),
+                            strategy=order.strategy,
+                            reason=order.reason,
+                            signal_score=order.signal_score,
                         )
                         fills.append(fill)
 

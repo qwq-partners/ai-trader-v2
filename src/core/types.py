@@ -167,6 +167,7 @@ class Order:
 
     strategy: Optional[str] = None         # 전략명
     reason: Optional[str] = None           # 주문 사유
+    signal_score: Optional[float] = None   # 신호 점수
 
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: Optional[datetime] = None
@@ -193,6 +194,11 @@ class Fill:
     price: Decimal
     commission: Decimal = Decimal("0")
     timestamp: datetime = field(default_factory=datetime.now)
+
+    # 추가 메타데이터 (거래 저널용)
+    strategy: Optional[str] = None         # 전략명
+    reason: Optional[str] = None           # 체결 사유
+    signal_score: Optional[float] = None   # 신호 점수
 
     @property
     def total_value(self) -> Decimal:

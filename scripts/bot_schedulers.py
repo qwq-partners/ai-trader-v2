@@ -278,10 +278,10 @@ class SchedulerMixin:
 
                                     # 거래 로그에 기록 (복기용)
                                     trading_logger.log_evolution(
-                                        overall=result.overall_assessment,
+                                        assessment=result.overall_assessment,
                                         confidence=result.confidence_score,
                                         insights=result.key_insights,
-                                        adjustments=[
+                                        parameter_changes=[
                                             {
                                                 "parameter": p.parameter,
                                                 "from": p.current_value,

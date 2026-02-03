@@ -186,10 +186,8 @@ class OpenAIClient(BaseLLMClient):
             is_thinking_no_temp = is_gpt5 and "mini" not in model
 
             body = {"model": model, "messages": messages}
-            if is_gpt5:
-                body["max_completion_tokens"] = max_tokens
-            else:
-                body["max_tokens"] = max_tokens
+            # OpenAI API 최신 권장: 모든 모델에서 max_completion_tokens 사용
+            body["max_completion_tokens"] = max_tokens
 
             if not is_thinking_no_temp:
                 body["temperature"] = temperature

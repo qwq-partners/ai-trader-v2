@@ -1143,12 +1143,22 @@ class TradingBot(SchedulerMixin):
                     if hasattr(self.strategy_manager, '_indicators'):
                         indicators = self.strategy_manager._indicators.get(fill.symbol, {})
 
+                    # 청산 타입 결정 (reason 문자열 기반 추론)
+                    reason = getattr(fill, 'reason', '')
+                    exit_type = "unknown"
+                    if "손절" in reason:
+                        exit_type = "stop_loss"
+                    elif "익절" in reason or "트레일링" in reason:
+                        exit_type = "take_profit"
+                    elif "시간" in reason or "종료" in reason:
+                        exit_type = "time_exit"
+
                     self.trade_journal.record_exit(
                         trade_id=trade.id,
                         exit_price=float(fill.price),
                         exit_quantity=fill.quantity,
-                        exit_reason=getattr(fill, 'reason', ''),
-                        exit_type=getattr(fill, 'exit_type', 'unknown'),
+                        exit_reason=reason,
+                        exit_type=exit_type,
                         indicators=indicators,
                     )
 

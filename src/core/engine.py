@@ -679,7 +679,8 @@ class RiskManager:
             quantity=position_size,
             price=event.price,
             strategy=event.strategy.value,
-            reason=event.reason
+            reason=event.reason,
+            signal_score=event.score
         )
 
         # 리스크 체크 (SELL은 포지션 축소이므로 체크 스킵)

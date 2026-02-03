@@ -3,14 +3,18 @@ AI Trading Bot v2 - 분할 익절/청산 관리자
 
 포지션별로 분할 익절을 관리합니다.
 
-분할 익절 전략 (3단계):
-1. +2% 도달 → 25% 익절 (빠른 수익 확보)
-2. +4% 도달 → 35% 추가 익절 (안정적 수익)
-3. +6% 도달 → 20% 추가 익절 (큰 수익 추구)
+분할 익절 전략 (3단계) - 개선 버전:
+1. +3.5% 도달 → 25% 익절 (수수료 감안 실질 수익 확보)
+2. +5.5% 도달 → 35% 추가 익절 (안정적 수익)
+3. +8.0% 도달 → 20% 추가 익절 (큰 수익 추구)
 4. 나머지 20% → 트레일링 스탑으로 수익 극대화
 
+트레일링 스탑:
+- 활성화: +4.5% 이상 수익 시 (충분한 수익 후 보호 시작)
+- 청산: 고점 대비 -2.5% 하락 시 (일중 변동성 흡수)
+
 ATR 기반 동적 손절:
-- 변동성 낮음(ATR 1%) → 2.5% 손절
+- 변동성 낮음(ATR 1%) → 3.0% 손절
 - 변동성 보통(ATR 2%) → 4.0% 손절
 - 변동성 높음(ATR 3%+) → 5.0% 손절 (상한)
 
@@ -45,27 +49,27 @@ class ExitConfig:
     enable_partial_exit: bool = True
 
     # 1차 익절 (25%) — 빠른 수익 확보
-    first_exit_pct: float = 2.0       # 목표 수익률 (%)
+    first_exit_pct: float = 3.5       # 목표 수익률 (%) [2.0→3.5: 수수료 감안 실질 수익 확보]
     first_exit_ratio: float = 0.25    # 청산 비율 (25%)
 
     # 2차 익절 (35% 추가 = 전체 60%)
-    second_exit_pct: float = 4.0      # 목표 수익률 (%)
+    second_exit_pct: float = 5.5      # 목표 수익률 (%) [4.0→5.5: 단계 간격 확대]
     second_exit_ratio: float = 0.47   # 남은 75%의 47% = 전체의 35%
 
     # 3차 익절 (20% 추가 = 전체 80%)
-    third_exit_pct: float = 6.0       # 목표 수익률 (%)
+    third_exit_pct: float = 8.0       # 목표 수익률 (%) [6.0→8.0: 큰 수익 추구]
     third_exit_ratio: float = 0.5     # 남은 40%의 50% = 전체의 20%
 
     # 손절 — ATR 기반 동적 손절
-    stop_loss_pct: float = 2.5        # 기본 손실률 (%), ATR 없을 때 사용
+    stop_loss_pct: float = 3.0        # 기본 손실률 (%) [2.5→3.0: 일중 변동성 흡수]
     enable_dynamic_stop: bool = True  # ATR 기반 동적 손절 활성화
     atr_multiplier: float = 2.0       # ATR 배수
-    min_stop_pct: float = 2.5         # 최소 손절폭 (%)
+    min_stop_pct: float = 3.0         # 최소 손절폭 (%) [2.5→3.0: 일중 변동성 흡수]
     max_stop_pct: float = 5.0         # 최대 손절폭 (%)
 
-    # 트레일링 스탑 — 1차 익절과 동일 시점에 활성화
-    trailing_stop_pct: float = 1.5    # 고점 대비 하락률 (%)
-    trailing_activate_pct: float = 2.0  # 트레일링 활성화 수익률 (1차 익절과 동일)
+    # 트레일링 스탑 — 2차 익절 이후 활성화
+    trailing_stop_pct: float = 2.5    # 고점 대비 하락률 (%) [1.5→2.5: 일중 변동성 흡수]
+    trailing_activate_pct: float = 4.5  # 트레일링 활성화 수익률 (%) [2.0→4.5: 충분한 수익 후 활성화]
 
     # 수수료 포함 계산
     include_fees: bool = True
