@@ -4,11 +4,15 @@
 중복된 세션 체크 로직을 통합 관리합니다.
 """
 
-from datetime import datetime, time
+from datetime import date, datetime, time
 from typing import Tuple
 
 from src.core.types import MarketSession, TradingConfig
-from src.utils.kr_calendar import is_kr_market_holiday
+
+
+def is_kr_market_holiday(d: date) -> bool:
+    """한국 시장 휴장일 여부 (주말만 체크)"""
+    return d.weekday() >= 5  # 토요일(5), 일요일(6)
 
 
 class SessionUtil:
