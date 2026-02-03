@@ -28,18 +28,18 @@ risk:
   daily_max_loss_pct: 3.0        # 하루 최대 손실 3% (5%→3% 축소: 일 1% 목표 시 3일치 손실이 상한)
   daily_max_trades: 50           # 일일 최대 거래 50회 (15→50 확대: 오전 기회 손실 방지)
 
-  # === 포지션 관리 (하이브리드 전략: 스윙 중심) ===
-  base_position_pct: 15.0        # 기본 포지션 비율 15% (10→15: 스윙 전략으로 확대)
-  max_position_pct: 30.0         # 최대 포지션 비율 30% (20→30: 확신 종목 비중 확대)
-  max_positions: 8               # 최대 동시 포지션 8개 (10→8: 집중 투자)
-  min_cash_reserve_pct: 10.0     # 최소 현금 보유 10% (5→10: 안전마진 확보)
+  # === 포지션 관리 (진짜 스윙 전략: 집중 투자) ===
+  base_position_pct: 18.0        # 기본 포지션 비율 18% (15→18: 확신 종목 비중 확대)
+  max_position_pct: 35.0         # 최대 포지션 비율 35% (30→35: 강한 시그널 집중)
+  max_positions: 6               # 최대 동시 포지션 6개 (8→6: 집중 투자)
+  min_cash_reserve_pct: 10.0     # 최소 현금 보유 10% (유지)
   min_position_value: 500000     # 최소 포지션 금액 (50만원)
   dynamic_max_positions: true    # 자산 규모에 따라 max_positions 동적 조정
 
-  # === 손절/익절 (기본값, ExitManager에서 오버라이드) ===
-  default_stop_loss_pct: 3.0     # 기본 손절 3.0% (2.5→3.0: 스윙 변동성 수용)
-  default_take_profit_pct: 7.0   # 기본 익절 7.0% (5→7: 스윙 수익 확대)
-  trailing_stop_pct: 3.0         # 트레일링 스탑 3.0% (1.5→3.0: 스윙 여유 확보)
+  # === 손절/익절 (스윙 전략: 넓은 폭) ===
+  default_stop_loss_pct: 8.0     # 기본 손절 8.0% (3→8: 일중 변동성 흡수)
+  default_take_profit_pct: 20.0  # 기본 익절 20.0% (7→20: 트렌드 완주)
+  trailing_stop_pct: 5.0         # 트레일링 스탑 5.0% (3→5: 이익 보호 강화)
 
   # === 특별 상황 ===
   hot_theme_position_pct: 50.0   # 핫 테마 시 최대 포지션 50% (70→50: 테마 집중 리스크 완화)
@@ -48,14 +48,14 @@ risk:
 
 # 전략 설정
 strategies:
-  # 모멘텀 브레이크아웃 (주력 전략: 스윙 3~7일)
+  # 모멘텀 브레이크아웃 (주력 전략: 진짜 스윙 3~7일)
   momentum_breakout:
     enabled: true  # 주력 활성화
     holding_period_days: 5       # 목표 보유 기간 5일 (스윙)
     breakout_period: 20          # 돌파 기준 기간 (일)
     confirm_candles: 2           # 돌파 확인 캔들 수
-    min_breakout_pct: 0.5        # 최소 돌파 비율
-    volume_surge_ratio: 2.5      # 거래량 급증 기준
+    min_breakout_pct: 1.5        # 최소 돌파 비율 (0.5→1.5: 명확한 돌파만)
+    volume_surge_ratio: 3.5      # 거래량 급증 기준 (2.5→3.5: 강한 거래량만)
 
     # 점수 가중치
     weight_price_momentum: 40.0
@@ -63,22 +63,22 @@ strategies:
     weight_high_proximity: 20.0
     weight_theme: 10.0
 
-    # 청산 조건 (스윙: 넓은 손익 폭)
-    stop_loss_pct: 3.0           # 2.5→3.0: 스윙 변동성 수용
-    take_profit_pct: 7.0         # 5→7: 스윙 수익 확대
-    trailing_stop_pct: 3.0       # 1.5→3.0: 고점 대비 3% 하락 허용
+    # 청산 조건 (진짜 스윙: 대폭 확대)
+    stop_loss_pct: 8.0           # 3→8: 일중 변동성 흡수
+    take_profit_pct: 20.0        # 7→20: 트렌드 완주
+    trailing_stop_pct: 5.0       # 3→5: 고점 대비 5% 하락 허용
 
-  # 테마 추종 (단기 1~3일)
+  # 테마 추종 (중기 2~4일로 확대)
   theme_chasing:
-    enabled: true                # 활성화 (단기 전략)
-    holding_period_days: 2       # 목표 보유 기간 2일 (단기)
+    enabled: true                # 활성화 (중기 전략)
+    holding_period_days: 3       # 목표 보유 기간 3일 (2→3: 스윙 전환)
     min_theme_score: 70
     entry_window_minutes: 30
-    stop_loss_pct: 2.5           # 2.0→2.5: 단기 손절 강화
-    take_profit_pct: 5.0         # 4→5: 단기 수익 목표
-    trailing_stop_pct: 2.0       # 1.0→2.0: 단기 여유 확보
+    stop_loss_pct: 6.0           # 2.5→6: 스윙 변동성 수용
+    take_profit_pct: 15.0        # 5→15: 테마 지속 수익 확대
+    trailing_stop_pct: 4.0       # 2→4: 중기 여유 확보
 
-  # 갭상승 추종 (스윙 3~7일)
+  # 갭상승 추종 (진짜 스윙 3~7일)
   gap_and_go:
     enabled: true                # 활성화 (스윙 전략)
     holding_period_days: 5       # 목표 보유 기간 5일 (스윙)
@@ -86,10 +86,10 @@ strategies:
     max_gap_pct: 10.0
     entry_delay_minutes: 30
     pullback_pct: 1.0
-    min_volume_ratio: 2.0
-    stop_loss_pct: 3.0           # 2.0→3.0: 스윙 변동성 수용
-    take_profit_pct: 7.0         # 4→7: 스윙 수익 확대
-    trailing_stop_pct: 3.0       # 1.5→3.0: 스윙 여유 확보
+    min_volume_ratio: 2.8        # 2.0→2.8: 거래량 확인 강화
+    stop_loss_pct: 8.0           # 3→8: 일중 변동성 흡수
+    take_profit_pct: 20.0        # 7→20: 트렌드 완주
+    trailing_stop_pct: 5.0       # 3→5: 고점 대비 5% 하락 허용
 
   # 평균 회귀 (급락 반등, 보조 전략)
   mean_reversion:
@@ -146,28 +146,28 @@ notification:
     on_daily_summary: true
 
 
-# 분할 익절 관리자 (3단계 익절 + ATR 기반 동적 손절) - 스윙 최적화
+# 분할 익절 관리자 (3단계 익절 + ATR 기반 동적 손절) - 진짜 스윙
 exit_manager:
   enable_partial_exit: true
 
-  # 3단계 익절 시스템 (스윙: 더 넓은 목표)
-  first_exit_pct: 3.0             # 1차 익절 +3% (2→3: 스윙 첫 익절)
-  first_exit_ratio: 0.20          # 20% 매도 (25→20: 스윙은 천천히)
-  second_exit_pct: 5.0            # 2차 익절 +5% (4→5: 스윙 안정 익절)
-  second_exit_ratio: 0.40         # 잔여 80%의 40% = 전체 32% 매도
-  third_exit_pct: 7.0             # 3차 익절 +7% (6→7: 스윙 목표 수익)
-  third_exit_ratio: 0.5           # 잔여 48%의 50% = 전체 24% 매도
+  # 3단계 익절 시스템 (진짜 스윙: 대폭 확대)
+  first_exit_pct: 5.0             # 1차 익절 +5% (3→5: 스윙 안정 익절)
+  first_exit_ratio: 0.20          # 20% 매도 (유지: 천천히 익절)
+  second_exit_pct: 12.0           # 2차 익절 +12% (5→12: 트렌드 중간)
+  second_exit_ratio: 0.30         # 잔여 80%의 30% = 전체 24% 매도
+  third_exit_pct: 20.0            # 3차 익절 +20% (7→20: 트렌드 완주)
+  third_exit_ratio: 0.5           # 잔여 56%의 50% = 전체 28% 매도 (나머지 28%는 trailing)
 
   # ATR 기반 동적 손절 (변동성 대응)
-  stop_loss_pct: 3.0              # 기본 손절 3.0% (2.5→3.0: 스윙 여유)
+  stop_loss_pct: 8.0              # 기본 손절 8.0% (3→8: 일중 변동성 흡수)
   enable_dynamic_stop: true       # ATR 기반 동적 손절 활성화
-  atr_multiplier: 2.5             # ATR × 2.5 (2.0→2.5: 스윙 변동성 수용)
-  min_stop_pct: 3.0               # 최소 손절폭 3.0% (2.5→3.0: 스윙 하한)
-  max_stop_pct: 7.0               # 최대 손절폭 7.0% (5→7: 스윙 상한)
+  atr_multiplier: 3.0             # ATR × 3.0 (2.5→3: 스윙 변동성 대응)
+  min_stop_pct: 6.0               # 최소 손절폭 6.0% (3→6: 스윙 하한)
+  max_stop_pct: 10.0              # 최대 손절폭 10.0% (7→10: 스윙 상한)
 
-  # 트레일링 스탑 (스윙 전략)
-  trailing_stop_pct: 3.0          # 고점 대비 하락률 3.0% (1.5→3.0: 스윙 여유)
-  trailing_activate_pct: 3.0      # 트레일링 활성화 3% (2→3: 1차 익절과 동일)
+  # 트레일링 스탑 (진짜 스윙)
+  trailing_stop_pct: 5.0          # 고점 대비 하락률 5.0% (3→5: 이익 보호)
+  trailing_activate_pct: 5.0      # 트레일링 활성화 5% (3→5: 1차 익절과 동일)
 
   include_fees: true
 
