@@ -146,8 +146,18 @@ class KISBroker(BaseBroker):
             logger.info("KIS API 연결 완료")
             return True
 
+        except asyncio.TimeoutError:
+            logger.error("KIS 연결 타임아웃")
+            return False
+        except aiohttp.ClientError as e:
+            logger.error(f"KIS HTTP 클라이언트 오류: {e}")
+            return False
+        except (ValueError, KeyError) as e:
+            logger.error(f"KIS 설정 오류: {e}")
+            return False
         except Exception as e:
-            logger.exception(f"KIS 연결 실패: {e}")
+            # 예상치 못한 오류만 여기서 처리
+            logger.exception(f"KIS 연결 실패 (예상치 못한 오류): {e}")
             return False
 
     async def disconnect(self) -> None:

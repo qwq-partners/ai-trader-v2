@@ -16,6 +16,7 @@ import sys
 from loguru import logger
 
 from src.utils.logger import trading_logger
+from src.utils.session_util import SessionUtil
 
 from .event import (
     Event, EventType,
@@ -291,44 +292,12 @@ class TradingEngine:
     # ============================================================
 
     def _get_current_session(self) -> MarketSession:
-        """현재 시장 세션 반환"""
-        now = datetime.now()
-
-        # 주말 + 공휴일
-        if is_kr_market_holiday(now.date()):
-            return MarketSession.CLOSED
-
-        hour = now.hour
-        minute = now.minute
-        time_int = hour * 100 + minute  # HHMM 형식
-
-        # 프리장: 08:00 ~ 08:50
-        if 800 <= time_int < 850:
-            return MarketSession.PRE_MARKET
-
-        # 정규장: 09:00 ~ 15:20 (장마감 동시호가 전까지)
-        if 900 <= time_int < 1520:
-            return MarketSession.REGULAR
-
-        # 15:20~15:40: CLOSED (장마감 동시호가 + 휴장)
-        # → is_trading_hours()=False → 신규 매수/매도 신호 차단
-
-        # 넥스트장: 15:40 ~ 20:00 (10분 휴장 반영)
-        if 1540 <= time_int < 2000:
-            return MarketSession.NEXT
-
-        return MarketSession.CLOSED
+        """현재 시장 세션 반환 (SessionUtil 사용)"""
+        return SessionUtil.get_current_session()
 
     def is_trading_hours(self) -> bool:
-        """거래 가능 시간 여부"""
-        session = self._get_current_session()
-        if session == MarketSession.CLOSED:
-            return False
-        if session == MarketSession.PRE_MARKET and not self.config.enable_pre_market:
-            return False
-        if session == MarketSession.NEXT and not self.config.enable_next_market:
-            return False
-        return True
+        """거래 가능 시간 여부 (SessionUtil 사용)"""
+        return SessionUtil.is_trading_hours(self.config)
 
     # ============================================================
     # 포트폴리오 관리

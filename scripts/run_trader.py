@@ -43,6 +43,7 @@ from src.signals.screener import StockScreener, get_screener
 from src.strategies.exit_manager import ExitManager, ExitConfig, get_exit_manager
 from src.utils.config import AppConfig
 from src.utils.logger import setup_logger, trading_logger
+from src.utils.session_util import SessionUtil
 from src.analytics.daily_report import get_report_generator
 from src.utils.telegram import send_alert
 from src.core.evolution import (
@@ -1401,25 +1402,8 @@ class TradingBot(SchedulerMixin):
             return None
 
     def _get_current_session(self) -> MarketSession:
-        """현재 시간 기반 세션 판단"""
-        now = datetime.now()
-        hour, minute = now.hour, now.minute
-        time_val = hour * 100 + minute
-
-        # 세션 시간대
-        # 프리장: 08:00 ~ 08:50
-        # 정규장: 09:00 ~ 15:20 (장마감 동시호가 전까지)
-        # 15:20~15:40: CLOSED (동시호가 + 휴장)
-        # 넥스트장: 15:40 ~ 20:00
-
-        if 800 <= time_val < 850:
-            return MarketSession.PRE_MARKET
-        elif 900 <= time_val < 1520:
-            return MarketSession.REGULAR
-        elif 1540 <= time_val < 2000:
-            return MarketSession.NEXT
-        else:
-            return MarketSession.CLOSED
+        """현재 시간 기반 세션 판단 (SessionUtil 사용)"""
+        return SessionUtil.get_current_session()
 
     async def _session_check_loop(self):
         """세션 변경 체크 루프 (1분마다)"""

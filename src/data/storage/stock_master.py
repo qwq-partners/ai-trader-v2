@@ -225,42 +225,50 @@ class StockMaster:
             stock["kosdaq150_yn"] = "Y" if ticker in kosdaq150 else "N"
 
         # DB에 저장 (전체 교체)
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                # 기존 데이터 삭제
-                await conn.execute("DELETE FROM kr_stock_master")
+        try:
+            async with self.pool.acquire() as conn:
+                async with conn.transaction():
+                    # 기존 데이터 삭제
+                    await conn.execute("DELETE FROM kr_stock_master")
 
-                # 새 데이터 삽입
-                rows = [
-                    (
-                        s["ticker"],
-                        s["corp_name"],
-                        s["market"],
-                        s["corp_cls"],
-                        s["kospi200_yn"],
-                        s["kosdaq150_yn"],
-                        datetime.now(),  # timezone-naive로 수정
+                    # 새 데이터 삽입
+                    rows = [
+                        (
+                            s["ticker"],
+                            s["corp_name"],
+                            s["market"],
+                            s["corp_cls"],
+                            s["kospi200_yn"],
+                            s["kosdaq150_yn"],
+                            datetime.now(),  # timezone-naive로 수정
+                        )
+                        for s in unique_stocks.values()
+                    ]
+
+                    await conn.executemany(
+                        """
+                        INSERT INTO kr_stock_master
+                        (ticker, corp_name, market, corp_cls, kospi200_yn, kosdaq150_yn, updated_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7)
+                        """,
+                        rows,
                     )
-                    for s in unique_stocks.values()
-                ]
 
-                await conn.executemany(
-                    """
-                    INSERT INTO kr_stock_master
-                    (ticker, corp_name, market, corp_cls, kospi200_yn, kosdaq150_yn, updated_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    """,
-                    rows,
-                )
+            # 캐시 갱신
+            await self._load_cache()
 
-        # 캐시 갱신
-        await self._load_cache()
+            # 통계
+            stats = await self.get_stats()
+            logger.info(f"[StockMaster] 갱신 완료: {stats}")
 
-        # 통계
-        stats = await self.get_stats()
-        logger.info(f"[StockMaster] 갱신 완료: {stats}")
+            return stats
 
-        return stats
+        except asyncpg.PostgresError as e:
+            logger.error(f"[StockMaster] DB 저장 실패: {e}")
+            return {"total": 0, "error": str(e)}
+        except asyncpg.InterfaceError as e:
+            logger.error(f"[StockMaster] DB 연결 오류: {e}")
+            return {"total": 0, "error": str(e)}
 
     async def lookup_ticker(self, name: str) -> Optional[str]:
         """종목명 → 코드 변환"""
