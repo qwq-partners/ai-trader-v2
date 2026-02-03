@@ -223,6 +223,9 @@ class CodeEvolver:
             # main 브랜치 복귀
             self._return_to_original_branch()
 
+        # 결과 저장 (성공/실패 모두)
+        self._save_evolution_result(result, context, changed_files)
+
         return result
 
     def _check_claude_cli(self) -> bool:
@@ -668,6 +671,91 @@ class CodeEvolver:
                 logger.info(f"[코드진화] {self._original_branch} 브랜치 복귀")
         except Exception as e:
             logger.warning(f"[코드진화] 브랜치 복귀 실패: {e}")
+
+    def _save_evolution_result(self, result: Dict, context: Dict, changed_files: List[str]):
+        """코드 진화 결과를 JSON 파일로 저장 (대시보드용)"""
+        try:
+            # 저장 디렉토리
+            history_dir = self.project_root / "data" / "code_evolution_history"
+            history_dir.mkdir(parents=True, exist_ok=True)
+
+            # 파일명: YYYYMMDD-HHMMSS.json
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            history_file = history_dir / f"{timestamp}.json"
+
+            # 저장할 데이터 구성
+            record = {
+                "timestamp": result.get("timestamp"),
+                "trigger": result.get("trigger"),
+                "success": result.get("success"),
+                "message": result.get("message"),
+                "branch": result.get("branch"),
+                "pr_url": result.get("pr_url"),
+                "auto_merged": result.get("auto_merged", False),
+                "changed_files_count": result.get("changed_files", 0),
+                "changed_files": changed_files,
+                "error_patterns": context.get("error_patterns", {}),
+                "trading_performance": context.get("trading_performance", {}),
+                "forbidden_attempts": [],  # 추후 확장 가능
+            }
+
+            # JSON 저장
+            with open(history_file, "w", encoding="utf-8") as f:
+                json.dump(record, f, ensure_ascii=False, indent=2)
+
+            logger.info(f"[코드진화] 결과 저장: {history_file}")
+
+            # 오래된 파일 정리 (최근 30개만 유지)
+            self._cleanup_old_history(history_dir, keep=30)
+
+        except Exception as e:
+            logger.error(f"[코드진화] 결과 저장 실패: {e}")
+
+    def _cleanup_old_history(self, history_dir: Path, keep: int = 30):
+        """오래된 진화 이력 파일 정리"""
+        try:
+            history_files = sorted(history_dir.glob("*.json"))
+            if len(history_files) > keep:
+                for old_file in history_files[:-keep]:
+                    old_file.unlink()
+                    logger.debug(f"[코드진화] 오래된 이력 삭제: {old_file.name}")
+        except Exception as e:
+            logger.warning(f"[코드진화] 이력 정리 실패: {e}")
+
+    @staticmethod
+    def get_evolution_history(limit: int = 10) -> List[Dict]:
+        """저장된 코드 진화 이력 조회 (최신순)
+
+        Args:
+            limit: 반환할 최대 개수
+
+        Returns:
+            코드 진화 이력 리스트
+        """
+        try:
+            project_root = Path(CodeEvolver._find_project_root())
+            history_dir = project_root / "data" / "code_evolution_history"
+
+            if not history_dir.exists():
+                return []
+
+            # JSON 파일 목록 (최신순 정렬)
+            history_files = sorted(history_dir.glob("*.json"), reverse=True)[:limit]
+
+            results = []
+            for history_file in history_files:
+                try:
+                    with open(history_file, encoding="utf-8") as f:
+                        data = json.load(f)
+                        results.append(data)
+                except Exception as e:
+                    logger.warning(f"[코드진화] 이력 파일 읽기 실패 ({history_file.name}): {e}")
+
+            return results
+
+        except Exception as e:
+            logger.error(f"[코드진화] 이력 조회 실패: {e}")
+            return []
 
 
 # 싱글톤

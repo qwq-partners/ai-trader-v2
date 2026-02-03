@@ -27,6 +27,7 @@ def setup_api_routes(app: web.Application, data_collector):
     app.router.add_get("/api/us-market", handler.get_us_market)
     app.router.add_get("/api/evolution", handler.get_evolution)
     app.router.add_get("/api/evolution/history", handler.get_evolution_history)
+    app.router.add_get("/api/code-evolution", handler.get_code_evolution)
     app.router.add_get("/api/health", handler.get_system_health)
     app.router.add_post("/api/evolution/apply", handler.apply_evolution_parameter)
 
@@ -89,6 +90,9 @@ class APIHandler:
 
     async def get_evolution_history(self, request: web.Request) -> web.Response:
         return web.json_response(self.dc.get_evolution_history())
+
+    async def get_code_evolution(self, request: web.Request) -> web.Response:
+        return web.json_response(self.dc.get_code_evolution())
 
     async def get_system_health(self, request: web.Request) -> web.Response:
         return web.json_response(self.dc.get_system_health())

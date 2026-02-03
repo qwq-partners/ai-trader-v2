@@ -538,6 +538,70 @@ class DashboardDataCollector:
 
         return history
 
+    def get_code_evolution(self) -> Dict[str, Any]:
+        """코드 진화 이력 (대시보드용)
+
+        Returns:
+            {
+                "latest": {...},  # 최근 진화 결과
+                "history": [...],  # 이력 (최근 10개)
+                "summary": {...}   # 통계
+            }
+        """
+        try:
+            from src.core.evolution.code_evolver import CodeEvolver
+
+            history = CodeEvolver.get_evolution_history(limit=10)
+
+            # 통계 계산
+            total = len(history)
+            successful = sum(1 for h in history if h.get("success"))
+            failed = total - successful
+            auto_merged = sum(1 for h in history if h.get("auto_merged"))
+
+            # 최근 실행 결과
+            latest = history[0] if history else None
+
+            # 에러 패턴 집계 (최근 3개)
+            all_error_patterns = {}
+            for h in history[:3]:
+                for error_msg, count in h.get("error_patterns", {}).items():
+                    if error_msg in all_error_patterns:
+                        all_error_patterns[error_msg] += count
+                    else:
+                        all_error_patterns[error_msg] = count
+
+            # 빈도순 정렬
+            sorted_errors = sorted(
+                all_error_patterns.items(),
+                key=lambda x: x[1],
+                reverse=True
+            )[:5]
+
+            return {
+                "latest": latest,
+                "history": history,
+                "summary": {
+                    "total": total,
+                    "successful": successful,
+                    "failed": failed,
+                    "auto_merged": auto_merged,
+                },
+                "error_patterns": [
+                    {"message": msg, "count": count}
+                    for msg, count in sorted_errors
+                ],
+            }
+
+        except Exception as e:
+            logger.error(f"[대시보드] 코드 진화 이력 조회 실패: {e}")
+            return {
+                "latest": None,
+                "history": [],
+                "summary": {"total": 0, "successful": 0, "failed": 0, "auto_merged": 0},
+                "error_patterns": [],
+            }
+
     # ----------------------------------------------------------
     # US 마켓 데이터
     # ----------------------------------------------------------
