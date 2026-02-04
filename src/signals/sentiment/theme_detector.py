@@ -25,6 +25,15 @@ import aiohttp
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+    import numpy as np
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+    logger.warning("scikit-learn not available - similarity-based deduplication disabled")
+
 from ...core.types import Theme
 from ...core.event import ThemeEvent
 from ...utils.llm import LLMManager, LLMTask, get_llm_manager
@@ -138,12 +147,13 @@ KNOWN_STOCKS = {
 
 
 class NewsCollector:
-    """뉴스 수집기 (네이버 + 다음 금융 + 매일경제 RSS)"""
+    """뉴스 수집기 (네이버 + 다음 금융 + 매일경제 RSS + 유사도 기반 중복 제거)"""
 
-    def __init__(self, client_id: str = "", client_secret: str = ""):
+    def __init__(self, client_id: str = "", client_secret: str = "", storage=None):
         self.client_id = client_id
         self.client_secret = client_secret
         self._session: Optional[aiohttp.ClientSession] = None
+        self._storage = storage
 
         # 네이버 API 키가 없으면 환경변수에서 로드
         if not self.client_id:
@@ -151,8 +161,13 @@ class NewsCollector:
             self.client_id = os.getenv("NAVER_CLIENT_ID", "")
             self.client_secret = os.getenv("NAVER_CLIENT_SECRET", "")
 
-        # 중복 제거용 캐시
+        # 중복 제거용 캐시 (SHA1 해시)
         self._seen_keys: Set[str] = set()
+
+        # 유사도 기반 중복 제거용 캐시 (제목+본문)
+        self._similarity_cache: List[Dict[str, Any]] = []
+        self._similarity_threshold = 0.85  # 유사도 임계값
+        self._cache_days = 7  # 캐시 유지 기간 (일)
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -172,12 +187,99 @@ class NewsCollector:
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
     def _is_duplicate(self, title: str, url: str) -> bool:
-        """중복 여부 체크 (캐시 기반)"""
+        """중복 여부 체크 (SHA1 해시 기반)"""
         key = self._make_dedupe_key(title, url)
         if key in self._seen_keys:
             return True
         self._seen_keys.add(key)
         return False
+
+    async def load_recent_news_for_similarity(self):
+        """DB에서 최근 뉴스를 로드하여 유사도 캐시 초기화 (최근 7일)"""
+        if not self._storage or not SKLEARN_AVAILABLE:
+            return
+
+        try:
+            # hours = 7일 * 24시간 = 168시간
+            recent_news = await self._storage.get_recent_news(
+                hours=self._cache_days * 24,
+                limit=500
+            )
+
+            self._similarity_cache = [
+                {
+                    "title": news.title,
+                    "content": news.content or "",
+                    "text": f"{news.title}\n{news.content or ''}",
+                    "published_at": news.published_at,
+                }
+                for news in recent_news
+            ]
+
+            logger.info(
+                f"[뉴스 중복 체크] 유사도 캐시 로드: {len(self._similarity_cache)}개 (최근 {self._cache_days}일)"
+            )
+
+        except Exception as e:
+            logger.warning(f"[뉴스 중복 체크] 유사도 캐시 로드 실패: {e}")
+
+    def _is_similar_to_existing(self, article: NewsArticle) -> bool:
+        """
+        유사도 기반 중복 체크 (TF-IDF 코사인 유사도)
+
+        Returns:
+            True if similar article exists (threshold >= 0.85)
+        """
+        if not SKLEARN_AVAILABLE or not self._similarity_cache:
+            return False
+
+        try:
+            # 새 기사 텍스트
+            new_text = article.text.strip()
+            if not new_text or len(new_text) < 10:
+                return False
+
+            # 기존 기사 텍스트
+            existing_texts = [item["text"] for item in self._similarity_cache]
+            all_texts = existing_texts + [new_text]
+
+            # TF-IDF 벡터화
+            vectorizer = TfidfVectorizer(
+                max_features=100,
+                ngram_range=(1, 2),
+                min_df=1,
+            )
+            tfidf_matrix = vectorizer.fit_transform(all_texts)
+
+            # 새 기사와 기존 기사들 간의 코사인 유사도
+            new_vec = tfidf_matrix[-1]
+            existing_vecs = tfidf_matrix[:-1]
+            similarities = cosine_similarity(new_vec, existing_vecs)[0]
+
+            # 최대 유사도
+            max_similarity = float(np.max(similarities)) if len(similarities) > 0 else 0.0
+
+            if max_similarity >= self._similarity_threshold:
+                logger.debug(
+                    f"[뉴스 중복] 유사 기사 감지 (유사도 {max_similarity:.2f}): {article.title[:50]}"
+                )
+                return True
+
+            # 중복 아니면 캐시에 추가 (최근 500개 유지)
+            self._similarity_cache.append({
+                "title": article.title,
+                "content": article.content,
+                "text": new_text,
+                "published_at": article.published_at,
+            })
+            if len(self._similarity_cache) > 500:
+                self._similarity_cache = self._similarity_cache[-500:]
+
+            return False
+
+        except Exception as e:
+            logger.warning(f"[뉴스 중복 체크] 유사도 계산 실패: {e}")
+            return False
 
     async def search_news(
         self,
@@ -382,14 +484,141 @@ class NewsCollector:
             logger.debug(f"[뉴스] 매경 RSS 수집 오류: {e}")
             return []
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        reraise=False,
+    )
+    async def fetch_hankyung_rss(self, limit: int = 20) -> List[NewsArticle]:
+        """한국경제 증권 RSS 수집 (최대 3회 재시도)"""
+        try:
+            session = await self._get_session()
+            rss_url = "https://www.hankyung.com/feed/finance"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; AITrader/2.0)",
+            }
+
+            async with session.get(
+                rss_url, headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                if resp.status != 200:
+                    logger.debug(f"[뉴스] 한경 RSS HTTP {resp.status}")
+                    return []
+
+                xml_text = await resp.text()
+
+            # XML 파싱
+            root = ET.fromstring(xml_text)
+            articles = []
+            count = 0
+
+            for item in root.iter("item"):
+                if count >= limit:
+                    break
+
+                title_el = item.find("title")
+                title = title_el.text.strip() if title_el is not None and title_el.text else ""
+                if not title:
+                    continue
+
+                link_el = item.find("link")
+                link = link_el.text.strip() if link_el is not None and link_el.text else ""
+
+                desc_el = item.find("description")
+                desc = ""
+                if desc_el is not None and desc_el.text:
+                    desc = re.sub(r'<[^>]+>', '', desc_el.text).strip()
+                    desc = desc[:150]
+
+                pub_dt = datetime.now()
+                pub_el = item.find("pubDate")
+                if pub_el is not None and pub_el.text:
+                    try:
+                        pub_dt = parsedate_to_datetime(pub_el.text.strip())
+                        pub_dt = pub_dt.replace(tzinfo=None)
+                    except Exception:
+                        pass
+
+                articles.append(NewsArticle(
+                    title=title,
+                    content=desc,
+                    url=link,
+                    source="hankyung",
+                    published_at=pub_dt,
+                ))
+                count += 1
+
+            logger.debug(f"[뉴스] 한경 RSS: {len(articles)}건 수집")
+            return articles
+
+        except Exception as e:
+            logger.debug(f"[뉴스] 한경 RSS 수집 오류: {e}")
+            return []
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        reraise=False,
+    )
+    async def fetch_stockplus_news(self, limit: int = 20) -> List[NewsArticle]:
+        """stockplus.com 속보 크롤링 (최대 3회 재시도)"""
+        try:
+            session = await self._get_session()
+            url = "https://newsroom.stockplus.com/breaking-news"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; AITrader/2.0)",
+            }
+
+            async with session.get(
+                url, headers=headers,
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                if resp.status != 200:
+                    logger.debug(f"[뉴스] stockplus HTTP {resp.status}")
+                    return []
+
+                html = await resp.text()
+
+            # HTML 파싱 (간단한 정규식 사용)
+            # 패턴: <a href="/breaking-news/123">제목</a> 형식 가정
+            # 실제 사이트 구조에 따라 조정 필요
+            articles = []
+
+            # 제목 패턴: <h3 class="..." 또는 <a class="...">제목</a>
+            title_pattern = r'<a[^>]*href="(/breaking-news/[^"]+)"[^>]*>([^<]+)</a>'
+            matches = re.findall(title_pattern, html)
+
+            for link_path, title in matches[:limit]:
+                if not title.strip():
+                    continue
+
+                full_url = f"https://newsroom.stockplus.com{link_path}"
+
+                articles.append(NewsArticle(
+                    title=title.strip(),
+                    content="",  # 속보는 제목만
+                    url=full_url,
+                    source="stockplus",
+                    published_at=datetime.now(),
+                ))
+
+            logger.debug(f"[뉴스] stockplus: {len(articles)}건 수집")
+            return articles
+
+        except Exception as e:
+            logger.debug(f"[뉴스] stockplus 수집 오류: {e}")
+            return []
+
     async def get_market_news(self, limit: int = 30) -> List[NewsArticle]:
         """
-        시장 전반 뉴스 수집 (3개 소스 통합)
+        시장 전반 뉴스 수집 (5개 소스 통합)
 
         소스별 실패 시 무시, 최소 1개 소스로 동작 보장.
-        SHA1 기반 중복 제거 후 시간순 정렬.
+        1차: SHA1 해시 중복 제거
+        2차: 유사도 기반 중복 제거 (TF-IDF 코사인 유사도 >= 0.85)
         """
-        # 매 수집 시 중복 캐시 초기화
+        # 매 수집 시 SHA1 캐시 초기화
         self._seen_keys.clear()
         all_articles: List[NewsArticle] = []
         source_counts: Dict[str, int] = {}
@@ -424,20 +653,48 @@ class NewsCollector:
         except Exception as e:
             logger.debug(f"[뉴스] 매경 소스 실패 (무시): {e}")
 
-        # SHA1 중복 제거
+        # 4. 한국경제 RSS
+        try:
+            hankyung_articles = await self.fetch_hankyung_rss(limit=20)
+            before = len(all_articles)
+            all_articles.extend(hankyung_articles)
+            source_counts["hankyung"] = len(all_articles) - before
+        except Exception as e:
+            logger.debug(f"[뉴스] 한경 소스 실패 (무시): {e}")
+
+        # 5. stockplus 속보
+        try:
+            stockplus_articles = await self.fetch_stockplus_news(limit=20)
+            before = len(all_articles)
+            all_articles.extend(stockplus_articles)
+            source_counts["stockplus"] = len(all_articles) - before
+        except Exception as e:
+            logger.debug(f"[뉴스] stockplus 소스 실패 (무시): {e}")
+
+        # 1차: SHA1 해시 중복 제거 (완전히 동일한 제목+URL)
         unique_articles: List[NewsArticle] = []
         for article in all_articles:
             if not self._is_duplicate(article.title, article.url):
                 unique_articles.append(article)
 
+        # 2차: 유사도 기반 중복 제거 (유사한 기사 제거)
+        final_articles: List[NewsArticle] = []
+        similarity_removed = 0
+        for article in unique_articles:
+            if not self._is_similar_to_existing(article):
+                final_articles.append(article)
+            else:
+                similarity_removed += 1
+
         # 시간순 정렬 (최신 우선)
-        unique_articles.sort(key=lambda a: a.published_at, reverse=True)
+        final_articles.sort(key=lambda a: a.published_at, reverse=True)
 
         logger.info(
             f"[뉴스] 수집 완료: 소스별={source_counts}, "
-            f"전체={len(all_articles)}, 중복제거={len(unique_articles)}"
+            f"전체={len(all_articles)}, SHA1제거={len(unique_articles)}, "
+            f"유사도제거={similarity_removed}, 최종={len(final_articles)}"
         )
-        return unique_articles
+        return final_articles
 
     async def get_theme_news(self, theme: str, limit: int = 10) -> List[NewsArticle]:
         """특정 테마 뉴스 수집"""
@@ -548,6 +805,11 @@ class ThemeDetector:
                 self._storage = await get_news_storage()
                 self._storage_initialized = True
                 logger.info("[ThemeDetector] 뉴스 저장소 연결 완료")
+
+                # NewsCollector에도 storage 설정 및 유사도 캐시 초기화
+                self.news_collector._storage = self._storage
+                await self.news_collector.load_recent_news_for_similarity()
+
             except Exception as e:
                 logger.warning(f"[ThemeDetector] 저장소 연결 실패 (메모리 모드): {e}")
                 self._storage = None

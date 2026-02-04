@@ -14,6 +14,13 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
+try:
+    from pykrx import stock as pykrx_stock
+    PYKRX_AVAILABLE = True
+except ImportError:
+    PYKRX_AVAILABLE = False
+    logger.warning("pykrx not available - stock names will not be enriched")
+
 
 def _decimal_to_float(obj):
     """Decimal → float 변환 (JSON 직렬화용)"""
@@ -37,6 +44,10 @@ def _serialize(data: Any) -> Any:
 
 class DashboardDataCollector:
     """봇 런타임 데이터를 JSON으로 변환"""
+
+    # 클래스 레벨 종목 마스터 캐시 (전체 종목명)
+    _stock_master_cache: Dict[str, str] = {}
+    _stock_master_loaded: bool = False
 
     def __init__(self, bot):
         self.bot = bot
@@ -196,19 +207,54 @@ class DashboardDataCollector:
     # 거래 내역
     # ----------------------------------------------------------
 
+    @classmethod
+    def _load_stock_master(cls) -> None:
+        """종목 마스터 로드 (클래스 레벨, 1회만 실행)"""
+        if cls._stock_master_loaded or not PYKRX_AVAILABLE:
+            return
+
+        try:
+            logger.info("Loading stock master from pykrx...")
+
+            # KOSPI + KOSDAQ + KONEX 전체 종목 로드
+            for market in ["KOSPI", "KOSDAQ", "KONEX"]:
+                try:
+                    tickers = pykrx_stock.get_market_ticker_list(market=market)
+                    for ticker in tickers:
+                        if ticker not in cls._stock_master_cache:
+                            name = pykrx_stock.get_market_ticker_name(ticker)
+                            if name:
+                                cls._stock_master_cache[ticker] = name
+                except Exception as e:
+                    logger.warning(f"Failed to load {market} tickers: {e}")
+                    continue
+
+            cls._stock_master_loaded = True
+            logger.info(f"Stock master loaded: {len(cls._stock_master_cache)} stocks")
+
+        except Exception as e:
+            logger.error(f"Failed to load stock master: {e}")
+
     def _build_name_cache(self) -> Dict[str, str]:
-        """종목명 캐시 구축 (60초 TTL, 봇 캐시 + 포지션 + 스크리너)"""
+        """종목명 캐시 구축 (60초 TTL, 봇 캐시 + 포지션 + 스크리너 + pykrx 마스터)"""
         now = datetime.now()
         if self._name_cache_updated and (now - self._name_cache_updated).total_seconds() < 60:
             return self._name_cache
 
+        # 종목 마스터 로드 (1회만)
+        if not self._stock_master_loaded:
+            self._load_stock_master()
+
         cache: Dict[str, str] = {}
 
-        # 1. 봇 레벨 캐시 (가장 우선)
+        # 1. pykrx 종목 마스터 (가장 기본)
+        cache.update(self._stock_master_cache)
+
+        # 2. 봇 레벨 캐시 (우선순위 높음)
         bot_cache = getattr(self.bot, 'stock_name_cache', {})
         cache.update(bot_cache)
 
-        # 2. 포지션에서 종목명
+        # 3. 포지션에서 종목명
         portfolio = self.bot.engine.portfolio
         for symbol, pos in portfolio.positions.items():
             if symbol in cache:
@@ -217,7 +263,7 @@ class DashboardDataCollector:
             if name and name != symbol:
                 cache[symbol] = name
 
-        # 3. 스크리너에서 종목명
+        # 4. 스크리너에서 종목명
         screener = self.bot.screener
         if screener:
             for stock in getattr(screener, '_last_screened', []):
@@ -317,6 +363,25 @@ class DashboardDataCollector:
             )
             # 전체 거래 수 (청산 + 미청산)
             stats['all_trades'] = stats.get('total_trades', 0) + len(open_trades)
+
+            # 미청산 거래의 전략별 통계 추가
+            by_strategy = stats.get('by_strategy', {})
+            for t in enriched:
+                strategy = t.get('entry_strategy') or 'unknown'
+                if strategy not in by_strategy:
+                    by_strategy[strategy] = {
+                        'trades': 0, 'wins': 0, 'total_pnl': 0, 'win_rate': 0
+                    }
+                by_strategy[strategy]['trades'] += 1
+                by_strategy[strategy]['total_pnl'] += t.get('pnl', 0)
+                # 미청산은 수익 중이면 wins로 카운트 (참고용)
+                if t.get('pnl', 0) > 0:
+                    by_strategy[strategy]['wins'] += 1
+                # 승률 재계산
+                by_strategy[strategy]['win_rate'] = (
+                    by_strategy[strategy]['wins'] / by_strategy[strategy]['trades'] * 100
+                )
+            stats['by_strategy'] = by_strategy
         else:
             stats['open_trades'] = 0
             stats['open_pnl'] = 0
@@ -335,16 +400,26 @@ class DashboardDataCollector:
         if not detector:
             return []
 
+        # 종목명 캐시 구축
+        name_cache = self._build_name_cache()
+
         themes = []
         raw_themes = getattr(detector, '_themes', {})
         if isinstance(raw_themes, dict):
             raw_themes = raw_themes.values()
 
         for theme in raw_themes:
+            # 관련종목을 종목명으로 변환 (코드 → 종목명)
+            related_stocks_with_names = []
+            for symbol in theme.related_stocks:
+                name = name_cache.get(symbol, symbol)
+                # 종목명이 있으면 종목명만, 없으면 코드만 표시
+                related_stocks_with_names.append(name)
+
             themes.append(_serialize({
                 "name": theme.name,
                 "keywords": theme.keywords,
-                "related_stocks": theme.related_stocks,
+                "related_stocks": related_stocks_with_names,
                 "score": theme.score,
                 "news_count": theme.news_count,
                 "detected_at": theme.detected_at,
