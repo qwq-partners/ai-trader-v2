@@ -941,14 +941,24 @@ class StockScreener:
             theme_detector: ThemeDetector 인스턴스 (뉴스 호재 종목 추가용)
         """
         all_stocks: Dict[str, ScreenedStock] = {}
+        # 소스 카운트 추적 (정규화용)
+        source_counts: Dict[str, int] = {}
 
         def merge_stock(stock: ScreenedStock, weight: float = 1.0):
-            """종목 병합 헬퍼"""
+            """
+            종목 병합 헬퍼 (소스 카운트 기반 정규화)
+
+            여러 스크리닝에서 나타난 종목은 신뢰도가 높으므로
+            소스 수를 추적하여 최종 점수 정규화 시 반영합니다.
+            """
             if stock.symbol not in all_stocks:
                 all_stocks[stock.symbol] = stock
+                source_counts[stock.symbol] = 1
             else:
+                # 가중치 적용한 점수 누적
                 all_stocks[stock.symbol].score += stock.score * weight
                 all_stocks[stock.symbol].reasons.extend(stock.reasons)
+                source_counts[stock.symbol] += 1
 
         # ============================================================
         # 1. KIS API 스크리닝 (병렬 호출)
@@ -1068,6 +1078,35 @@ class StockScreener:
             price_filtered = before_price - len(result)
             if price_filtered:
                 logger.info(f"[Screener] {min_price:,.0f}원 미만 {price_filtered}개 제외")
+
+        # ============================================================
+        # 점수 정규화 (소스 수 기반)
+        # ============================================================
+        if result:
+            # 1. 소스 수 기반 신뢰도 보너스 적용 (최대 +20점)
+            for stock in result:
+                source_cnt = source_counts.get(stock.symbol, 1)
+                if source_cnt >= 3:
+                    bonus = 20  # 3개 이상 소스
+                elif source_cnt == 2:
+                    bonus = 10  # 2개 소스
+                else:
+                    bonus = 0   # 1개 소스
+                stock.score += bonus
+
+            # 2. 0-100 범위로 정규화
+            scores = [s.score for s in result]
+            min_score = min(scores)
+            max_score = max(scores)
+
+            if max_score > min_score:
+                for stock in result:
+                    # 정규화: (score - min) / (max - min) * 100
+                    normalized = (stock.score - min_score) / (max_score - min_score) * 100
+                    stock.score = normalized
+                logger.debug(
+                    f"[Screener] 점수 정규화 완료: {min_score:.1f}~{max_score:.1f} → 0~100"
+                )
 
         result.sort(key=lambda x: x.score, reverse=True)
 
