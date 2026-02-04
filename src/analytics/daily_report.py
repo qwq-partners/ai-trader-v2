@@ -18,6 +18,7 @@ from loguru import logger
 from ..utils.telegram import get_telegram_notifier, TelegramNotifier
 from ..signals.screener import get_screener, ScreenedStock
 from ..signals.sentiment.theme_detector import get_theme_detector, NewsCollector
+from ..data.storage.news_storage import get_news_storage
 
 
 @dataclass
@@ -76,6 +77,9 @@ class DailyReportGenerator:
         self.news_collector = NewsCollector()
         self._kis_market_data = kis_market_data
         self._us_market_data = None
+
+        # NewsStorage 추가 (종목별 뉴스 조회용)
+        self._news_storage = None
 
         # 오늘의 추천 종목 저장 (오후 결과 리포트용)
         self._today_recommendations: List[RecommendedStock] = []
@@ -461,30 +465,36 @@ class DailyReportGenerator:
         return ", ".join(catalysts[:2])
 
     async def _collect_per_stock_news(self, recommendations: List[RecommendedStock]):
-        """종목별 대표뉴스 수집"""
+        """
+        종목별 대표뉴스 수집
+
+        DB에 저장된 뉴스 중 해당 종목이 언급된 뉴스를 조회합니다.
+        (네이버 API가 아닌 자체 DB 사용)
+        """
+        # NewsStorage 초기화
+        if self._news_storage is None:
+            self._news_storage = await get_news_storage()
+
         for rec in recommendations:
             try:
-                # 종목명으로 뉴스 검색
-                articles = await self.news_collector.search_news(
-                    query=f"{rec.name} 주식",
-                    display=3,
-                    sort="date"
+                # DB에서 종목명으로 뉴스 검색 (최근 3일, 최대 5건)
+                articles = await self._news_storage.search_news(
+                    keyword=rec.name,
+                    days=3,
+                    limit=5
                 )
 
                 if articles:
-                    # HTML 태그 제거 후 첫 번째 뉴스 제목 사용
-                    title = articles[0].title
-                    title = re.sub(r'<[^>]+>', '', title)
-                    rec.key_news = title
+                    # 가장 최근 뉴스의 제목 사용
+                    rec.key_news = articles[0].title
+                    logger.debug(f"[레포트] {rec.name} 대표뉴스: {rec.key_news[:30]}...")
                 else:
                     rec.key_news = ""
+                    logger.debug(f"[레포트] {rec.name} 관련 뉴스 없음")
 
             except Exception as e:
-                logger.debug(f"종목 뉴스 검색 실패 ({rec.name}): {e}")
+                logger.warning(f"종목 뉴스 검색 실패 ({rec.name}): {e}")
                 rec.key_news = ""
-
-            # 네이버 API rate limit 방지
-            await asyncio.sleep(0.2)
 
     async def _update_results(self):
         """추천 종목 결과 업데이트 (KIS API 우선, 네이버 금융 폴백)"""

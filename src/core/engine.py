@@ -334,8 +334,15 @@ class TradingEngine:
         else:
             # 매도
             pos.quantity -= fill.quantity
-            realized_pnl = (fill.price - pos.avg_price) * fill.quantity - fill.commission
-            self.portfolio.cash += fill.total_value - fill.commission
+
+            # 거래세 계산 (한국 주식 매도 시 0.25%)
+            trading_tax = fill.total_value * Decimal("0.0025")
+
+            # 실현 손익 = (매도가 - 평균단가) × 수량 - 수수료 - 거래세
+            realized_pnl = (fill.price - pos.avg_price) * fill.quantity - fill.commission - trading_tax
+
+            # 현금 증가 = 매도 대금 - 수수료 - 거래세
+            self.portfolio.cash += fill.total_value - fill.commission - trading_tax
             self.portfolio.daily_pnl += realized_pnl
 
             # 포지션 종료 시 제거
