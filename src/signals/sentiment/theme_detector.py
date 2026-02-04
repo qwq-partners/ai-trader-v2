@@ -166,7 +166,7 @@ class NewsCollector:
 
         # 유사도 기반 중복 제거용 캐시 (제목+본문)
         self._similarity_cache: List[Dict[str, Any]] = []
-        self._similarity_threshold = 0.85  # 유사도 임계값
+        self._similarity_threshold = 0.90  # 유사도 임계값 (0.90 = 더 유사해야 중복 판정)
         self._cache_days = 7  # 캐시 유지 기간 (일)
 
     async def _get_session(self) -> aiohttp.ClientSession:

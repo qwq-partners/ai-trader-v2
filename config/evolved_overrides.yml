@@ -1,0 +1,21 @@
+risk_config:
+  daily_max_loss_pct: 2.0
+  daily_max_trades: 8
+  default_stop_loss_pct: 3.0
+exit_manager:
+  max_stop_pct: 3.5
+  min_stop_pct: 2.5
+  first_exit_pct: 3.0
+  first_exit_ratio: 0.35
+momentum_breakout:
+  stop_loss_pct: 3.0
+  min_volume_ratio: 2.2
+  trading_start_time: '10:05'
+  min_score: 75.0
+theme_chasing:
+  stop_loss_pct: 2.8
+  min_volume_ratio: 2.0
+  trading_start_time: '10:10'
+gap_and_go:
+  stop_loss_pct: 3.5
+  min_volume_ratio: 3.2
