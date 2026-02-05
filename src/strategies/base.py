@@ -123,7 +123,8 @@ class BaseStrategy(ABC):
         # 가격 히스토리 업데이트
         self._update_price_history(event)
 
-        # 지표 계산 (캔들 변경 또는 30초 경과 시에만 재계산)
+        # 지표 계산 (캔들 변경 또는 10초 경과 시에만 재계산)
+        # 10초 쿨다운: 실시간 틱 수신 빈도와 CPU 사용률 균형
         now = datetime.now()
         candle_ts = event.timestamp if hasattr(event, 'timestamp') else now
         prev_candle_ts = self._last_candle_ts.get(symbol)
@@ -133,7 +134,7 @@ class BaseStrategy(ABC):
             prev_candle_ts is None
             or candle_ts != prev_candle_ts
             or prev_calc_time is None
-            or (now - prev_calc_time) >= timedelta(seconds=30)
+            or (now - prev_calc_time) >= timedelta(seconds=10)
         )
 
         if need_recalc:

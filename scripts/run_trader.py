@@ -10,6 +10,8 @@ import argparse
 import asyncio
 import signal
 import sys
+import os
+import psutil
 import aiohttp
 from datetime import datetime, date, timedelta
 from decimal import Decimal
@@ -51,6 +53,78 @@ from src.core.evolution import (
 )
 from src.dashboard.server import DashboardServer
 from bot_schedulers import SchedulerMixin
+
+
+# ============================================================
+# PID 파일 관리 (프로세스 중복 방지)
+# ============================================================
+
+PID_FILE = Path.home() / ".cache" / "ai_trader" / "trader.pid"
+
+
+def check_and_cleanup_stale_pid():
+    """기존 PID 파일 확인 및 stale 프로세스 정리"""
+    if not PID_FILE.exists():
+        return True
+
+    try:
+        with open(PID_FILE, 'r') as f:
+            old_pid = int(f.read().strip())
+
+        # 프로세스 존재 여부 확인
+        if psutil.pid_exists(old_pid):
+            try:
+                proc = psutil.Process(old_pid)
+                cmdline = ' '.join(proc.cmdline())
+
+                # run_trader.py 실행 중인지 확인
+                if 'run_trader.py' in cmdline:
+                    logger.error(
+                        f"이미 실행 중인 트레이더 프로세스 발견 (PID: {old_pid})\n"
+                        f"종료 방법: kill {old_pid}"
+                    )
+                    return False
+                else:
+                    # 다른 프로세스가 PID 재사용 → stale PID 파일
+                    logger.warning(f"Stale PID 파일 발견 (PID {old_pid}는 다른 프로세스), 정리")
+                    PID_FILE.unlink()
+                    return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                # 프로세스 종료됨 → stale PID 파일
+                logger.warning(f"Stale PID 파일 발견 (PID {old_pid} 종료됨), 정리")
+                PID_FILE.unlink()
+                return True
+        else:
+            # 프로세스 없음 → stale PID 파일
+            logger.warning(f"Stale PID 파일 발견 (PID {old_pid} 없음), 정리")
+            PID_FILE.unlink()
+            return True
+
+    except Exception as e:
+        logger.warning(f"PID 파일 확인 중 오류: {e}, 기존 파일 제거")
+        PID_FILE.unlink()
+        return True
+
+
+def write_pid_file():
+    """현재 프로세스 PID 기록"""
+    PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(PID_FILE, 'w') as f:
+        f.write(str(os.getpid()))
+    logger.info(f"PID 파일 생성: {PID_FILE} (PID: {os.getpid()})")
+
+
+def remove_pid_file():
+    """PID 파일 제거"""
+    try:
+        if PID_FILE.exists():
+            PID_FILE.unlink()
+            logger.info(f"PID 파일 제거: {PID_FILE}")
+    except Exception as e:
+        logger.warning(f"PID 파일 제거 실패: {e}")
+
+
+# ============================================================
 
 
 class TradingBot(SchedulerMixin):
@@ -784,7 +858,7 @@ class TradingBot(SchedulerMixin):
                     self._exit_pending_symbols.discard(symbol)
                     self._exit_pending_timestamps.pop(symbol, None)
                     if self.engine.risk_manager:
-                        self.engine.risk_manager.clear_pending(symbol)
+                        await self.engine.risk_manager.clear_pending(symbol)
                     logger.error(f"[청산 주문 실패] {symbol} - {result} (3회 시도 후)")
 
                     # 청산 실패 시 실제 보유 수량 재확인 (유령 포지션 제거)
@@ -886,7 +960,7 @@ class TradingBot(SchedulerMixin):
                     self.engine.risk_manager.block_symbol(order.symbol)
                     # pending 해제 + 예약 현금 환원
                     order_amount = (order.price * order.quantity) if order.price and order.quantity else Decimal("0")
-                    self.engine.risk_manager.clear_pending(order.symbol, order_amount)
+                    await self.engine.risk_manager.clear_pending(order.symbol, order_amount)
                     logger.info(f"[주문 쿨다운] {order.symbol} - 5분간 주문 차단 (pending 해제)")
 
                 # 주문 실패 알림 (종목당 1회만)
@@ -905,7 +979,7 @@ class TradingBot(SchedulerMixin):
             # 네트워크 오류 시 pending 해제
             if self.engine.risk_manager and order:
                 order_amount = (order.price * order.quantity) if order.price and order.quantity else Decimal("0")
-                self.engine.risk_manager.clear_pending(order.symbol, order_amount)
+                await self.engine.risk_manager.clear_pending(order.symbol, order_amount)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -1024,7 +1098,7 @@ class TradingBot(SchedulerMixin):
                 self._exit_pending_symbols.discard(fill.symbol)
                 self._exit_pending_timestamps.pop(fill.symbol, None)
                 if self.engine.risk_manager:
-                    self.engine.risk_manager.clear_pending(fill.symbol)
+                    await self.engine.risk_manager.clear_pending(fill.symbol)
 
                 # EXIT 레코드 기록 (진입가/손익/사유)
                 # 포지션은 update_position에서 이미 갱신되었으므로 저널에서 조회
@@ -1249,6 +1323,10 @@ class TradingBot(SchedulerMixin):
             return
 
         self.running = True
+
+        # PID 파일 생성 (프로세스 중복 방지)
+        write_pid_file()
+
         logger.info("=== 트레이딩 봇 시작 ===")
 
         try:
@@ -1611,6 +1689,9 @@ class TradingBot(SchedulerMixin):
         except Exception as e:
             logger.error(f"브로커 연결 해제 실패: {e}")
 
+        # PID 파일 제거
+        remove_pid_file()
+
         logger.info("종료 완료")
 
 
@@ -1660,9 +1741,18 @@ async def main():
         dotenv_path=str(project_root / ".env")
     )
 
+    # 프로세스 중복 체크
+    if not check_and_cleanup_stale_pid():
+        logger.error("이미 실행 중인 트레이더가 있습니다. 종료 후 다시 시도하세요.")
+        sys.exit(1)
+
     # 봇 실행
     bot = TradingBot(config, dry_run=args.dry_run)
-    await bot.run()
+    try:
+        await bot.run()
+    finally:
+        # 비정상 종료 시에도 PID 파일 정리
+        remove_pid_file()
 
 
 if __name__ == "__main__":

@@ -570,6 +570,10 @@ class RiskManager:
         self._order_fail_cooldown: Dict[str, datetime] = {}
         self._COOLDOWN_SECONDS = 300  # 5분 쿨다운
 
+        # 신호 중복 제거: 종목별 마지막 신호 시각 (60초 쿨다운)
+        self._last_signal_time: Dict[str, datetime] = {}
+        self._SIGNAL_COOLDOWN_SECONDS = 60
+
         # 현금 부족 로그 쓰로틀링
         self._last_cash_warn_time: Optional[datetime] = None
 
@@ -585,6 +589,9 @@ class RiskManager:
 
         # 현금 초과 주문 방지: 주문별 예약 현금 추적 (symbol → 예약 금액)
         self._reserved_by_order: Dict[str, Decimal] = {}
+
+        # 동시성 보호: pending 주문 관련 Lock
+        self._pending_lock = asyncio.Lock()
 
         # 엔진에 핸들러 등록
         engine.register_handler(EventType.SIGNAL, self.on_signal)
@@ -610,11 +617,17 @@ class RiskManager:
         for s in expired:
             del self._order_fail_cooldown[s]
 
+        # 만료된 신호 쿨다운 항목 정리
+        expired_signals = [s for s, t in self._last_signal_time.items()
+                           if (now - t).total_seconds() >= self._SIGNAL_COOLDOWN_SECONDS]
+        for s in expired_signals:
+            del self._last_signal_time[s]
+
         # stale pending 주문 정리 (10분 이상 미체결 → 거래소 거부 등)
         stale_pending = [s for s, t in self._pending_timestamps.items()
                          if (now - t).total_seconds() >= self._PENDING_TIMEOUT_SECONDS]
         for s in stale_pending:
-            self.clear_pending(s)
+            await self.clear_pending(s)
             logger.warning(f"[리스크] stale pending 정리: {s} ({self._PENDING_TIMEOUT_SECONDS}초 초과)")
 
         # 거래 가능 여부 체크
@@ -628,15 +641,29 @@ class RiskManager:
             )
             return None
 
-        # 이미 주문 진행 중인 종목 차단 (중복 신호 방지)
-        if event.symbol in self._pending_orders:
-            logger.debug(f"[리스크] 주문 진행 중 차단: {event.symbol}")
-            trading_logger.log_signal_blocked(
-                symbol=event.symbol, side=event.side.value,
-                reason="주문진행중",
-                price=float(event.price or 0), score=event.score,
-            )
-            return None
+        # 이미 주문 진행 중인 종목 차단 + 신호 쿨다운 체크 (Lock 보호로 TOCTOU 방지)
+        async with self._pending_lock:
+            # 1차: pending 주문 체크
+            if event.symbol in self._pending_orders:
+                logger.debug(f"[리스크] 주문 진행 중 차단: {event.symbol}")
+                trading_logger.log_signal_blocked(
+                    symbol=event.symbol, side=event.side.value,
+                    reason="주문진행중",
+                    price=float(event.price or 0), score=event.score,
+                )
+                return None
+
+            # 2차: 신호 중복 제거 (60초 쿨다운)
+            if event.symbol in self._last_signal_time:
+                elapsed = (now - self._last_signal_time[event.symbol]).total_seconds()
+                if elapsed < self._SIGNAL_COOLDOWN_SECONDS:
+                    logger.debug(f"[리스크] 신호 쿨다운 차단: {event.symbol} (경과 {elapsed:.1f}초)")
+                    trading_logger.log_signal_blocked(
+                        symbol=event.symbol, side=event.side.value,
+                        reason=f"신호쿨다운({elapsed:.0f}초)",
+                        price=float(event.price or 0), score=event.score,
+                    )
+                    return None
 
         # 이미 포지션이 있는 종목 매수 차단
         if event.side == OrderSide.BUY and event.symbol in self.engine.portfolio.positions:
@@ -737,37 +764,48 @@ class RiskManager:
 
         logger.info(f"주문 생성: {order.side.value} {order.symbol} {order.quantity}주 @ {order.price}")
 
-        # 중복 주문 방지: pending 등록 + 미체결 수량 추적
-        self._pending_orders.add(order.symbol)
-        self._pending_quantities[order.symbol] = order.quantity
-        self._pending_timestamps[order.symbol] = datetime.now()
+        # 중복 주문 방지: pending 등록 + 미체결 수량 추적 - Lock 보호 (TOCTOU 방지)
+        async with self._pending_lock:
+            # 다시 한번 pending 체크 (Lock 사이에 다른 신호가 끼어들 수 있음)
+            if order.symbol in self._pending_orders:
+                logger.warning(f"[리스크] 경쟁 조건 감지: {order.symbol} 이미 주문 진행 중 (재검증)")
+                return None
 
-        # 현금 예약 (매수 주문 금액만큼, 주문별 추적 + 시장가 슬리피지/수수료 버퍼 1.5%)
-        if order.side == OrderSide.BUY and order.price and order.quantity:
-            self._reserved_by_order[order.symbol] = order.price * order.quantity * Decimal("1.015")
+            self._pending_orders.add(order.symbol)
+            self._pending_quantities[order.symbol] = order.quantity
+            self._pending_timestamps[order.symbol] = datetime.now()
+
+            # 신호 쿨다운 등록 (60초간 동일 종목 신호 차단)
+            self._last_signal_time[order.symbol] = datetime.now()
+
+            # 현금 예약 (매수 주문 금액만큼, 주문별 추적 + 시장가 슬리피지/수수료 버퍼 1.5%)
+            if order.side == OrderSide.BUY and order.price and order.quantity:
+                self._reserved_by_order[order.symbol] = order.price * order.quantity * Decimal("1.015")
 
         return [OrderEvent.from_order(order, source="risk_manager")]
 
-    def clear_pending(self, symbol: str, amount: Decimal = Decimal("0")):
-        """주문 완료/실패 시 pending 해제 (외부에서 호출)"""
-        self._pending_orders.discard(symbol)
-        self._pending_quantities.pop(symbol, None)
-        self._pending_timestamps.pop(symbol, None)
-        self._reserved_by_order.pop(symbol, None)
+    async def clear_pending(self, symbol: str, amount: Decimal = Decimal("0")):
+        """주문 완료/실패 시 pending 해제 (외부에서 호출) - Lock 보호"""
+        async with self._pending_lock:
+            self._pending_orders.discard(symbol)
+            self._pending_quantities.pop(symbol, None)
+            self._pending_timestamps.pop(symbol, None)
+            self._reserved_by_order.pop(symbol, None)
 
     async def on_fill(self, event: FillEvent) -> Optional[List[Event]]:
-        """체결 후 리스크 업데이트 (부분 체결 지원)"""
+        """체결 후 리스크 업데이트 (부분 체결 지원) - Lock 보호"""
         # 미체결 수량 감소 → 전량 체결 시에만 pending 해제 및 예약 현금 해제
-        remaining = self._pending_quantities.get(event.symbol, 0) - (event.quantity or 0)
-        if remaining <= 0:
-            self._pending_orders.discard(event.symbol)
-            self._pending_quantities.pop(event.symbol, None)
-            self._pending_timestamps.pop(event.symbol, None)
-            # 전량 체결 시 원래 예약 금액 정확히 해제 (슬리피지 드리프트 방지)
-            self._reserved_by_order.pop(event.symbol, None)
-        else:
-            self._pending_quantities[event.symbol] = remaining
-            logger.info(f"[리스크] 부분 체결: {event.symbol} 잔여 {remaining}주")
+        async with self._pending_lock:
+            remaining = self._pending_quantities.get(event.symbol, 0) - (event.quantity or 0)
+            if remaining <= 0:
+                self._pending_orders.discard(event.symbol)
+                self._pending_quantities.pop(event.symbol, None)
+                self._pending_timestamps.pop(event.symbol, None)
+                # 전량 체결 시 원래 예약 금액 정확히 해제 (슬리피지 드리프트 방지)
+                self._reserved_by_order.pop(event.symbol, None)
+            else:
+                self._pending_quantities[event.symbol] = remaining
+                logger.info(f"[리스크] 부분 체결: {event.symbol} 잔여 {remaining}주")
 
         # 일일 손실 체크 (현재 자산 기준)
         _equity = self.engine.portfolio.total_equity
