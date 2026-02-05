@@ -19,10 +19,11 @@ AI 기반 자동 트레이딩 봇 시스템
 - **평균 회귀** (비활성): 과매도 종목 반등 매매
 
 **포지션 관리**:
-- 기본 15% / 최대 30% (확신 종목 비중 확대)
-- 동시 보유 최대 8개 (집중 투자)
-- 손절 -3% / 익절 +3%→+5%→+7% (3단계)
-- 트레일링 스탑 고점 대비 -3%
+- 기본 12% (자가 진화 엔진 최적화)
+- 동시 보유 최대 3개 (집중 투자)
+- 손절 2.0~3.5% (전략별 차등, ATR 기반 동적 조정)
+- 익절 +2.5% → 50% 매도 (빠른 수익 확보)
+- 트레일링 스탑: +3.5% 이상 수익 시 활성화, 고점 대비 -3.5%
 
 ### 데이터 소스
 - **KIS API**: 실시간 시세, 업종지수, 등락률 순위
@@ -57,16 +58,19 @@ AI 기반 자동 트레이딩 봇 시스템
 | ITA, LMT, RTX, NOC, GD | 방산 | +3% → +15점 |
 
 ### 리스크 관리
-- **일일 손실 한도**: -3% (엄격한 자본 보호)
-- **최대 포지션 수**: 10개 (분산 투자)
-- **개별 포지션 한도**: 20% (단일 종목 리스크 제한)
-- **ATR 기반 동적 손절**: 변동성에 따라 2.5% ~ 5.0% 자동 조정
-- **3단계 익절 시스템**:
-  - 1차 익절: +2% → 25% 매도 (빠른 수익 확보)
-  - 2차 익절: +4% → 35% 추가 매도 (안정적 수익)
-  - 3차 익절: +6% → 20% 추가 매도 (큰 수익 추구)
-  - 나머지 20% → 트레일링 스탑 (수익 극대화)
-- **손익비(R:R)**: 2:1 이상 목표
+- **일일 손실 한도**: -2.0% (엄격한 자본 보호)
+- **최대 포지션 수**: 3개 (집중 투자)
+- **개별 포지션 한도**: 12% 기본 (단일 종목 리스크 제한)
+- **ATR 기반 동적 손절**: 변동성에 따라 2.5% ~ 3.5% 자동 조정
+- **전략별 손절**:
+  - 모멘텀: 3.0%
+  - 테마: 2.8%
+  - 갭상승: 3.5%
+- **익절 시스템** (자가 진화 최적화):
+  - 1차 익절: +2.5% → 50% 매도 (빠른 수익 확보)
+  - 나머지 50% → 트레일링 스탑 (수익 극대화)
+- **트레일링 스탑**: +3.5% 이상 수익 시 활성화, 고점 대비 -3.5% 하락 시 청산
+- **손익비(R:R)**: 1.5:1 이상 목표 (보수적 리스크 관리)
 
 ### 일일 레포트
 - **08:00 아침 레포트**: US 시장 마감 요약, 업종 동향, 핫 테마, 추천 종목 10선
@@ -181,51 +185,42 @@ ai-trader-v2/
 
 ## 설정
 
-### config/default.yml
+### config/evolved_overrides.yml (실제 적용 중)
 ```yaml
-trading:
-  initial_capital: 10000000
+# 자가 진화 엔진이 최적화한 파라미터 (default.yml 오버라이드)
 
-risk:
-  daily_max_loss_pct: 3.0        # 일일 손실 한도 3%
-  max_positions: 10              # 최대 포지션 10개
-  max_position_pct: 20.0         # 개별 포지션 한도 20%
-  default_stop_loss_pct: 2.5     # 기본 손절 2.5%
+risk_config:
+  daily_max_loss_pct: 2.0        # 일일 손실 한도 2%
+  daily_max_trades: 5            # 일일 최대 거래 5회
+  default_stop_loss_pct: 3.0     # 기본 손절 3%
+  base_position_pct: 12.0        # 기본 포지션 12%
+  max_positions: 3               # 최대 포지션 3개 (집중 투자)
 
-# 3단계 익절 + ATR 기반 동적 손절
+# 익절 + 트레일링 스탑 (자가 진화 최적화)
 exit_manager:
-  enable_partial_exit: true
-  first_exit_pct: 2.0            # 1차 익절 +2%
-  first_exit_ratio: 0.25         # 25% 매도
-  second_exit_pct: 4.0           # 2차 익절 +4%
-  second_exit_ratio: 0.47        # 35% 추가 매도
-  third_exit_pct: 6.0            # 3차 익절 +6%
-  third_exit_ratio: 0.5          # 20% 추가 매도
-  enable_dynamic_stop: true      # ATR 기반 동적 손절
-  atr_multiplier: 2.0            # ATR × 2.0
+  max_stop_pct: 3.5              # 최대 손절폭
   min_stop_pct: 2.5              # 최소 손절폭
-  max_stop_pct: 5.0              # 최대 손절폭
+  first_exit_pct: 2.5            # 1차 익절 +2.5%
+  first_exit_ratio: 0.5          # 50% 매도
+  stop_loss_pct: 2.0             # 기본 손절 2%
+  trailing_activate_pct: 3.5     # 트레일링 활성화 +3.5%
+  trailing_stop_pct: 3.5         # 트레일링 손실폭 3.5%
+
+# 전략별 손절 (차등 적용)
+momentum_breakout:
+  stop_loss_pct: 3.0             # 모멘텀 손절 3%
+
+theme_chasing:
+  stop_loss_pct: 2.8             # 테마 손절 2.8%
+
+gap_and_go:
+  stop_loss_pct: 3.5             # 갭상승 손절 3.5%
 
 # US 시장 오버나이트 시그널
 us_market:
   enabled: true
   fetch_time: "07:30"
   cache_ttl_hours: 24
-
-# 백테스트 최적화된 파라미터
-strategies:
-  momentum_breakout:
-    enabled: true
-    min_breakout_pct: 0.5        # 돌파 조건 0.5%
-    volume_surge_ratio: 2.5      # 거래량 2.5배
-    stop_loss_pct: 2.5
-    take_profit_pct: 5.0
-  theme_chasing:
-    enabled: false               # 보호 모드
-  gap_and_go:
-    enabled: false               # 보호 모드
-  mean_reversion:
-    enabled: false               # 보호 모드
 ```
 
 ### 환경변수 (.env)

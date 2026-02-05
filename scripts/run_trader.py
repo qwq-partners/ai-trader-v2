@@ -381,10 +381,14 @@ class TradingBot(SchedulerMixin):
             self.screener.min_volume_ratio = screener_cfg.get("min_volume_ratio", 2.0)
             self.screener.min_change_pct = screener_cfg.get("min_change_pct", 1.0)
             self.screener.max_change_pct = screener_cfg.get("max_change_pct", 15.0)
+            self.screener.min_trading_value = screener_cfg.get("min_trading_value", 100000000)  # 기본 1억원
             self._screening_interval = screener_cfg.get("scan_interval_minutes", 10) * 60
             # stock_master → screener 연동 (종목 DB 활용)
             if self.stock_master:
                 self.screener.set_stock_master(self.stock_master)
+            # broker → screener 연동 (모멘텀/변동성 필터용)
+            if self.broker:
+                self.screener.set_broker(self.broker)
             logger.info("종목 스크리너 초기화 완료")
 
             # 엔진에 컴포넌트 연결
@@ -693,6 +697,10 @@ class TradingBot(SchedulerMixin):
             time_val = now.hour * 100 + now.minute
             is_auction = 1520 <= time_val < 1530
 
+            # 장 마감 후에는 청산 시도하지 않음 (15:31 이후)
+            if time_val >= 1531:
+                return
+
             # 청산 신호 확인
             exit_signal = self.exit_manager.update_price(symbol, current_price)
 
@@ -759,8 +767,9 @@ class TradingBot(SchedulerMixin):
 
                     # 손절인 경우 RiskManager에 기록 (재진입 방지)
                     if "손절" in reason and self.engine.risk_manager:
-                        self.engine.risk_manager._stop_loss_today[symbol] = datetime.now()
-                        logger.info(f"[재진입금지] {symbol} 손절 기록 (60분간 재진입 차단)")
+                        if hasattr(self.engine.risk_manager, '_stop_loss_today'):
+                            self.engine.risk_manager._stop_loss_today[symbol] = datetime.now()
+                            logger.info(f"[재진입금지] {symbol} 손절 기록 (60분간 재진입 차단)")
 
                     trading_logger.log_order(
                         symbol=symbol,

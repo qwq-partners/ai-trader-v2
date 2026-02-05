@@ -29,6 +29,7 @@ from loguru import logger
 
 from ...utils.kis_token_manager import get_token_manager
 from ...data.providers.kis_market_data import KISMarketData, get_kis_market_data
+from ...indicators.atr import calculate_atr
 
 
 # ============================================================
@@ -86,11 +87,12 @@ class StockScreener:
                 return True
         return False
 
-    def __init__(self, kis_market_data: Optional[KISMarketData] = None, stock_master=None):
+    def __init__(self, kis_market_data: Optional[KISMarketData] = None, stock_master=None, broker=None):
         self._token_manager = get_token_manager()
         self._session: Optional[aiohttp.ClientSession] = None
         self._kis_market_data = kis_market_data
         self._stock_master = stock_master  # StockMaster 인스턴스 (종목 DB)
+        self._broker = broker  # KISBroker 인스턴스 (일봉 조회용)
 
         # 캐시
         self._cache: Dict[str, List[ScreenedStock]] = {}
@@ -103,14 +105,19 @@ class StockScreener:
         self._refresh_code_to_name()
 
         # 설정
-        self.min_volume_ratio = 2.0  # 최소 거래량 비율
-        self.min_change_pct = 1.0    # 최소 등락률
-        self.max_change_pct = 15.0   # 최대 등락률 (과열 제외)
+        self.min_volume_ratio = 2.0        # 최소 거래량 비율
+        self.min_change_pct = 1.0          # 최소 등락률
+        self.max_change_pct = 15.0         # 최대 등락률 (과열 제외)
+        self.min_trading_value = 100000000 # 최소 거래대금 1억원 (유동성 확보)
 
     def set_stock_master(self, stock_master):
         """stock_master 인스턴스 설정 (런타임에서 주입)"""
         self._stock_master = stock_master
         self._refresh_code_to_name()
+
+    def set_broker(self, broker):
+        """broker 인스턴스 설정 (런타임에서 주입, 모멘텀/변동성 필터용)"""
+        self._broker = broker
 
     def _refresh_code_to_name(self):
         """종목코드→이름 매핑 갱신 (stock_master DB 우선, KNOWN_STOCKS 폴백)"""
@@ -203,6 +210,9 @@ class StockScreener:
                     # 거래량 비율 계산 (증가율 + 100 = 비율)
                     volume_ratio = (vol_inrt + 100) / 100 if vol_inrt else 1.0
 
+                    # 거래대금 계산 (유동성 확인)
+                    trading_value = volume * price
+
                     # 필터링
                     if price < 1000:  # 1,000원 미만 동전주 항상 제외
                         continue
@@ -211,6 +221,8 @@ class StockScreener:
                     if change_pct < 0:  # 하락 종목 제외
                         continue
                     if change_pct > self.max_change_pct:  # 과열 종목 제외
+                        continue
+                    if trading_value < self.min_trading_value:  # 거래대금 1억 미만 제외
                         continue
 
                     score = min(volume_ratio * 10 + change_pct * 5, 100)
@@ -292,10 +304,15 @@ class StockScreener:
                     change_pct = float(item.get("prdy_ctrt", 0) or 0)
                     volume = int(item.get("acml_vol", 0) or 0)
 
+                    # 거래대금 계산
+                    trading_value = volume * price
+
                     # 필터링
                     if price < 1000:  # 1,000원 미만 동전주 항상 제외
                         continue
                     if change_pct < self.min_change_pct:
+                        continue
+                    if trading_value < self.min_trading_value:  # 거래대금 1억 미만 제외
                         continue
                     if change_pct > self.max_change_pct:
                         continue
@@ -436,7 +453,12 @@ class StockScreener:
                 change_pct = item.get("change_pct", 0)
                 volume = item.get("volume", 0)
 
+                # 거래대금 계산
+                trading_value = volume * price
+
                 if price < 1000 or change_pct < 0 or change_pct > self.max_change_pct:
+                    continue
+                if trading_value < self.min_trading_value:
                     continue
 
                 score = min(change_pct * 7 + 20, 100)
@@ -491,7 +513,12 @@ class StockScreener:
                 volume = item.get("volume", 0)
                 net_buy_qty = item.get("net_buy_qty", 0)
 
+                # 거래대금 계산
+                trading_value = volume * price
+
                 if price < 1000 or net_buy_qty <= 0:
+                    continue
+                if trading_value < self.min_trading_value:
                     continue
 
                 score = min(60 + change_pct * 3, 100)
@@ -521,9 +548,12 @@ class StockScreener:
 
     async def _apply_valuation_bonus(self, all_stocks: Dict[str, "ScreenedStock"]):
         """
-        기존 후보 종목들의 PER/PBR을 개별 조회하여 저평가 종목에 보너스 부여
+        기존 후보 종목들의 재무 건전성 평가 및 보너스 부여
 
-        FHKST01010100 API로 종목별 PER/PBR을 조회합니다.
+        FHKST01010100 API로 종목별 PER/PBR/EPS/BPS을 조회하여:
+        1. 저평가 보너스 (저PER, 저PBR)
+        2. ROE 계산 및 보너스 (ROE = EPS/BPS * 100)
+        3. 성장성 평가 (EPS > 0)
         """
         kmd = self._kis_market_data or get_kis_market_data()
 
@@ -539,27 +569,293 @@ class StockScreener:
 
                 per = val.get("per", 0)
                 pbr = val.get("pbr", 0)
+                eps = val.get("eps", 0)
+                bps = val.get("bps", 0)
 
-                # 저PER (0 < PER <= 15) + 저PBR (0 < PBR < 1.0) 보너스
+                # 재무 건전성 평가
                 bonus = 0
                 reasons = []
+
+                # 1. 저PER (0 < PER <= 15) 보너스
                 if 0 < per <= 15:
                     bonus += 8
                     reasons.append(f"저PER({per:.1f})")
+
+                # 2. 저PBR (0 < PBR < 1.0) 보너스
                 if 0 < pbr < 1.0:
                     bonus += 5
                     reasons.append(f"저PBR({pbr:.2f})")
+
+                # 3. ROE 계산 및 평가 (ROE = EPS / BPS * 100)
+                if eps > 0 and bps > 0:
+                    roe = (eps / bps) * 100
+                    # 높은 ROE (>= 15%) 보너스
+                    if roe >= 20:
+                        bonus += 10
+                        reasons.append(f"고ROE({roe:.1f}%)")
+                    elif roe >= 15:
+                        bonus += 6
+                        reasons.append(f"양호ROE({roe:.1f}%)")
+
+                # 4. EPS 성장성 평가
+                if eps > 0:
+                    # EPS가 양수면 기본 가점
+                    bonus += 3
+                    reasons.append(f"흑자(EPS:{eps:,.0f})")
+                elif eps < 0:
+                    # 적자 기업은 감점
+                    bonus -= 5
+                    reasons.append(f"적자(EPS:{eps:,.0f})")
 
                 if bonus > 0:
                     all_stocks[symbol].score += bonus
                     all_stocks[symbol].reasons.extend(reasons)
                     bonus_cnt += 1
+                elif bonus < 0:
+                    # 적자 기업은 감점만 적용
+                    all_stocks[symbol].score += bonus
+                    all_stocks[symbol].reasons.extend(reasons)
 
             if bonus_cnt:
-                logger.info(f"[Screener] 밸류에이션 보너스 {bonus_cnt}개 적용")
+                logger.info(f"[Screener] 재무 건전성 평가 {bonus_cnt}개 적용 (PER/PBR/ROE/EPS)")
 
         except Exception as e:
-            logger.warning(f"[Screener] 밸류에이션 조회 오류 (무시): {e}")
+            logger.warning(f"[Screener] 재무 건전성 평가 오류 (무시): {e}")
+
+    async def _apply_momentum_filter(self, all_stocks: Dict[str, "ScreenedStock"]):
+        """
+        모멘텀 지속성 검증 및 점수 조정
+
+        일봉 데이터를 조회하여:
+        1. 5일 단기 추세 확인 (연속 상승 여부)
+        2. 20일 중기 추세 확인 (20일 이동평균 대비 위치)
+        3. 모멘텀 점수 부여 (지속적 상승 > 단발적 급등)
+        """
+        if not self._broker:
+            logger.debug("[Screener] 모멘텀 필터 스킵: broker 없음")
+            return
+
+        try:
+            # 점수 높은 순으로 상위 20개만 확인 (API 부하 감소)
+            symbols = sorted(all_stocks.keys(), key=lambda s: all_stocks[s].score, reverse=True)[:20]
+
+            momentum_applied = 0
+            for symbol in symbols:
+                try:
+                    # 최근 30일 일봉 조회
+                    daily_prices = await self._broker.get_daily_prices(symbol, days=30)
+                    if len(daily_prices) < 20:
+                        continue
+
+                    closes = [d["close"] for d in daily_prices]
+
+                    # 1. 5일 단기 추세 (최근 5일 중 4일 이상 상승)
+                    recent_5 = closes[-5:]
+                    rising_days = sum(1 for i in range(1, len(recent_5)) if recent_5[i] > recent_5[i-1])
+
+                    # 2. 20일 이동평균
+                    ma20 = sum(closes[-20:]) / 20
+                    current_price = closes[-1]
+                    ma_position = (current_price - ma20) / ma20 * 100  # MA 대비 %
+
+                    # 3. 모멘텀 점수 계산
+                    bonus = 0
+                    reasons = []
+
+                    # 5일 중 4일 이상 상승 (지속적 상승)
+                    if rising_days >= 4:
+                        bonus += 10
+                        reasons.append(f"지속상승({rising_days}/5일)")
+                    elif rising_days >= 3:
+                        bonus += 5
+                        reasons.append(f"단기상승({rising_days}/5일)")
+                    elif rising_days <= 1:
+                        # 단기 하락 추세는 감점
+                        bonus -= 8
+                        reasons.append(f"단기하락({rising_days}/5일)")
+
+                    # 20일 MA 위치
+                    if ma_position > 10:
+                        bonus += 8
+                        reasons.append(f"MA20+{ma_position:.1f}%")
+                    elif ma_position > 5:
+                        bonus += 4
+                        reasons.append(f"MA20+{ma_position:.1f}%")
+                    elif ma_position < -5:
+                        # MA 아래는 감점
+                        bonus -= 5
+                        reasons.append(f"MA20하회({ma_position:.1f}%)")
+
+                    if bonus != 0:
+                        all_stocks[symbol].score += bonus
+                        all_stocks[symbol].reasons.extend(reasons)
+                        momentum_applied += 1
+
+                    await asyncio.sleep(0.05)  # API rate limit
+
+                except Exception as e:
+                    logger.debug(f"[Screener] 모멘텀 필터 오류 ({symbol}): {e}")
+                    continue
+
+            if momentum_applied:
+                logger.info(f"[Screener] 모멘텀 지속성 평가 {momentum_applied}개 적용")
+
+        except Exception as e:
+            logger.warning(f"[Screener] 모멘텀 필터 전체 오류 (무시): {e}")
+
+    async def _apply_sector_diversity(self, all_stocks: Dict[str, "ScreenedStock"]):
+        """
+        섹터/업종 분산 점수 조정
+
+        특정 섹터에 쏠리지 않도록:
+        1. 섹터별 종목 수 카운트
+        2. 과도하게 많은 섹터는 하위 종목 감점
+        3. 다양한 섹터 분산 유도
+        """
+        if not self._stock_master or not hasattr(self._stock_master, 'pool') or not self._stock_master.pool:
+            logger.debug("[Screener] 섹터 분산 스킵: stock_master 없음")
+            return
+
+        try:
+            symbols = list(all_stocks.keys())
+            if not symbols:
+                return
+
+            # DB에서 섹터 정보 일괄 조회
+            async with self._stock_master.pool.acquire() as conn:
+                query = """
+                    SELECT ticker, corp_cls
+                    FROM kr_stock_master
+                    WHERE ticker = ANY($1::text[])
+                """
+                rows = await conn.fetch(query, symbols)
+
+            # 섹터별 종목 매핑
+            sector_map: Dict[str, List[str]] = {}
+            symbol_sector: Dict[str, str] = {}
+
+            for row in rows:
+                ticker = row["ticker"]
+                sector = row["corp_cls"] or "기타"
+                if not sector or sector == "":
+                    sector = "기타"
+
+                symbol_sector[ticker] = sector
+                if sector not in sector_map:
+                    sector_map[sector] = []
+                sector_map[sector].append(ticker)
+
+            # 섹터별 카운트 확인
+            sector_counts = {sector: len(syms) for sector, syms in sector_map.items()}
+            total_stocks = len(all_stocks)
+            max_per_sector = max(3, int(total_stocks * 0.3))  # 섹터당 최대 30%
+
+            diversity_applied = 0
+            for sector, symbols_in_sector in sector_map.items():
+                if len(symbols_in_sector) <= max_per_sector:
+                    continue
+
+                # 과도한 섹터는 하위 종목 감점
+                # 점수 순 정렬
+                sorted_symbols = sorted(
+                    symbols_in_sector,
+                    key=lambda s: all_stocks[s].score if s in all_stocks else 0,
+                    reverse=True
+                )
+
+                # 상위 max_per_sector개는 유지, 나머지는 감점
+                for i, symbol in enumerate(sorted_symbols):
+                    if i >= max_per_sector and symbol in all_stocks:
+                        penalty = min((i - max_per_sector + 1) * 5, 20)  # 최대 -20점
+                        all_stocks[symbol].score -= penalty
+                        all_stocks[symbol].reasons.append(f"섹터쏠림감점({sector})")
+                        diversity_applied += 1
+
+            if diversity_applied:
+                logger.info(
+                    f"[Screener] 섹터 분산 조정 {diversity_applied}개 "
+                    f"(섹터: {len(sector_map)}개, 최대/섹터: {max_per_sector}개)"
+                )
+
+        except Exception as e:
+            logger.warning(f"[Screener] 섹터 분산 조정 오류 (무시): {e}")
+
+    async def _apply_volatility_filter(self, all_stocks: Dict[str, "ScreenedStock"]):
+        """
+        변동성 필터 (ATR 기반)
+
+        과도한 변동성 종목 필터링:
+        1. 일봉 데이터로 ATR 계산
+        2. ATR > 8% (초고변동성) → 대폭 감점
+        3. ATR > 5% (고변동성) → 감점
+        4. ATR 2~4% (적정 변동성) → 유지
+        5. ATR < 1.5% (저변동성) → 소폭 감점 (유동성 부족)
+        """
+        if not self._broker:
+            logger.debug("[Screener] 변동성 필터 스킵: broker 없음")
+            return
+
+        try:
+            # 점수 높은 순으로 상위 20개만 확인 (API 부하 감소)
+            symbols = sorted(all_stocks.keys(), key=lambda s: all_stocks[s].score, reverse=True)[:20]
+
+            volatility_applied = 0
+            for symbol in symbols:
+                try:
+                    # 최근 30일 일봉 조회
+                    daily_prices = await self._broker.get_daily_prices(symbol, days=30)
+                    if len(daily_prices) < 20:
+                        continue
+
+                    highs = [Decimal(str(d["high"])) for d in daily_prices]
+                    lows = [Decimal(str(d["low"])) for d in daily_prices]
+                    closes = [Decimal(str(d["close"])) for d in daily_prices]
+
+                    # ATR 계산 (14일)
+                    highs.reverse()  # 최신 → 과거 순서로
+                    lows.reverse()
+                    closes.reverse()
+
+                    atr_pct = calculate_atr(highs, lows, closes, period=14)
+                    if atr_pct is None:
+                        continue
+
+                    # 변동성 기반 점수 조정
+                    bonus = 0
+                    reasons = []
+
+                    if atr_pct > 8.0:
+                        # 초고변동성 (리스크 매우 높음)
+                        bonus -= 15
+                        reasons.append(f"초고변동(ATR:{atr_pct:.1f}%)")
+                    elif atr_pct > 5.0:
+                        # 고변동성 (리스크 높음)
+                        bonus -= 8
+                        reasons.append(f"고변동(ATR:{atr_pct:.1f}%)")
+                    elif atr_pct < 1.5:
+                        # 저변동성 (유동성 부족 우려)
+                        bonus -= 3
+                        reasons.append(f"저변동(ATR:{atr_pct:.1f}%)")
+                    else:
+                        # 적정 변동성 (2~5%)
+                        reasons.append(f"적정변동(ATR:{atr_pct:.1f}%)")
+
+                    if bonus != 0 or reasons:
+                        all_stocks[symbol].score += bonus
+                        all_stocks[symbol].reasons.extend(reasons)
+                        volatility_applied += 1
+
+                    await asyncio.sleep(0.05)  # API rate limit
+
+                except Exception as e:
+                    logger.debug(f"[Screener] 변동성 필터 오류 ({symbol}): {e}")
+                    continue
+
+            if volatility_applied:
+                logger.info(f"[Screener] 변동성 필터 {volatility_applied}개 적용 (ATR 기반)")
+
+        except Exception as e:
+            logger.warning(f"[Screener] 변동성 필터 전체 오류 (무시): {e}")
 
     # ============================================================
     # 네이버 금융 크롤링 (백업 데이터 소스)
@@ -1055,12 +1351,27 @@ class StockScreener:
                     all_stocks[stock.symbol].score += 15
 
         # ============================================================
-        # 4. 밸류에이션 보너스 (저PER/저PBR 종목 가점)
+        # 4. 재무 건전성 평가 (저PER/저PBR/ROE/EPS)
         # ============================================================
         await self._apply_valuation_bonus(all_stocks)
 
         # ============================================================
-        # 5. 결과 정리
+        # 5. 모멘텀 지속성 검증 (5일/20일 추세)
+        # ============================================================
+        await self._apply_momentum_filter(all_stocks)
+
+        # ============================================================
+        # 6. 섹터/업종 분산 조정 (특정 섹터 쏠림 방지)
+        # ============================================================
+        await self._apply_sector_diversity(all_stocks)
+
+        # ============================================================
+        # 7. 변동성 필터 (ATR 기반 고변동성 종목 감점)
+        # ============================================================
+        await self._apply_volatility_filter(all_stocks)
+
+        # ============================================================
+        # 8. 결과 정리
         # ============================================================
         result = list(all_stocks.values())
 
