@@ -648,6 +648,13 @@ class TradingBot(SchedulerMixin):
             # 분할 익절 체크 (보유 종목에 대해)
             if self.exit_manager and event.symbol in self.engine.portfolio.positions:
                 await self._check_exit_signal(event.symbol, event.close)
+            elif self.exit_manager and not hasattr(self, '_exit_check_logged'):
+                # 첫 시세 수신 시 한 번만 로그 (디버깅용)
+                self._exit_check_logged = True
+                logger.debug(
+                    f"[청산 체크] 보유 종목: {list(self.engine.portfolio.positions.keys())}, "
+                    f"시세 수신 종목 예시: {event.symbol}"
+                )
 
         except (ValueError, KeyError, TypeError) as e:
             logger.debug(f"시세 데이터 형식 오류 ({event.symbol}): {e}")
@@ -688,6 +695,23 @@ class TradingBot(SchedulerMixin):
 
             # 청산 신호 확인
             exit_signal = self.exit_manager.update_price(symbol, current_price)
+
+            # 디버깅: 주기적으로 상태 로그 (5분마다)
+            if not hasattr(self, '_last_exit_status_log'):
+                self._last_exit_status_log = {}
+            last_log = self._last_exit_status_log.get(symbol, datetime.min)
+            if (datetime.now() - last_log).total_seconds() >= 300:  # 5분
+                state = self.exit_manager.get_state(symbol)
+                if state:
+                    pos = self.engine.portfolio.positions.get(symbol)
+                    if pos:
+                        pnl_pct = float((current_price - pos.avg_price) / pos.avg_price * 100) if pos.avg_price > 0 else 0
+                        logger.debug(
+                            f"[청산 상태] {symbol}: 수익률={pnl_pct:+.2f}%, "
+                            f"손절={state.dynamic_stop_pct or state.stop_loss_pct or 3.0:.2f}%, "
+                            f"단계={state.current_stage.value}"
+                        )
+                self._last_exit_status_log[symbol] = datetime.now()
 
             if exit_signal:
                 action, quantity, reason = exit_signal

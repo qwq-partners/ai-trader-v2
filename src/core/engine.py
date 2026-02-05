@@ -514,6 +514,15 @@ class StrategyManager:
                     if signal:
                         # 현금 없으면 BUY 신호 무시 (SELL은 통과)
                         if no_cash and signal.side == OrderSide.BUY:
+                            if len(signals) == 0:  # 첫 번째 차단 시에만 로그 (중복 방지)
+                                cash = self.engine.portfolio.cash
+                                equity = self.engine.portfolio.total_equity
+                                min_reserve = equity * Decimal(str(self.engine.config.risk.min_cash_reserve_pct / 100))
+                                logger.warning(
+                                    f"[전략→엔진] BUY 신호 차단 중 (가용현금 부족): "
+                                    f"현금={cash:,.0f}원, 최소보유={min_reserve:,.0f}원, "
+                                    f"포지션={len(self.engine.portfolio.positions)}개"
+                                )
                             continue
                         signals.append(SignalEvent.from_signal(signal, source=name))
                 except Exception as e:
@@ -675,7 +684,11 @@ class RiskManager:
 
         if position_size <= 0:
             equity = self.engine.portfolio.total_equity
-            logger.info(f"[리스크] 포지션 크기 0: {event.symbol} (자산={equity:,.0f}, 가격={event.price})")
+            cash = self.engine.get_available_cash()
+            logger.warning(
+                f"[리스크] 포지션 크기 0: {event.symbol} "
+                f"(자산={equity:,.0f}, 현금={cash:,.0f}, 가격={event.price})"
+            )
             return None
 
         # 주문 생성 (시장가 주문)
@@ -820,6 +833,10 @@ class RiskManager:
         price = signal.price or Decimal("0")
 
         if price <= 0 or equity <= 0:
+            logger.warning(
+                f"[리스크] price/equity 체크 실패: {signal.symbol} "
+                f"(price={price}, equity={equity})"
+            )
             return 0
 
         # 하이브리드 모드: 타임 호라이즌별 자금 풀 사용
@@ -846,6 +863,14 @@ class RiskManager:
         # 가용 현금 (수수료 여유분, 예약 현금 차감)
         available = self.engine.get_available_cash() - self._reserved_cash
         if available <= 0:
+            cash = self.engine.get_available_cash()
+            reserved = self._reserved_cash
+            reserved_orders = len(self._reserved_by_order)
+            logger.warning(
+                f"[리스크] 가용 현금 부족: {signal.symbol} "
+                f"(cash={cash:,.0f}, reserved={reserved:,.0f}, "
+                f"reserved_orders={reserved_orders}, available={available:,.0f})"
+            )
             return 0
 
         # 동적 max_positions 계산
@@ -878,7 +903,12 @@ class RiskManager:
         # 최소 포지션 금액 체크
         min_val = Decimal(str(self.config.min_position_value))
         if position_value < min_val:
-            logger.debug(f"[리스크] 포지션 금액 미달: {signal.symbol} ({position_value:,.0f} < {min_val:,.0f})")
+            logger.warning(
+                f"[리스크] 포지션 금액 미달: {signal.symbol} "
+                f"(position_value={position_value:,.0f} < min_val={min_val:,.0f}, "
+                f"pct_value={pct_value:,.0f}, slot_value={slot_value:,.0f}, "
+                f"available={available:,.0f}, max_value={max_value:,.0f})"
+            )
             return 0
 
         # 수량 계산

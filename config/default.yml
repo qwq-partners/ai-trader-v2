@@ -33,7 +33,7 @@ risk:
   max_position_pct: 35.0         # 최대 포지션 비율 35% (30→35: 강한 시그널 집중)
   max_positions: 6               # 최대 동시 포지션 6개 (8→6: 집중 투자)
   min_cash_reserve_pct: 10.0     # 최소 현금 보유 10% (유지)
-  min_position_value: 500000     # 최소 포지션 금액 (50만원)
+  min_position_value: 200000     # 최소 포지션 금액 (20만원)
   dynamic_max_positions: true    # 자산 규모에 따라 max_positions 동적 조정
 
   # === 손절/익절 (스윙 전략: 넓은 폭) ===
