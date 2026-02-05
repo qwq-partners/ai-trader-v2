@@ -462,13 +462,13 @@ class KISWebSocketFeed:
         }
 
     async def _subscribe_symbol(self, symbol: str):
-        """단일 종목 구독"""
+        """단일 종목 구독 (체결가 + 호가)"""
         if not self._ws or self._ws.closed:
             return
 
         try:
-            # 실시간 체결가 구독
-            message = {
+            # 1. 실시간 체결가 구독
+            price_message = {
                 "header": {
                     "approval_key": self._approval_key,
                     "custtype": "P",
@@ -482,24 +482,42 @@ class KISWebSocketFeed:
                     }
                 }
             }
+            await self._ws.send_json(price_message)
 
-            await self._ws.send_json(message)
+            # 2. 실시간 호가 구독
+            orderbook_message = {
+                "header": {
+                    "approval_key": self._approval_key,
+                    "custtype": "P",
+                    "tr_type": "1",  # 1: 등록
+                    "content-type": "utf-8",
+                },
+                "body": {
+                    "input": {
+                        "tr_id": KISWebSocketType.ORDERBOOK.value,
+                        "tr_key": symbol,
+                    }
+                }
+            }
+            await self._ws.send_json(orderbook_message)
+
             self._subscribed_symbols.add(symbol)
 
-            logger.debug(f"종목 구독: {symbol}")
+            logger.debug(f"종목 구독 (체결가+호가): {symbol}")
 
         except Exception as e:
             logger.error(f"구독 실패 ({symbol}): {e}")
 
     async def _unsubscribe_symbol(self, symbol: str):
-        """단일 종목 구독 해제"""
+        """단일 종목 구독 해제 (체결가 + 호가)"""
         if not self._ws or self._ws.closed:
             logger.debug(f"[WS] 구독 해제 스킵 ({symbol}): 연결 없음")
             self._subscribed_symbols.discard(symbol)
             return
 
         try:
-            message = {
+            # 1. 실시간 체결가 구독 해제
+            price_message = {
                 "header": {
                     "approval_key": self._approval_key,
                     "custtype": "P",
@@ -513,8 +531,24 @@ class KISWebSocketFeed:
                     }
                 }
             }
+            await self._ws.send_json(price_message)
 
-            await self._ws.send_json(message)
+            # 2. 실시간 호가 구독 해제
+            orderbook_message = {
+                "header": {
+                    "approval_key": self._approval_key,
+                    "custtype": "P",
+                    "tr_type": "2",  # 2: 해제
+                    "content-type": "utf-8",
+                },
+                "body": {
+                    "input": {
+                        "tr_id": KISWebSocketType.ORDERBOOK.value,
+                        "tr_key": symbol,
+                    }
+                }
+            }
+            await self._ws.send_json(orderbook_message)
 
         except Exception as e:
             logger.error(f"구독 해제 실패 ({symbol}): {e}")

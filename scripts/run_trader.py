@@ -1310,6 +1310,12 @@ class TradingBot(SchedulerMixin):
                     self._run_stock_master_refresh(), name="stock_master_refresh"
                 ))
 
+            # 10-2. 일봉 데이터 갱신 스케줄러
+            if self.broker:
+                tasks.append(asyncio.create_task(
+                    self._run_daily_candle_refresh(), name="daily_candle_refresh"
+                ))
+
             # 10. 대시보드 서버 실행
             dashboard_cfg = self.config.get("dashboard") or {}
             if dashboard_cfg.get("enabled", True):

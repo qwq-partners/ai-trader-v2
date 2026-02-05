@@ -420,7 +420,7 @@ class KISMarketData:
 
     async def fetch_batch_valuations(self, symbols: List[str]) -> Dict[str, Dict]:
         """
-        복수 종목 PER/PBR 일괄 조회 (캐시 우선, 미캐시 건만 API 호출)
+        복수 종목 PER/PBR 일괄 조회 (캐시 우선, 미캐시 건 병렬 API 호출)
 
         Args:
             symbols: 종목코드 리스트
@@ -441,18 +441,39 @@ class KISMarketData:
             else:
                 to_fetch.append(sym)
 
-        # 미캐시 건은 순차 조회 (API rate limit 준수)
-        fetch_count = min(len(to_fetch), 30)
-        for sym in to_fetch[:30]:  # 최대 30건
-            val = await self.fetch_stock_valuation(sym)
-            if val:
-                result[sym] = val
-            await asyncio.sleep(0.05)  # rate limit 방지
+        # 미캐시 건은 병렬 조회 (배치 단위로 API rate limit 준수)
+        fetch_count = 0
+        max_symbols = 30
+        batch_size = 18  # RPS 18 한도 내 동시 호출
+
+        # 최대 30건까지만 처리
+        to_fetch = to_fetch[:max_symbols]
+
+        # 배치 단위로 병렬 처리
+        for i in range(0, len(to_fetch), batch_size):
+            batch = to_fetch[i:i + batch_size]
+
+            # 배치 내 종목들을 병렬로 조회
+            tasks = [self.fetch_stock_valuation(sym) for sym in batch]
+            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # 결과 수집
+            for sym, val in zip(batch, batch_results):
+                if isinstance(val, Exception):
+                    logger.debug(f"[KISMarketData] {sym} 밸류에이션 조회 오류: {val}")
+                    continue
+                if val:
+                    result[sym] = val
+                    fetch_count += 1
+
+            # 다음 배치 전 대기 (rate limit buffer)
+            if i + batch_size < len(to_fetch):
+                await asyncio.sleep(0.1)
 
         if to_fetch:
             logger.info(
                 f"[KISMarketData] 밸류에이션 일괄 조회: 캐시 {cached_count}건 + "
-                f"API {fetch_count}건"
+                f"API {fetch_count}건 (병렬 처리)"
             )
         return result
 

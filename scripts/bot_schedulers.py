@@ -443,6 +443,142 @@ class SchedulerMixin:
         except Exception as e:
             logger.error(f"[종목마스터] 스케줄러 오류: {e}")
 
+    async def _run_daily_candle_refresh(self):
+        """
+        일봉 데이터 갱신 스케줄러
+
+        장 마감 후(15:40, 20:40)에 보유 종목 + 후보 종목의 일봉 데이터를 갱신합니다.
+        중기 전략(5일+ 보유)의 정확한 캔들 분석을 위해 필수입니다.
+        """
+        sched_cfg = self.config.get("scheduler") or {}
+        refresh_times = sched_cfg.get("candle_refresh_times", ["15:40", "20:40"])
+        max_symbols_per_run = sched_cfg.get("candle_refresh_max_symbols", 50)
+        skip_weekends = sched_cfg.get("candle_refresh_skip_weekends", True)
+
+        # 시간을 (hour, minute) 튜플 리스트로 변환
+        refresh_schedule = []
+        for time_str in refresh_times:
+            hour, minute = (int(x) for x in time_str.split(":"))
+            refresh_schedule.append((hour, minute))
+
+        last_refresh_date: Optional[date] = None
+        last_refresh_hour: Optional[int] = None
+
+        try:
+            while self.running:
+                now = datetime.now()
+                today = now.date()
+
+                # 공휴일(주말 포함)이면 스킵
+                if is_kr_market_holiday(today):
+                    await asyncio.sleep(60)
+                    continue
+
+                # 주말 스킵 옵션
+                if skip_weekends and now.weekday() >= 5:
+                    await asyncio.sleep(60)
+                    continue
+
+                # 스케줄 시간 체크 (각 시간별 ±10분 윈도우)
+                for refresh_hour, refresh_min in refresh_schedule:
+                    if (now.hour == refresh_hour
+                            and refresh_min <= now.minute < refresh_min + 10
+                            and (last_refresh_date != today or last_refresh_hour != refresh_hour)):
+                        try:
+                            logger.info(f"[일봉갱신] {refresh_hour:02d}:{refresh_min:02d} 스케줄 시작...")
+
+                            # 갱신 대상 종목 수집
+                            symbols_to_refresh = []
+
+                            # 1. 보유 종목 (최우선)
+                            if self.engine and self.engine.portfolio:
+                                position_symbols = list(self.engine.portfolio.positions.keys())
+                                symbols_to_refresh.extend(position_symbols)
+                                logger.info(f"[일봉갱신] 보유 종목 {len(position_symbols)}개 추가")
+
+                            # 2. 감시 종목 중 상위 점수 (보유 종목 제외)
+                            if self.ws_feed and hasattr(self.ws_feed, '_symbol_scores'):
+                                # 점수 높은 순 정렬
+                                scored_symbols = sorted(
+                                    self.ws_feed._symbol_scores.items(),
+                                    key=lambda x: x[1],
+                                    reverse=True
+                                )
+                                # 보유 종목 제외하고 상위 N개
+                                position_set = set(symbols_to_refresh)
+                                candidate_count = 0
+                                for symbol, score in scored_symbols:
+                                    if symbol not in position_set:
+                                        if score >= 70:  # 높은 점수만
+                                            symbols_to_refresh.append(symbol)
+                                            candidate_count += 1
+                                            if len(symbols_to_refresh) >= max_symbols_per_run:
+                                                break
+
+                                logger.info(f"[일봉갱신] 후보 종목 {candidate_count}개 추가 (점수 70+)")
+
+                            # 중복 제거
+                            symbols_to_refresh = list(dict.fromkeys(symbols_to_refresh))
+                            total_symbols = len(symbols_to_refresh)
+
+                            if total_symbols == 0:
+                                logger.info("[일봉갱신] 갱신 대상 종목 없음")
+                                last_refresh_date = today
+                                last_refresh_hour = refresh_hour
+                                break
+
+                            # 최대 개수 제한
+                            if total_symbols > max_symbols_per_run:
+                                symbols_to_refresh = symbols_to_refresh[:max_symbols_per_run]
+                                logger.info(
+                                    f"[일봉갱신] 대상 종목 {total_symbols}개 → {max_symbols_per_run}개로 제한"
+                                )
+
+                            # 일봉 데이터 갱신 (배치)
+                            success_count = 0
+                            fail_count = 0
+
+                            for symbol in symbols_to_refresh:
+                                try:
+                                    daily_prices = await self.broker.get_daily_prices(symbol, days=60)
+                                    if daily_prices and len(daily_prices) > 0:
+                                        success_count += 1
+                                        logger.debug(f"[일봉갱신] {symbol}: {len(daily_prices)}일 갱신 완료")
+                                    else:
+                                        fail_count += 1
+                                        logger.debug(f"[일봉갱신] {symbol}: 데이터 없음")
+
+                                    # Rate limit 준수 (0.1초 간격)
+                                    await asyncio.sleep(0.1)
+
+                                except Exception as e:
+                                    fail_count += 1
+                                    logger.debug(f"[일봉갱신] {symbol} 오류: {e}")
+                                    await asyncio.sleep(0.1)
+
+                            logger.info(
+                                f"[일봉갱신] 완료: 성공={success_count}/{total_symbols}, "
+                                f"실패={fail_count}"
+                            )
+
+                            last_refresh_date = today
+                            last_refresh_hour = refresh_hour
+
+                        except Exception as e:
+                            logger.error(f"[일봉갱신] 스케줄 실행 오류: {e}")
+                            last_refresh_date = today
+                            last_refresh_hour = refresh_hour
+
+                        break  # 한 번만 실행
+
+                # 1분마다 체크
+                await asyncio.sleep(60)
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"[일봉갱신] 스케줄러 오류: {e}")
+
     async def _run_theme_detection(self):
         """테마 탐지 루프"""
         try:
