@@ -1,5 +1,106 @@
 # AI Trader v2 - 변경 이력
 
+## [2026-02-06] 종목 마스터 DB + 다중 소스 뉴스 + LLM 파이프라인 개선
+
+### 🎯 개요
+종목 마스터 DB 구축, 다중 소스 뉴스 수집, LLM 분석 파이프라인 개선을 통해 뉴스 기반 테마 감지 시스템을 대폭 강화
+
+### 📊 종목 마스터 DB 시스템
+
+#### 구현 내용
+1. **PostgreSQL 종목 마스터 테이블** (`src/data/storage/stock_master.py`)
+   - 전체 KRX 종목 3,708개 관리 (KOSPI 926, KOSDAQ 1,790, ETF 880)
+   - KOSPI200(199개), KOSDAQ150(150개) 플래그 관리
+   - 인메모리 캐시로 빠른 종목명→코드 변환
+
+2. **자동 갱신 스케줄러**
+   - 매일 18:00 자동 갱신 (주말 스킵)
+   - FinanceDataReader + pykrx 통합 로드
+   - 빈 테이블 시 자동 초기화
+
+3. **LLM 힌트 통합**
+   - ThemeDetector가 상위 80개 종목 힌트 사용
+   - KNOWN_STOCKS 하드코딩 → DB 동적 로드로 전환
+
+#### 효과
+- ✅ **3,708개 종목 실시간 검증**: 종목명/코드 오타 방지
+- ✅ **LLM 인식률 향상**: 상위 종목 힌트로 정확도 증가
+- ✅ **유지보수 자동화**: 신규 상장/폐지 종목 자동 반영
+
+### 📰 다중 소스 뉴스 수집기
+
+#### 구현 내용 (`src/signals/sentiment/theme_detector.py`)
+1. **Daum 금융 뉴스** - `fetch_daum_finance_news()`
+   - finance.daum.net/content/news?category=stock
+   - 요약 200~300자 → NewsArticle.content에 저장
+
+2. **매일경제 RSS** - `fetch_mk_rss()`
+   - mk.co.kr/rss/50200011/ (증권 섹션)
+   - description 100~150자 → NewsArticle.content에 저장
+   - HTML 태그 제거, RFC 2822 날짜 파싱
+
+3. **SHA1 중복 제거** - `_make_dedupe_key()`, `_is_duplicate()`
+   - 제목+URL 해시로 중복 제거
+   - 기존 시스템과 동일한 dedupe 알고리즘
+
+#### 효과
+- ✅ **커버리지 증가**: Naver만 → Naver+Daum+매경 통합 (88건 수집)
+- ✅ **요약 텍스트 제공**: LLM 분석에 200~300자 요약 활용
+- ✅ **안정성 향상**: 소스별 실패 무시, 최소 1개 소스로 동작
+
+### 🤖 LLM 분석 파이프라인 개선
+
+#### 1. 임팩트 스코어링 개선
+- **기존**: 0~100 점수 (방향 불명확)
+- **변경**: **-10 ~ +10 양방향 스코어**
+  - 양수(+1~+10): bullish (긍정적 영향)
+  - 음수(-1~-10): bearish (부정적 영향)
+  - 0: 중립
+
+#### 2. 뉴스 텍스트 확대
+- **기존**: 제목만 전달
+- **변경**: **제목 + content(요약)** 함께 전달
+- LLM 컨텍스트 증가로 정확도 향상
+
+#### 3. 종목 해석 강화
+- `_resolve_stock_symbol()` async 전환
+- 1차: 6자리 코드 → DB 검증
+- 2차: 종목명 → DB 검색
+- 3차: KNOWN_STOCKS 폴백 (하위호환)
+
+#### 4. Threshold 조정
+- **기존**: `news_impact_threshold: 70` (0~100 스케일)
+- **변경**: `news_impact_threshold: 5` (-10~+10 스케일 절대값)
+- 더 민감한 뉴스 반응 가능
+
+#### 실제 동작 예시
+```
+[뉴스] 수집 완료: 소스별={'naver': 28, 'daum': 20, 'mk': 20, ...}, 최종=78
+[ThemeDetector] 종목 센티멘트 11개 갱신
+
+[테마] 금융/은행 (점수: 60) - 관련종목 5개
+[테마] AI/반도체 (점수: 52) - 관련종목 5개 (삼성전자, SK하이닉스 등)
+[테마] 인터넷/플랫폼 (점수: 25) - 관련종목 5개 (US -3.4% 하락 반영)
+```
+
+### 📋 변경 파일
+| 파일 | 액션 | 설명 |
+|------|------|------|
+| `src/data/storage/stock_master.py` | 신규 | 종목 마스터 DB (250줄) |
+| `config/default.yml` | 수정 | stock_master 섹션 추가 |
+| `requirements.txt` | 수정 | finance-datareader, pykrx 추가 |
+| `scripts/bot_schedulers.py` | 수정 | 종목 마스터 갱신 스케줄러 |
+| `scripts/run_trader.py` | 수정 | stock_master 초기화 |
+| `src/signals/sentiment/theme_detector.py` | 수정 | 뉴스 수집기 + LLM 파이프라인 개선 |
+
+### 🎯 성과
+- **종목 관리**: 3,708개 종목 자동 관리 (수동 → 자동)
+- **뉴스 수집**: 단일 소스(Naver) → 다중 소스(+Daum, +매경)
+- **LLM 정확도**: 양방향 스코어링 + 종목 DB 연동
+- **시스템 안정성**: 소스별 폴백, 빈 테이블 자동 초기화
+
+---
+
 ## [2026-02-05 AM] 리스크 관리 로깅 개선 + 디버깅 강화
 
 ### 🔧 매수 차단 및 손절/익절 모니터링 개선
