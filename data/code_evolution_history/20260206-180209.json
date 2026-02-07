@@ -1,0 +1,30 @@
+{
+  "timestamp": "2026-02-06T18:00:27.501556",
+  "trigger": "scheduled",
+  "success": false,
+  "message": "테스트 실패: /usr/bin/python3: No module named pytest\n",
+  "branch": "auto-evolution/20260206-180028",
+  "pr_url": "",
+  "auto_merged": false,
+  "changed_files_count": 4,
+  "changed_files": [
+    "data/",
+    "tests/",
+    "test_stock_master_refresh.py",
+    "=8.2.0"
+  ],
+  "error_patterns": {},
+  "trading_performance": {
+    "total_trades": 25,
+    "win_rate": 20.0,
+    "profit_factor": 0.15039319954974187,
+    "avg_pnl_pct": -1.6275103411978373,
+    "issues": [
+      "승률이 20.0%로 낮음 (40% 미만)",
+      "손익비가 0.15로 1 미만 (손실이 이익보다 큼)",
+      "연속 14회 손실 발생",
+      "-5% 이상 큰 손실 1회 - 손절 규칙 준수 필요"
+    ]
+  },
+  "forbidden_attempts": []
+}
