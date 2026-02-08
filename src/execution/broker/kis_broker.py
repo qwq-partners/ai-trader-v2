@@ -493,10 +493,10 @@ class KISBroker(BaseBroker):
             return "regular"      # 정규장
         elif 1520 <= time_val < 1530:
             return "closing"      # 장마감 동시호가
-        elif 1540 <= time_val < 2000:
-            return "next_market"  # 넥스트장
         elif 1530 <= time_val < 1540:
             return "break"        # 휴장 (정규장 → 넥스트장 전환)
+        elif 1540 <= time_val < 2000:
+            return "next_market"  # 넥스트장
         else:
             return "closed"
 

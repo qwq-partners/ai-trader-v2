@@ -387,6 +387,7 @@
                         <span class="metric-label">일일 손익</span>
                         <span id="p-daily-pnl" class="mono" style="font-weight: 600; font-size: 0.92rem;">--</span>
                     </div>
+                    <div id="p-pnl-breakdown" style="text-align: right; font-size: 0.72rem; padding: 2px 0 0 0;"></div>
                 </div>
 
                 <!-- Pie chart -->
@@ -476,6 +477,17 @@
             </div>
         </div>
 
+        <!-- Pre-market Section (NXT) -->
+        <div id="premarket-card" class="card animate-in delay-3" style="padding: 24px; margin-bottom: 16px; display: none;">
+            <div class="card-header">
+                <span class="dot" style="background: var(--accent-purple); box-shadow: 0 0 8px var(--accent-purple);"></span>
+                프리마켓 (NXT) 종목 동향
+                <span id="premarket-count" style="margin-left: auto; font-size: 0.7rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; background: var(--bg-elevated); padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border-subtle);">0종목</span>
+            </div>
+            <div id="premarket-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px;">
+            </div>
+        </div>
+
         <!-- Positions Table -->
         <div class="card animate-in delay-3" style="padding: 24px; margin-bottom: 16px;">
             <div class="card-header">
@@ -486,18 +498,20 @@
                 <table id="positions-table" style="width: 100%; text-align: left; border-collapse: collapse;">
                     <thead>
                         <tr style="border-bottom: 1px solid var(--border-subtle);">
-                            <th class="sortable-th" data-sort="name" style="padding: 0 12px 10px 0;">종목 <span class="sort-icon"></span></th>
-                            <th class="sortable-th" data-sort="current_price" style="padding: 0 12px 10px 0; text-align: right;">현재가 <span class="sort-icon"></span></th>
-                            <th class="sortable-th" data-sort="avg_price" style="padding: 0 12px 10px 0; text-align: right;">평균가 <span class="sort-icon"></span></th>
-                            <th class="sortable-th" data-sort="quantity" style="padding: 0 12px 10px 0; text-align: right;">수량 <span class="sort-icon"></span></th>
-                            <th class="sortable-th" data-sort="market_value" style="padding: 0 12px 10px 0; text-align: right;">평가액 <span class="sort-icon"></span></th>
-                            <th class="sortable-th" data-sort="unrealized_pnl" style="padding: 0 12px 10px 0; text-align: right;">손익 <span class="sort-icon"></span></th>
-                            <th class="sortable-th" data-sort="unrealized_pnl_pct" style="padding: 0 12px 10px 0; text-align: right;">손익률 <span class="sort-icon"></span></th>
+                            <th class="sortable-th" data-sort="name" style="padding: 0 10px 10px 0;">종목 <span class="sort-icon"></span></th>
+                            <th style="padding: 0 10px 10px 0;">전략</th>
+                            <th class="sortable-th" data-sort="current_price" style="padding: 0 10px 10px 0; text-align: right;">현재가 <span class="sort-icon"></span></th>
+                            <th class="sortable-th" data-sort="avg_price" style="padding: 0 10px 10px 0; text-align: right;">평균가 <span class="sort-icon"></span></th>
+                            <th class="sortable-th" data-sort="quantity" style="padding: 0 10px 10px 0; text-align: right;">수량 <span class="sort-icon"></span></th>
+                            <th class="sortable-th" data-sort="unrealized_pnl" style="padding: 0 10px 10px 0; text-align: right;">손익 <span class="sort-icon"></span></th>
+                            <th class="sortable-th" data-sort="unrealized_pnl_pct" style="padding: 0 10px 10px 0; text-align: right;">손익률 <span class="sort-icon"></span></th>
+                            <th style="padding: 0 10px 10px 0; text-align: right;">손절/목표</th>
+                            <th style="padding: 0 10px 10px 0;">보유</th>
                             <th style="padding: 0 0 10px 0;">청산단계</th>
                         </tr>
                     </thead>
                     <tbody id="positions-body">
-                        <tr><td colspan="8" style="padding: 40px 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">보유 포지션 없음</td></tr>
+                        <tr><td colspan="10" style="padding: 40px 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">보유 포지션 없음</td></tr>
                     </tbody>
                 </table>
             </div>

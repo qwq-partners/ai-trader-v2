@@ -27,10 +27,19 @@ sse.on('portfolio', (data) => {
     // 주식 평가
     document.getElementById('p-stock').textContent = formatCurrency(data.total_position_value);
 
-    // 일일 손익
+    // 일일 손익 (실현 + 미실현)
     const dailyPnl = document.getElementById('p-daily-pnl');
-    dailyPnl.textContent = formatPnl(data.daily_pnl) + ` (${formatPct(data.daily_pnl_pct)})`;
+    dailyPnl.innerHTML = formatPnl(data.daily_pnl) + ` <span style="font-size:0.72rem; color:var(--text-muted);">(${formatPct(data.daily_pnl_pct)})</span>`;
     dailyPnl.className = 'mono font-semibold ' + pnlClass(data.daily_pnl);
+
+    // 실현/미실현 분리 표시
+    const breakdownEl = document.getElementById('p-pnl-breakdown');
+    if (breakdownEl && (data.realized_daily_pnl || data.unrealized_pnl)) {
+        breakdownEl.innerHTML =
+            `<span style="color:var(--text-muted);">실현</span> <span class="mono ${pnlClass(data.realized_daily_pnl)}">${formatPnl(data.realized_daily_pnl)}</span>` +
+            ` <span style="color:var(--text-muted); margin:0 6px;">|</span> ` +
+            `<span style="color:var(--text-muted);">미실현</span> <span class="mono ${pnlClass(data.unrealized_pnl)}">${formatPnl(data.unrealized_pnl)}</span>`;
+    }
 
     // 파이 차트 업데이트
     updatePieChart(data.cash, data.total_position_value);
@@ -88,6 +97,14 @@ sse.on('positions', (data) => {
     updatePositionsTable(data);
 });
 
+sse.on('events', (data) => {
+    if (Array.isArray(data)) {
+        data.forEach(evt => {
+            addLogEntry(formatTime(evt.time), evt.type, evt.message);
+        });
+    }
+});
+
 // ============================================================
 // 포지션 테이블
 // ============================================================
@@ -97,12 +114,19 @@ function updatePositionsTable(positions) {
     renderSortedPositions();
 }
 
+const strategyNames = {
+    momentum_breakout: '모멘텀',
+    theme_chasing: '테마',
+    gap_and_go: '갭상승',
+    mean_reversion: '평균회귀',
+};
+
 function renderSortedPositions() {
     const tbody = document.getElementById('positions-body');
     const positions = lastPositions;
 
     if (!positions || positions.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" class="py-8 text-center text-gray-500">보유 포지션 없음</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" class="py-8 text-center text-gray-500">보유 포지션 없음</td></tr>';
         return;
     }
 
@@ -118,18 +142,41 @@ function renderSortedPositions() {
         return 0;
     });
 
+    const now = new Date();
     const rows = sorted.map(pos => {
         const pnlCls = pnlClass(pos.unrealized_pnl);
         const stageLabel = exitStageLabel(pos.exit_state);
+        const stName = strategyNames[pos.strategy] || pos.strategy || '--';
+
+        // 보유시간
+        let holdStr = '--';
+        if (pos.entry_time) {
+            const entry = new Date(pos.entry_time);
+            const diffMin = Math.floor((now - entry) / 60000);
+            if (diffMin >= 60) {
+                holdStr = `${Math.floor(diffMin / 60)}h ${diffMin % 60}m`;
+            } else {
+                holdStr = `${diffMin}m`;
+            }
+        }
+
+        // 손절/목표
+        const slTp = (pos.stop_loss || pos.take_profit)
+            ? `<span style="color:var(--accent-red);font-size:0.72rem;">${pos.stop_loss ? formatNumber(pos.stop_loss) : '--'}</span>` +
+              `<span style="color:var(--text-muted);font-size:0.72rem;"> / </span>` +
+              `<span style="color:var(--accent-green);font-size:0.72rem;">${pos.take_profit ? formatNumber(pos.take_profit) : '--'}</span>`
+            : '--';
 
         return `<tr class="border-b" style="border-color:rgba(99,102,241,0.08)">
-            <td class="py-2 pr-4 font-medium text-white">${pos.name || pos.symbol} <span style="color:var(--text-muted); font-size:0.72rem; font-weight:400;">${pos.symbol}</span></td>
-            <td class="py-2 pr-4 text-right mono">${formatNumber(pos.current_price)}</td>
-            <td class="py-2 pr-4 text-right mono text-gray-400">${formatNumber(pos.avg_price)}</td>
-            <td class="py-2 pr-4 text-right mono">${pos.quantity}</td>
-            <td class="py-2 pr-4 text-right mono">${formatCurrency(pos.market_value)}</td>
-            <td class="py-2 pr-4 text-right mono ${pnlCls}">${formatPnl(pos.unrealized_pnl)}</td>
-            <td class="py-2 pr-4 text-right mono ${pnlCls}">${formatPct(pos.unrealized_pnl_pct)}</td>
+            <td class="py-2 pr-3 font-medium text-white" style="white-space:nowrap;">${pos.name || pos.symbol} <span style="color:var(--text-muted); font-size:0.72rem; font-weight:400;">${pos.symbol}</span></td>
+            <td class="py-2 pr-3" style="font-size:0.75rem; color:var(--accent-purple);">${stName}</td>
+            <td class="py-2 pr-3 text-right mono">${formatNumber(pos.current_price)}</td>
+            <td class="py-2 pr-3 text-right mono text-gray-400">${formatNumber(pos.avg_price)}</td>
+            <td class="py-2 pr-3 text-right mono">${pos.quantity}</td>
+            <td class="py-2 pr-3 text-right mono ${pnlCls}">${formatPnl(pos.unrealized_pnl)}</td>
+            <td class="py-2 pr-3 text-right mono ${pnlCls}">${formatPct(pos.unrealized_pnl_pct)}</td>
+            <td class="py-2 pr-3 text-right mono" style="white-space:nowrap;">${slTp}</td>
+            <td class="py-2 pr-3 mono" style="font-size:0.75rem; color:var(--text-secondary);">${holdStr}</td>
             <td class="py-2">${stageLabel}</td>
         </tr>`;
     }).join('');
@@ -237,6 +284,48 @@ function addLogEntry(time, type, message) {
 }
 
 // ============================================================
+// 프리마켓 (NXT) 표시
+// ============================================================
+
+async function loadPremarket() {
+    try {
+        const data = await api('/api/premarket');
+        renderPremarket(data);
+    } catch (e) {
+        // 프리장 시간이 아니면 무시
+    }
+}
+
+function renderPremarket(data) {
+    const card = document.getElementById('premarket-card');
+    const grid = document.getElementById('premarket-grid');
+    const countEl = document.getElementById('premarket-count');
+
+    if (!data || !data.available || !data.stocks || data.stocks.length === 0) {
+        card.style.display = 'none';
+        return;
+    }
+
+    card.style.display = 'block';
+    countEl.textContent = data.count + '종목';
+
+    const items = data.stocks.slice(0, 20).map(s => {
+        const cls = s.pre_change_pct >= 0 ? 'text-profit' : 'text-loss';
+        const bgCls = s.pre_change_pct >= 0 ? 'rgba(52,211,153,0.06)' : 'rgba(248,113,113,0.06)';
+        const borderCls = s.pre_change_pct >= 0 ? 'rgba(52,211,153,0.12)' : 'rgba(248,113,113,0.12)';
+        return `<div style="background:${bgCls}; border:1px solid ${borderCls}; border-radius:10px; padding:10px 12px;">
+            <div style="font-size:0.78rem; font-weight:500; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${s.name || s.symbol}</div>
+            <div style="display:flex; justify-content:space-between; align-items:baseline; margin-top:4px;">
+                <span class="mono" style="font-size:0.82rem;">${formatNumber(s.pre_price)}</span>
+                <span class="mono ${cls}" style="font-size:0.82rem; font-weight:600;">${formatPct(s.pre_change_pct)}</span>
+            </div>
+        </div>`;
+    }).join('');
+
+    grid.innerHTML = items;
+}
+
+// ============================================================
 // 초기화
 // ============================================================
 
@@ -274,6 +363,11 @@ document.addEventListener('DOMContentLoaded', () => {
     api('/api/status').then(data => {
         sse._dispatch('status', data);
     }).catch(() => {});
+
+    // 프리마켓 데이터 로드
+    loadPremarket();
+    // 30초마다 프리마켓 갱신
+    setInterval(loadPremarket, 30000);
 
     addLogEntry(formatTime(new Date().toISOString()), '시스템', '대시보드 연결됨');
 });

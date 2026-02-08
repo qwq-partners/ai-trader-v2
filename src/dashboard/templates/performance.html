@@ -180,6 +180,33 @@
             </div>
         </div>
 
+        <!-- Equity Curve -->
+        <div class="card animate-in delay-2" style="padding: 24px; margin-bottom: 16px;">
+            <div class="card-header">
+                <span class="dot" style="background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green);"></span>
+                누적 손익 추이 (에퀴티 커브)
+            </div>
+            <div id="equity-curve-chart" style="height: 280px;"></div>
+            <div id="equity-stats" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 12px;">
+                <div style="text-align:center;">
+                    <div class="stat-label">최대 수익</div>
+                    <div id="eq-max-profit" class="mono text-profit" style="font-size:0.95rem; font-weight:600;">--</div>
+                </div>
+                <div style="text-align:center;">
+                    <div class="stat-label">최대 손실</div>
+                    <div id="eq-max-loss" class="mono text-loss" style="font-size:0.95rem; font-weight:600;">--</div>
+                </div>
+                <div style="text-align:center;">
+                    <div class="stat-label">Profit Factor</div>
+                    <div id="eq-pf" class="mono" style="font-size:0.95rem; font-weight:600; color:var(--text-primary);">--</div>
+                </div>
+                <div style="text-align:center;">
+                    <div class="stat-label">Max Drawdown</div>
+                    <div id="eq-mdd" class="mono text-loss" style="font-size:0.95rem; font-weight:600;">--</div>
+                </div>
+            </div>
+        </div>
+
         <!-- Charts grid -->
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
             <div class="card animate-in delay-2" style="padding: 24px;">

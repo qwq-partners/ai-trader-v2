@@ -29,6 +29,9 @@ def setup_api_routes(app: web.Application, data_collector):
     app.router.add_get("/api/evolution/history", handler.get_evolution_history)
     app.router.add_get("/api/code-evolution", handler.get_code_evolution)
     app.router.add_get("/api/health", handler.get_system_health)
+    app.router.add_get("/api/premarket", handler.get_premarket)
+    app.router.add_get("/api/events", handler.get_events)
+    app.router.add_get("/api/equity-curve", handler.get_equity_curve)
     app.router.add_post("/api/evolution/apply", handler.apply_evolution_parameter)
 
 
@@ -96,6 +99,18 @@ class APIHandler:
 
     async def get_system_health(self, request: web.Request) -> web.Response:
         return web.json_response(self.dc.get_system_health())
+
+    async def get_premarket(self, request: web.Request) -> web.Response:
+        return web.json_response(self.dc.get_premarket())
+
+    async def get_events(self, request: web.Request) -> web.Response:
+        since_id = int(request.query.get("since", "0"))
+        return web.json_response(self.dc.get_events(since_id))
+
+    async def get_equity_curve(self, request: web.Request) -> web.Response:
+        days = int(request.query.get("days", "30"))
+        days = max(1, min(days, 90))
+        return web.json_response(self.dc.get_equity_curve(days))
 
     async def apply_evolution_parameter(self, request: web.Request) -> web.Response:
         """

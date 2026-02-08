@@ -478,6 +478,19 @@ class TradingBot(SchedulerMixin):
                         "risk_config", self.config.trading.risk
                     )
 
+                # 기존 포지션에 전략 정보 보강 (TradeJournal에서)
+                if self.engine.portfolio.positions and self.trade_journal:
+                    open_trades = self.trade_journal.get_open_trades()
+                    trade_by_symbol = {t.symbol: t for t in open_trades}
+                    for symbol, pos in self.engine.portfolio.positions.items():
+                        if not pos.strategy and symbol in trade_by_symbol:
+                            trade = trade_by_symbol[symbol]
+                            if trade.entry_strategy:  # 빈 문자열 제외
+                                pos.strategy = trade.entry_strategy
+                                if not pos.entry_time and trade.entry_time:
+                                    pos.entry_time = trade.entry_time
+                                logger.info(f"  포지션 전략 보강: {symbol} → {trade.entry_strategy}")
+
                 logger.info("자가 진화 엔진 초기화 완료")
 
             # 종목 스크리너 초기화
@@ -751,6 +764,25 @@ class TradingBot(SchedulerMixin):
     async def _on_market_data(self, event: MarketDataEvent):
         """실시간 시세 데이터 처리"""
         try:
+            # 프리마켓(NXT) 데이터 수집 (08:00~08:50)
+            now = datetime.now()
+            time_val = now.hour * 100 + now.minute
+            if 800 <= time_val < 850:
+                prev = float(event.prev_close) if event.prev_close and event.prev_close > 0 else 0
+                cur = float(event.close) if event.close and event.close > 0 else 0
+                if prev > 0 and cur > 0:
+                    change_pct = (cur - prev) / prev * 100
+                    existing = self.engine.premarket_data.get(event.symbol, {})
+                    self.engine.premarket_data[event.symbol] = {
+                        "prev_close": prev,
+                        "pre_price": cur,
+                        "pre_change_pct": change_pct,
+                        "pre_volume": getattr(event, 'volume', 0) or 0,
+                        "pre_high": max(cur, existing.get("pre_high", 0)),
+                        "pre_low": min(cur, existing.get("pre_low", cur)) if existing.get("pre_low", 0) > 0 else cur,
+                        "updated_at": now.isoformat(),
+                    }
+
             # 엔진 이벤트 큐에 전달
             await self.engine.emit(event)
 

@@ -6,6 +6,7 @@ AI Trading Bot v2 - 이벤트 기반 트레이딩 엔진
 
 import asyncio
 import heapq
+from collections import deque
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 from typing import Dict, List, Optional, Any, Callable, Coroutine, Set
@@ -134,6 +135,13 @@ class TradingEngine:
         self.broker = None
         self.data_feed = None
 
+        # 프리마켓 데이터 (NXT)
+        self.premarket_data: Dict[str, Dict] = {}
+
+        # 대시보드 이벤트 로그 (ring buffer)
+        self._dashboard_events: deque = deque(maxlen=200)
+        self._dashboard_event_id: int = 0
+
         # 시그널 핸들러
         self._setup_signal_handlers()
 
@@ -147,6 +155,20 @@ class TradingEngine:
 
         signal.signal(signal.SIGINT, handle_shutdown)
         signal.signal(signal.SIGTERM, handle_shutdown)
+
+    # ============================================================
+    # 대시보드 이벤트 로그
+    # ============================================================
+
+    def push_dashboard_event(self, event_type: str, message: str):
+        """대시보드 이벤트 로그에 항목 추가"""
+        self._dashboard_event_id += 1
+        self._dashboard_events.append({
+            "id": self._dashboard_event_id,
+            "time": datetime.now().isoformat(),
+            "type": event_type,
+            "message": message,
+        })
 
     # ============================================================
     # 이벤트 핸들러 관리
@@ -229,9 +251,27 @@ class TradingEngine:
         """이벤트 처리"""
         self.stats.events_processed += 1
 
-        # SIGNAL 이벤트 추적
+        # SIGNAL 이벤트 추적 + 대시보드 로그
         if event.type == EventType.SIGNAL:
-            logger.info(f"[엔진] SignalEvent 처리 시작: {getattr(event, 'symbol', '?')} {getattr(event, 'side', '?')}")
+            symbol = getattr(event, 'symbol', '?')
+            side = getattr(event, 'side', '?')
+            score = getattr(event, 'score', 0)
+            logger.info(f"[엔진] SignalEvent 처리 시작: {symbol} {side}")
+            side_label = '매수' if str(side) == 'OrderSide.BUY' or str(side) == 'buy' else '매도'
+            self.push_dashboard_event("신호", f"{symbol} {side_label} 신호 (점수:{score:.0f})")
+        elif event.type == EventType.FILL:
+            symbol = getattr(event, 'symbol', '?')
+            side = getattr(event, 'side', '?')
+            price = getattr(event, 'price', 0)
+            qty = getattr(event, 'quantity', 0)
+            side_label = '매수' if str(side) == 'OrderSide.BUY' or str(side) == 'buy' else '매도'
+            self.push_dashboard_event("체결", f"{symbol} {side_label} {qty}주 @ {float(price):,.0f}원")
+        elif event.type == EventType.ERROR:
+            msg = getattr(event, 'message', str(event))
+            self.push_dashboard_event("오류", msg[:100])
+        elif event.type == EventType.RISK_ALERT:
+            msg = getattr(event, 'message', str(event))
+            self.push_dashboard_event("리스크", msg[:100])
 
         handlers = self._handlers.get(event.type, [])
         if not handlers:
@@ -334,10 +374,18 @@ class TradingEngine:
             self.portfolio.positions[symbol] = Position(
                 symbol=symbol,
                 quantity=0,
-                avg_price=Decimal("0")
+                avg_price=Decimal("0"),
+                strategy=fill.strategy,
+                entry_time=fill.timestamp,
             )
 
         pos = self.portfolio.positions[symbol]
+
+        # 기존 포지션에 메타데이터 없으면 채우기
+        if not pos.strategy and fill.strategy:
+            pos.strategy = fill.strategy
+        if not pos.entry_time and fill.timestamp:
+            pos.entry_time = fill.timestamp
 
         if fill.side == OrderSide.BUY:
             # 매수 - 평균단가 계산
@@ -359,8 +407,9 @@ class TradingEngine:
             # 매도 비용 계산 (수수료 + 거래세 0.20%, fee_calculator 기준 통일)
             sell_fee = get_fee_calculator().calculate_sell_fee(fill.total_value)
 
-            # 실현 손익 = (매도가 - 평균단가) × 수량 - 매수수수료(fill.commission) - 매도비용
-            realized_pnl = (fill.price - pos.avg_price) * fill.quantity - fill.commission - sell_fee
+            # 실현 손익 = (매도가 - 평균단가) × 수량 - 매도비용(수수료+거래세)
+            # fill.commission은 브로커 계산 매도수수료인데 sell_fee와 중복이므로 제외
+            realized_pnl = (fill.price - pos.avg_price) * fill.quantity - sell_fee
 
             # 현금 증가 = 매도 대금 - 매도비용
             self.portfolio.cash += fill.total_value - sell_fee
@@ -612,6 +661,10 @@ class RiskManager:
         # 현금 초과 주문 방지: 주문별 예약 현금 추적 (symbol → 예약 금액)
         self._reserved_by_order: Dict[str, Decimal] = {}
 
+        # 손절 후 재진입 방지: 종목별 손절 시각 (30분간 재진입 차단)
+        self._stop_loss_today: Dict[str, datetime] = {}
+        self._STOP_LOSS_COOLDOWN_SECONDS = 1800  # 30분
+
         # 동시성 보호: pending 주문 관련 Lock
         self._pending_lock = asyncio.Lock()
 
@@ -651,18 +704,27 @@ class RiskManager:
         for s in stale_pending:
             elapsed = (now - self._pending_timestamps[s]).total_seconds()
             # 거래소에 남은 미체결 주문 취소 시도
+            cancel_ok = False
             if self.engine.broker and hasattr(self.engine.broker, 'cancel_all_for_symbol'):
                 try:
                     cancelled = await self.engine.broker.cancel_all_for_symbol(s)
                     if cancelled:
                         logger.info(f"[리스크] stale 주문 거래소 취소 완료: {s}")
+                        cancel_ok = True
                 except Exception as e:
                     logger.warning(f"[리스크] stale 주문 거래소 취소 실패: {s} - {e}")
-            await self.clear_pending(s)
-            logger.error(
-                f"[리스크] stale pending 강제 정리: {s} ({elapsed:.0f}초 초과) "
-                f"- 거래소 취소 시도 완료"
-            )
+            else:
+                cancel_ok = True  # 브로커 없으면 그냥 정리
+
+            if cancel_ok:
+                await self.clear_pending(s)
+                logger.error(
+                    f"[리스크] stale pending 강제 정리: {s} ({elapsed:.0f}초 초과)"
+                )
+            else:
+                logger.warning(
+                    f"[리스크] stale pending 유지: {s} ({elapsed:.0f}초) - 거래소 취소 실패, 다음 주기 재시도"
+                )
 
         # 거래 가능 여부 체크
         if not self.engine.is_trading_hours():
@@ -733,6 +795,24 @@ class RiskManager:
                 return None  # 쿨다운 중 - 조용히 무시
             else:
                 del self._order_fail_cooldown[event.symbol]
+
+        # 손절 후 재진입 방지 체크 (매수만, 30분간 차단)
+        if event.side == OrderSide.BUY and event.symbol in self._stop_loss_today:
+            sl_time = self._stop_loss_today[event.symbol]
+            elapsed = (datetime.now() - sl_time).total_seconds()
+            if elapsed < self._STOP_LOSS_COOLDOWN_SECONDS:
+                logger.debug(
+                    f"[리스크] 손절 재진입 차단: {event.symbol} "
+                    f"(경과 {elapsed/60:.0f}분/{self._STOP_LOSS_COOLDOWN_SECONDS/60:.0f}분)"
+                )
+                trading_logger.log_signal_blocked(
+                    symbol=event.symbol, side=event.side.value,
+                    reason=f"손절재진입차단({elapsed/60:.0f}분)",
+                    price=float(event.price or 0), score=event.score,
+                )
+                return None
+            else:
+                del self._stop_loss_today[event.symbol]
 
         # 포지션 크기 계산
         if event.side == OrderSide.SELL:

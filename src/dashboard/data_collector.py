@@ -7,7 +7,7 @@ AI Trading Bot v2 - 대시보드 데이터 수집기
 import asyncio
 import glob
 import json
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -98,8 +98,9 @@ class DashboardDataCollector:
     # ----------------------------------------------------------
 
     def get_portfolio(self) -> Dict[str, Any]:
-        """포트폴리오 정보"""
+        """포트폴리오 정보 (실효 일일 손익 = 실현 + 미실현)"""
         portfolio = self.bot.engine.portfolio
+        effective_pnl = portfolio.effective_daily_pnl
 
         return _serialize({
             "cash": portfolio.cash,
@@ -108,9 +109,11 @@ class DashboardDataCollector:
             "initial_capital": portfolio.initial_capital,
             "total_pnl": portfolio.total_pnl,
             "total_pnl_pct": portfolio.total_pnl_pct,
-            "daily_pnl": portfolio.daily_pnl,
+            "daily_pnl": effective_pnl,
+            "realized_daily_pnl": portfolio.daily_pnl,
+            "unrealized_pnl": portfolio.total_unrealized_pnl,
             "daily_pnl_pct": (
-                float(portfolio.daily_pnl / portfolio.initial_capital * 100)
+                float(effective_pnl / portfolio.initial_capital * 100)
                 if portfolio.initial_capital > 0 else 0.0
             ),
             "daily_trades": portfolio.daily_trades,
@@ -167,13 +170,14 @@ class DashboardDataCollector:
     # ----------------------------------------------------------
 
     def get_risk(self) -> Dict[str, Any]:
-        """리스크 지표"""
+        """리스크 지표 (실효 일일 손익 기준)"""
         engine = self.bot.engine
         risk_mgr = self.bot.risk_manager
         portfolio = engine.portfolio
 
+        effective_pnl = portfolio.effective_daily_pnl
         daily_loss_pct = (
-            float(portfolio.daily_pnl / portfolio.initial_capital * 100)
+            float(effective_pnl / portfolio.initial_capital * 100)
             if portfolio.initial_capital > 0 else 0.0
         )
 
@@ -727,6 +731,83 @@ class DashboardDataCollector:
         except Exception as e:
             logger.debug(f"US 데이터 조회 실패: {e}")
             return {"available": False, "message": "US 데이터 조회 실패"}
+
+    # ----------------------------------------------------------
+    # 이벤트 로그 (대시보드용)
+    # ----------------------------------------------------------
+
+    def get_events(self, since_id: int = 0) -> List[Dict[str, Any]]:
+        """대시보드 이벤트 로그 (since_id 이후만 반환)"""
+        engine = self.bot.engine
+        events = getattr(engine, '_dashboard_events', [])
+        return [e for e in events if e.get("id", 0) > since_id]
+
+    # ----------------------------------------------------------
+    # 프리마켓 (NXT) 데이터
+    # ----------------------------------------------------------
+
+    def get_premarket(self) -> Dict[str, Any]:
+        """프리마켓 종목 데이터"""
+        engine = self.bot.engine
+        premarket = getattr(engine, 'premarket_data', {})
+
+        if not premarket:
+            return {"available": False, "stocks": []}
+
+        name_cache = self._build_name_cache()
+        stocks = []
+        for symbol, data in premarket.items():
+            stocks.append({
+                "symbol": symbol,
+                "name": name_cache.get(symbol, symbol),
+                "pre_change_pct": data.get("pre_change_pct", 0),
+                "pre_price": data.get("pre_price", 0),
+                "prev_close": data.get("prev_close", 0),
+                "pre_volume": data.get("pre_volume", 0),
+                "pre_high": data.get("pre_high", 0),
+                "pre_low": data.get("pre_low", 0),
+                "updated_at": data.get("updated_at"),
+            })
+
+        # 등락률 내림차순
+        stocks.sort(key=lambda x: abs(x["pre_change_pct"]), reverse=True)
+        return {"available": True, "count": len(stocks), "stocks": stocks[:30]}
+
+    # ----------------------------------------------------------
+    # 에퀴티 커브 (일별 누적 손익)
+    # ----------------------------------------------------------
+
+    def get_equity_curve(self, days: int = 30) -> List[Dict[str, Any]]:
+        """일별 손익 히스토리 (에퀴티 커브용)"""
+        journal = self.bot.trade_journal
+        if not journal:
+            return []
+
+        today = date.today()
+        daily_data = []
+        cumulative = 0.0
+
+        for i in range(days - 1, -1, -1):  # 과거→현재 순
+            d = today - timedelta(days=i)
+            trades = journal.get_trades_by_date(d)
+            closed = [t for t in trades if t.is_closed]
+
+            day_pnl = sum(t.pnl for t in closed)
+            day_trades = len(closed)
+            day_wins = len([t for t in closed if t.is_win])
+            cumulative += day_pnl
+
+            if day_trades > 0 or cumulative != 0:
+                daily_data.append({
+                    "date": d.isoformat(),
+                    "pnl": day_pnl,
+                    "cumulative_pnl": cumulative,
+                    "trades": day_trades,
+                    "wins": day_wins,
+                    "win_rate": (day_wins / day_trades * 100) if day_trades > 0 else 0,
+                })
+
+        return daily_data
 
     # ----------------------------------------------------------
     # 설정 (읽기 전용)

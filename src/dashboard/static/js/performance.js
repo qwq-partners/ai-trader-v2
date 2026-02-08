@@ -15,6 +15,84 @@ async function loadStats(days) {
     } catch (e) {
         console.error('성과 로드 오류:', e);
     }
+
+    // 에퀴티 커브 (기간 매핑)
+    try {
+        const curveDays = days <= 1 ? 7 : days;  // 오늘만이면 최소 7일 표시
+        const curve = await api(`/api/equity-curve?days=${curveDays}`);
+        renderEquityCurve(curve);
+    } catch (e) {
+        console.error('에퀴티 커브 오류:', e);
+    }
+}
+
+function renderEquityCurve(data) {
+    const el = document.getElementById('equity-curve-chart');
+    if (!data || data.length === 0) {
+        el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:0.85rem;">거래 데이터 없음</div>';
+        return;
+    }
+
+    const dates = data.map(d => d.date);
+    const dailyPnl = data.map(d => d.pnl);
+    const cumPnl = data.map(d => d.cumulative_pnl);
+
+    const traces = [
+        {
+            x: dates,
+            y: cumPnl,
+            type: 'scatter',
+            mode: 'lines+markers',
+            name: '누적 손익',
+            line: { color: '#6366f1', width: 2.5 },
+            marker: { size: 5 },
+            fill: 'tozeroy',
+            fillcolor: 'rgba(99,102,241,0.08)',
+        },
+        {
+            x: dates,
+            y: dailyPnl,
+            type: 'bar',
+            name: '일별 손익',
+            marker: {
+                color: dailyPnl.map(v => v >= 0 ? 'rgba(52,211,153,0.6)' : 'rgba(248,113,113,0.6)'),
+            },
+            yaxis: 'y2',
+        }
+    ];
+
+    const layout = {
+        paper_bgcolor: 'transparent',
+        plot_bgcolor: 'transparent',
+        margin: { t: 10, b: 40, l: 60, r: 60 },
+        xaxis: { color: '#8892b0', gridcolor: 'rgba(99,102,241,0.06)' },
+        yaxis: { color: '#8892b0', gridcolor: 'rgba(99,102,241,0.08)', zeroline: true, zerolinecolor: 'rgba(99,102,241,0.2)' },
+        yaxis2: { color: '#a78bfa', overlaying: 'y', side: 'right', gridcolor: 'transparent' },
+        legend: { font: { color: '#8892b0', size: 11, family: 'DM Sans, sans-serif' }, orientation: 'h', y: 1.12 },
+        height: 280,
+        font: { color: '#e2e8f0', family: 'DM Sans, sans-serif' },
+    };
+
+    Plotly.newPlot('equity-curve-chart', traces, layout, { displayModeBar: false, responsive: true });
+
+    // 핵심 지표 계산
+    const totalGross = dailyPnl.filter(v => v > 0).reduce((s, v) => s + v, 0);
+    const totalLoss = Math.abs(dailyPnl.filter(v => v < 0).reduce((s, v) => s + v, 0));
+    const pf = totalLoss > 0 ? (totalGross / totalLoss).toFixed(2) : (totalGross > 0 ? '∞' : '--');
+
+    // Max Drawdown
+    let peak = 0;
+    let maxDD = 0;
+    cumPnl.forEach(v => {
+        if (v > peak) peak = v;
+        const dd = peak - v;
+        if (dd > maxDD) maxDD = dd;
+    });
+
+    document.getElementById('eq-max-profit').textContent = totalGross > 0 ? formatPnl(totalGross) : '--';
+    document.getElementById('eq-max-loss').textContent = totalLoss > 0 ? formatPnl(-totalLoss) : '--';
+    document.getElementById('eq-pf').textContent = pf;
+    document.getElementById('eq-mdd').textContent = maxDD > 0 ? formatPnl(-maxDD) : '--';
 }
 
 function renderSummary(stats) {
@@ -96,8 +174,8 @@ function renderStrategyChart(byStrategy) {
         margin: { t: 10, b: 40, l: 50, r: 50 },
         barmode: 'group',
         xaxis: { color: '#8892b0' },
-        yaxis: { color: '#8892b0', title: '승률 (%)', gridcolor: 'rgba(99,102,241,0.08)' },
-        yaxis2: { color: '#a78bfa', title: '거래 수', overlaying: 'y', side: 'right', gridcolor: 'transparent' },
+        yaxis: { color: '#8892b0', gridcolor: 'rgba(99,102,241,0.08)' },
+        yaxis2: { color: '#a78bfa', overlaying: 'y', side: 'right', gridcolor: 'transparent' },
         legend: { font: { color: '#8892b0', size: 11, family: 'DM Sans, sans-serif' }, orientation: 'h', y: 1.15 },
         height: 280,
         font: { color: '#e2e8f0', family: 'DM Sans, sans-serif' },
@@ -139,9 +217,12 @@ function renderExitPnlChart(byExitType) {
     const layout = {
         paper_bgcolor: 'transparent',
         plot_bgcolor: 'transparent',
-        margin: { t: 10, b: 40, l: 50, r: 10 },
+        margin: { t: 24, b: 40, l: 50, r: 10 },
         xaxis: { color: '#8892b0' },
-        yaxis: { color: '#8892b0', title: '평균 수익률 (%)', gridcolor: 'rgba(99,102,241,0.08)', zeroline: true, zerolinecolor: 'rgba(99,102,241,0.2)' },
+        yaxis: { color: '#8892b0', gridcolor: 'rgba(99,102,241,0.08)', zeroline: true, zerolinecolor: 'rgba(99,102,241,0.2)' },
+        annotations: [
+            { xref: 'paper', yref: 'paper', x: 0, y: 1.08, xanchor: 'left', yanchor: 'bottom', text: '평균 수익률 (%)', showarrow: false, font: { color: '#8892b0', size: 10 } },
+        ],
         height: 280,
         font: { color: '#e2e8f0', family: 'DM Sans, sans-serif' },
     };

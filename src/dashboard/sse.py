@@ -93,7 +93,11 @@ class SSEManager:
             "portfolio": 5,
             "positions": 2,
             "risk": 10,
+            "events": 2,
         }
+
+        # 이벤트 로그 커서
+        last_event_id = 0
 
         logger.info("[SSE] 브로드캐스트 루프 시작")
 
@@ -112,6 +116,13 @@ class SSEManager:
                                 data = dc.get_positions()
                             elif event_type == "risk":
                                 data = dc.get_risk()
+                            elif event_type == "events":
+                                new_events = dc.get_events(last_event_id)
+                                if not new_events:
+                                    last_sent[event_type] = now
+                                    continue
+                                data = new_events
+                                last_event_id = new_events[-1].get("id", last_event_id)
                             else:
                                 continue
 

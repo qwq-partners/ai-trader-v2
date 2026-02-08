@@ -453,8 +453,11 @@ class ThemeChasingStrategy(BaseStrategy):
         info_parts = []
         should_block = False
 
-        # 외국인+기관 동시 순매수 → 신뢰도 보너스
-        if foreign_buy > 0 and inst_buy > 0:
+        # 외국인/기관 수급 판정 (상호 배타적 elif 체인)
+        if foreign_buy < 0 and inst_buy < 0:
+            bonus = -10.0
+            info_parts.append(f"외국인+기관 동시 순매도 주의")
+        elif foreign_buy > 0 and inst_buy > 0:
             bonus = 10.0
             info_parts.append(f"외국인+기관 순매수")
         elif foreign_buy > 0:
@@ -463,11 +466,6 @@ class ThemeChasingStrategy(BaseStrategy):
         elif inst_buy > 0:
             bonus = 5.0
             info_parts.append(f"기관 순매수")
-
-        # 외국인+기관 동시 순매도 → 주의 (진입 차단은 아니지만 점수 감점)
-        if foreign_buy < 0 and inst_buy < 0:
-            bonus = -10.0
-            info_parts.append(f"외국인+기관 동시 순매도 주의")
 
         info = ", ".join(info_parts) if info_parts else ""
         return bonus, info, should_block

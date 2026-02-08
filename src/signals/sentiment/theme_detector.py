@@ -996,6 +996,23 @@ class ThemeDetector:
         except Exception as e:
             logger.exception(f"테마 탐지 오류: {e}")
             return list(self._themes.values())
+        finally:
+            # LLM 실패 시에도 stale 테마/센티멘트 정리 (무한 유지 방지)
+            try:
+                cutoff = datetime.now() - timedelta(hours=1)
+                self._themes = {
+                    name: theme
+                    for name, theme in self._themes.items()
+                    if theme.last_updated > cutoff
+                }
+                stale_symbols = [
+                    sym for sym, data in self._stock_sentiments.items()
+                    if data.get("updated_at", datetime.min) < cutoff
+                ]
+                for sym in stale_symbols:
+                    del self._stock_sentiments[sym]
+            except Exception:
+                pass  # 정리 실패해도 무시
 
     async def _get_stock_hints_for_llm(self) -> str:
         """
