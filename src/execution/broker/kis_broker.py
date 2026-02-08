@@ -764,6 +764,25 @@ class KISBroker(BaseBroker):
             logger.exception(f"주문 취소 오류: {e}")
             return False
 
+    async def cancel_all_for_symbol(self, symbol: str) -> int:
+        """특정 종목의 모든 미체결 주문 취소
+
+        Returns:
+            취소된 주문 수
+        """
+        cancelled = 0
+        orders_to_cancel = [
+            (oid, order) for oid, order in self._pending_orders.items()
+            if order.symbol == symbol and order.is_active
+        ]
+        for order_id, order in orders_to_cancel:
+            try:
+                if await self.cancel_order(order_id):
+                    cancelled += 1
+            except Exception as e:
+                logger.warning(f"[KIS] 종목 {symbol} 주문 {order_id} 취소 실패: {e}")
+        return cancelled
+
     async def modify_order(self, order_id: str, new_quantity: Optional[int] = None,
                            new_price: Optional[Decimal] = None) -> bool:
         """주문 수정"""
@@ -1228,14 +1247,25 @@ class KISBroker(BaseBroker):
                         if new_qty <= 0:
                             continue  # 이미 처리된 체결, 스킵
 
+                        # 증분 체결가 역산: AVG_PRVS는 누적 평균가이므로
+                        # incremental_price = (cum_avg * cum_qty - prev_avg * prev_qty) / new_qty
+                        if prev_filled > 0 and order.filled_price:
+                            prev_cost = float(order.filled_price) * prev_filled
+                            total_cost = ccld_price * ccld_qty
+                            incremental_price = (total_cost - prev_cost) / new_qty if new_qty > 0 else ccld_price
+                        else:
+                            incremental_price = ccld_price  # 첫 체결은 그대로
+
+                        fill_price = Decimal(str(round(incremental_price, 2)))
+
                         fill = Fill(
                             order_id=order_id,
                             symbol=order.symbol,
                             side=order.side,
                             quantity=new_qty,
-                            price=Decimal(str(ccld_price)),
+                            price=fill_price,
                             commission=self.calculate_commission(
-                                order.side, new_qty, Decimal(str(ccld_price))
+                                order.side, new_qty, fill_price
                             ),
                             strategy=order.strategy,
                             reason=order.reason,

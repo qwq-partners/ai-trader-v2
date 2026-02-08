@@ -295,6 +295,16 @@ class Portfolio:
         return float(self.total_pnl / self.initial_capital * 100)
 
     @property
+    def total_unrealized_pnl(self) -> Decimal:
+        """총 미실현 손익"""
+        return sum(p.unrealized_pnl for p in self.positions.values())
+
+    @property
+    def effective_daily_pnl(self) -> Decimal:
+        """실효 일일 손익 (실현 + 미실현)"""
+        return self.daily_pnl + self.total_unrealized_pnl
+
+    @property
     def cash_ratio(self) -> float:
         """현금 비율"""
         if self.total_equity == 0:
@@ -472,9 +482,9 @@ class TradingConfig:
     initial_capital: Decimal = Decimal("10000000")  # fallback (실제값은 KIS API에서 동기화)
     market: Market = Market.KRX
 
-    # 수수료
-    buy_fee_rate: float = 0.00015      # 0.015%
-    sell_fee_rate: float = 0.00195     # 0.015% + 증권거래세 0.18%
+    # 수수료 (2026년 한투 BanKIS 기준)
+    buy_fee_rate: float = 0.000140527   # 매수 0.0140527%
+    sell_fee_rate: float = 0.002130527  # 매도 0.0130527% + 증권거래세 0.20%
 
     # 슬리피지
     expected_slippage_ticks: int = 1

@@ -204,13 +204,32 @@ class TradingBot(SchedulerMixin):
         signal.signal(signal.SIGINT, handle_shutdown)
         signal.signal(signal.SIGTERM, handle_shutdown)
 
-    async def _send_error_alert(self, error_type: str, message: str, details: str = ""):
-        """
-        에러 알림 (로그만 기록, 텔레그램 미발송)
+    # CRITICAL 에러 유형 (즉시 텔레그램 발송 대상)
+    _CRITICAL_ERROR_TYPES = {
+        "daily_loss_limit", "api_failure", "broker_disconnect",
+        "position_sync_error", "order_reject_critical", "system_crash",
+    }
 
-        텔레그램은 8시/17시 레포트만 발송합니다.
+    async def _send_error_alert(self, error_type: str, message: str, details: str = "",
+                                critical: bool = False):
         """
-        logger.warning(f"[알림] {error_type}: {message}" + (f" | {details[:200]}" if details else ""))
+        에러 알림
+
+        CRITICAL 에러는 즉시 텔레그램 발송, 일반 에러는 로그만 기록합니다.
+        """
+        log_msg = f"[알림] {error_type}: {message}" + (f" | {details[:200]}" if details else "")
+        is_critical = critical or error_type in self._CRITICAL_ERROR_TYPES
+        if is_critical:
+            logger.error(log_msg)
+            try:
+                alert_text = f"🚨 [{error_type}] {message}"
+                if details:
+                    alert_text += f"\n{details[:300]}"
+                await send_alert(alert_text)
+            except Exception as e:
+                logger.error(f"CRITICAL 알림 텔레그램 발송 실패: {e}")
+        else:
+            logger.warning(log_msg)
 
     async def initialize(self) -> bool:
         """컴포넌트 초기화"""
@@ -377,23 +396,35 @@ class TradingBot(SchedulerMixin):
                 self.strategy_manager.register_strategy("mean_reversion", mr_strategy)
                 logger.info("평균 회귀 전략 등록")
 
-            # 전략별 청산 파라미터 기록 (ExitManager 전달용)
+            # 전략별 청산 파라미터 기록 (ExitManager 전달용: 손절/트레일링 + 익절 목표)
             self._strategy_exit_params = {
                 "momentum_breakout": {
                     "stop_loss_pct": momentum_cfg.get("stop_loss_pct", 2.5),
                     "trailing_stop_pct": momentum_cfg.get("trailing_stop_pct", 1.5),
+                    "first_exit_pct": momentum_cfg.get("take_profit_pct", 10.0) * 0.3,   # 3.0%
+                    "second_exit_pct": momentum_cfg.get("take_profit_pct", 10.0) * 0.6,  # 6.0%
+                    "third_exit_pct": momentum_cfg.get("take_profit_pct", 10.0),          # 10.0%
                 },
                 "theme_chasing": {
                     "stop_loss_pct": theme_strategy_cfg.get("stop_loss_pct", 2.0),
                     "trailing_stop_pct": theme_strategy_cfg.get("trailing_stop_pct", 1.0),
+                    "first_exit_pct": theme_strategy_cfg.get("take_profit_pct", 8.0) * 0.3,   # 2.4%
+                    "second_exit_pct": theme_strategy_cfg.get("take_profit_pct", 8.0) * 0.6,  # 4.8%
+                    "third_exit_pct": theme_strategy_cfg.get("take_profit_pct", 8.0),          # 8.0%
                 },
                 "gap_and_go": {
                     "stop_loss_pct": gap_cfg.get("stop_loss_pct", 2.0),
                     "trailing_stop_pct": gap_cfg.get("trailing_stop_pct", 1.5),
+                    "first_exit_pct": gap_cfg.get("take_profit_pct", 8.0) * 0.3,   # 2.4%
+                    "second_exit_pct": gap_cfg.get("take_profit_pct", 8.0) * 0.6,  # 4.8%
+                    "third_exit_pct": gap_cfg.get("take_profit_pct", 8.0),          # 8.0%
                 },
                 "mean_reversion": {
                     "stop_loss_pct": mr_cfg.get("stop_loss_pct", 3.0),
                     "trailing_stop_pct": mr_cfg.get("trailing_stop_pct", 2.0),
+                    "first_exit_pct": mr_cfg.get("take_profit_pct", 5.0) * 0.3,   # 1.5%
+                    "second_exit_pct": mr_cfg.get("take_profit_pct", 5.0) * 0.6,  # 3.0%
+                    "third_exit_pct": mr_cfg.get("take_profit_pct", 5.0),          # 5.0%
                 },
             }
 
@@ -1040,11 +1071,12 @@ class TradingBot(SchedulerMixin):
             action=event.action
         )
 
-        # 리스크 알림 발송
+        # 리스크 알림 즉시 텔레그램 발송 (CRITICAL)
         await self._send_error_alert(
-            "WARNING",
+            "daily_loss_limit",
             f"리스크 경고: {event.alert_type}",
-            f"메시지: {event.message}\n조치: {event.action}"
+            f"메시지: {event.message}\n조치: {event.action}",
+            critical=True,
         )
 
         if event.action == "block":
@@ -1174,6 +1206,9 @@ class TradingBot(SchedulerMixin):
                             stop_loss_pct=exit_params.get("stop_loss_pct"),
                             trailing_stop_pct=exit_params.get("trailing_stop_pct"),
                             price_history=price_history,
+                            first_exit_pct=exit_params.get("first_exit_pct"),
+                            second_exit_pct=exit_params.get("second_exit_pct"),
+                            third_exit_pct=exit_params.get("third_exit_pct"),
                         )
 
                         # TradeJournal 진입 기록 (진화 기능용)

@@ -89,6 +89,10 @@ class PositionExitState:
     # 전략별 청산 파라미터 (None이면 글로벌 ExitConfig 사용)
     stop_loss_pct: Optional[float] = None
     trailing_stop_pct: Optional[float] = None
+    # 전략별 익절 목표 (None이면 글로벌 ExitConfig 사용)
+    first_exit_pct: Optional[float] = None
+    second_exit_pct: Optional[float] = None
+    third_exit_pct: Optional[float] = None
     # ATR 기반 동적 손절
     atr_pct: Optional[float] = None
     dynamic_stop_pct: Optional[float] = None
@@ -114,6 +118,9 @@ class ExitManager:
         stop_loss_pct: Optional[float] = None,
         trailing_stop_pct: Optional[float] = None,
         price_history: Optional[Dict[str, List[Decimal]]] = None,
+        first_exit_pct: Optional[float] = None,
+        second_exit_pct: Optional[float] = None,
+        third_exit_pct: Optional[float] = None,
     ):
         """
         포지션 등록
@@ -124,6 +131,9 @@ class ExitManager:
             trailing_stop_pct: 전략별 트레일링 비율 (None이면 글로벌 config 사용)
             price_history: 가격 히스토리 {"high": [...], "low": [...], "close": [...]}
                            ATR 계산용, None이면 고정 손절 사용
+            first_exit_pct: 전략별 1차 익절 목표 (None이면 글로벌 config 사용)
+            second_exit_pct: 전략별 2차 익절 목표 (None이면 글로벌 config 사용)
+            third_exit_pct: 전략별 3차 익절 목표 (None이면 글로벌 config 사용)
         """
         if position.symbol in self._states:
             # 추가매수: 수량/평단가 변경 반영
@@ -202,14 +212,18 @@ class ExitManager:
             highest_price=current_price,
             stop_loss_pct=stop_loss_pct,
             trailing_stop_pct=trailing_stop_pct,
+            first_exit_pct=first_exit_pct,
+            second_exit_pct=second_exit_pct,
+            third_exit_pct=third_exit_pct,
             atr_pct=atr_pct,
             dynamic_stop_pct=dynamic_stop,
         )
 
         effective_stop = dynamic_stop or stop_loss_pct or self.config.stop_loss_pct
+        eff_1st = first_exit_pct or self.config.first_exit_pct
         logger.debug(
             f"[ExitManager] 포지션 등록: {position.symbol} "
-            f"(SL={effective_stop:.2f}%, "
+            f"(SL={effective_stop:.2f}%, TP1={eff_1st:.1f}%, "
             f"TS={trailing_stop_pct or self.config.trailing_stop_pct}%, "
             f"stage={initial_stage.value})"
         )
@@ -276,11 +290,16 @@ class ExitManager:
         current_price: Decimal,
         net_pnl_pct: float
     ) -> Optional[Tuple[str, int, str]]:
-        """분할 익절 체크 (3단계)"""
+        """분할 익절 체크 (3단계, 전략별 목표 우선)"""
 
-        # 1차 익절: +2% 도달 → 25% 매도
+        # 전략별 익절 목표 (None이면 글로벌 config)
+        first_pct = state.first_exit_pct or self.config.first_exit_pct
+        second_pct = state.second_exit_pct or self.config.second_exit_pct
+        third_pct = state.third_exit_pct or self.config.third_exit_pct
+
+        # 1차 익절
         if state.current_stage == ExitStage.NONE:
-            if net_pnl_pct >= self.config.first_exit_pct:
+            if net_pnl_pct >= first_pct:
                 exit_qty = max(1, int(state.original_quantity * self.config.first_exit_ratio))
                 exit_qty = min(exit_qty, state.remaining_quantity)
 
@@ -288,12 +307,12 @@ class ExitManager:
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
                 return self._create_exit(
                     state, action, exit_qty,
-                    f"1차 익절 ({self.config.first_exit_ratio*100:.0f}%): {net_pnl_pct:.2f}%"
+                    f"1차 익절 ({self.config.first_exit_ratio*100:.0f}%): {net_pnl_pct:.2f}% (목표={first_pct:.1f}%)"
                 )
 
-        # 2차 익절: +4% 도달 → 35% 추가 매도
+        # 2차 익절
         elif state.current_stage == ExitStage.FIRST:
-            if net_pnl_pct >= self.config.second_exit_pct:
+            if net_pnl_pct >= second_pct:
                 exit_qty = max(1, int(state.remaining_quantity * self.config.second_exit_ratio))
                 exit_qty = min(exit_qty, state.remaining_quantity)
 
@@ -301,12 +320,12 @@ class ExitManager:
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
                 return self._create_exit(
                     state, action, exit_qty,
-                    f"2차 익절 ({self.config.second_exit_ratio*100:.0f}%): {net_pnl_pct:.2f}%"
+                    f"2차 익절 ({self.config.second_exit_ratio*100:.0f}%): {net_pnl_pct:.2f}% (목표={second_pct:.1f}%)"
                 )
 
-        # 3차 익절: +6% 도달 → 20% 추가 매도
+        # 3차 익절
         elif state.current_stage == ExitStage.SECOND:
-            if net_pnl_pct >= self.config.third_exit_pct:
+            if net_pnl_pct >= third_pct:
                 exit_qty = max(1, int(state.remaining_quantity * self.config.third_exit_ratio))
                 exit_qty = min(exit_qty, state.remaining_quantity)
 
@@ -314,13 +333,12 @@ class ExitManager:
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
                 return self._create_exit(
                     state, action, exit_qty,
-                    f"3차 익절 ({self.config.third_exit_ratio*100:.0f}%): {net_pnl_pct:.2f}%"
+                    f"3차 익절 ({self.config.third_exit_ratio*100:.0f}%): {net_pnl_pct:.2f}% (목표={third_pct:.1f}%)"
                 )
 
         # 3차 익절 완료 후 트레일링으로 전환
         elif state.current_stage == ExitStage.THIRD:
-            # 3차 익절 후 일정 수익률 이상이면 트레일링 단계로
-            if net_pnl_pct >= self.config.third_exit_pct + 1.0:
+            if net_pnl_pct >= third_pct + 1.0:
                 state.current_stage = ExitStage.TRAILING
                 logger.info(
                     f"[ExitManager] {state.symbol} 트레일링 단계 진입 "

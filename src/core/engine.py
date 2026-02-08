@@ -17,6 +17,7 @@ from loguru import logger
 
 from src.utils.logger import trading_logger
 from src.utils.session_util import SessionUtil
+from src.utils.fee_calculator import get_fee_calculator
 
 from .event import (
     Event, EventType,
@@ -355,14 +356,14 @@ class TradingEngine:
             # 매도
             pos.quantity -= fill.quantity
 
-            # 거래세 계산 (한국 주식 매도 시 0.25%)
-            trading_tax = fill.total_value * Decimal("0.0025")
+            # 매도 비용 계산 (수수료 + 거래세 0.20%, fee_calculator 기준 통일)
+            sell_fee = get_fee_calculator().calculate_sell_fee(fill.total_value)
 
-            # 실현 손익 = (매도가 - 평균단가) × 수량 - 수수료 - 거래세
-            realized_pnl = (fill.price - pos.avg_price) * fill.quantity - fill.commission - trading_tax
+            # 실현 손익 = (매도가 - 평균단가) × 수량 - 매수수수료(fill.commission) - 매도비용
+            realized_pnl = (fill.price - pos.avg_price) * fill.quantity - fill.commission - sell_fee
 
-            # 현금 증가 = 매도 대금 - 수수료 - 거래세
-            self.portfolio.cash += fill.total_value - fill.commission - trading_tax
+            # 현금 증가 = 매도 대금 - 매도비용
+            self.portfolio.cash += fill.total_value - sell_fee
             self.portfolio.daily_pnl += realized_pnl
 
             # 포지션 종료 시 제거
@@ -416,11 +417,12 @@ class TradingEngine:
         risk = self.config.risk
         _pending = pending_symbols or set()
 
-        # 1. 일일 손실 제한 체크 (현재 자산 기준)
+        # 1. 일일 손실 제한 체크 (실현 + 미실현 손익 합산)
         _equity = self.portfolio.total_equity
-        daily_loss_pct = float(self.portfolio.daily_pnl / _equity * 100) if _equity > 0 else 0.0
+        effective_pnl = self.portfolio.effective_daily_pnl
+        daily_loss_pct = float(effective_pnl / _equity * 100) if _equity > 0 else 0.0
         if daily_loss_pct <= -risk.daily_max_loss_pct:
-            return False, f"일일 손실 한도 도달 ({daily_loss_pct:.1f}%)"
+            return False, f"일일 손실 한도 도달 ({daily_loss_pct:.1f}%, 실현={float(self.portfolio.daily_pnl):+,.0f}, 미실현={float(self.portfolio.total_unrealized_pnl):+,.0f})"
 
         # 2. 일일 거래 횟수 제한
         if self.portfolio.daily_trades >= risk.daily_max_trades:
@@ -643,15 +645,23 @@ class RiskManager:
         for s in expired_signals:
             del self._last_signal_time[s]
 
-        # stale pending 주문 정리 (10분 이상 미체결 → 거래소 거부 등)
+        # stale pending 주문 정리 (10분 이상 미체결 → 거래소 취소 + 내부 정리)
         stale_pending = [s for s, t in self._pending_timestamps.items()
                          if (now - t).total_seconds() >= self._PENDING_TIMEOUT_SECONDS]
         for s in stale_pending:
             elapsed = (now - self._pending_timestamps[s]).total_seconds()
+            # 거래소에 남은 미체결 주문 취소 시도
+            if self.engine.broker and hasattr(self.engine.broker, 'cancel_all_for_symbol'):
+                try:
+                    cancelled = await self.engine.broker.cancel_all_for_symbol(s)
+                    if cancelled:
+                        logger.info(f"[리스크] stale 주문 거래소 취소 완료: {s}")
+                except Exception as e:
+                    logger.warning(f"[리스크] stale 주문 거래소 취소 실패: {s} - {e}")
             await self.clear_pending(s)
             logger.error(
                 f"[리스크] stale pending 강제 정리: {s} ({elapsed:.0f}초 초과) "
-                f"- 미체결 주문 확인 필요"
+                f"- 거래소 취소 시도 완료"
             )
 
         # 거래 가능 여부 체크
@@ -831,10 +841,11 @@ class RiskManager:
                 self._pending_quantities[event.symbol] = remaining
                 logger.info(f"[리스크] 부분 체결: {event.symbol} 잔여 {remaining}주")
 
-        # 일일 손실 체크 (현재 자산 기준)
+        # 일일 손실 체크 (실현 + 미실현 손익 합산)
         _equity = self.engine.portfolio.total_equity
+        effective_pnl = self.engine.portfolio.effective_daily_pnl
         daily_loss_pct = float(
-            self.engine.portfolio.daily_pnl / _equity * 100
+            effective_pnl / _equity * 100
         ) if _equity > 0 else 0.0
 
         if daily_loss_pct <= -self.config.daily_max_loss_pct:
