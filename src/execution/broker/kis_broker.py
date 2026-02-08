@@ -599,7 +599,7 @@ class KISBroker(BaseBroker):
                         logger.warning(f"nextrade API 오류: {resp.status}")
                         break
 
-                    data = await resp.json()
+                    data = await resp.json(content_type=None)
                     items = data.get("brdinfoTimeList", [])
 
                     if not items:

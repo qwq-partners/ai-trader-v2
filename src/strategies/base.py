@@ -112,7 +112,7 @@ class BaseStrategy(ABC):
     # 이벤트 핸들러 (오버라이드 가능)
     # ============================================================
 
-    async def on_market_data(self, event: MarketDataEvent) -> Optional[Signal]:
+    async def on_market_data(self, event: MarketDataEvent, position: Optional[Position] = None) -> Optional[Signal]:
         """시장 데이터 수신 시 호출"""
         if not self.enabled:
             return None
@@ -143,7 +143,7 @@ class BaseStrategy(ABC):
             self._last_calc_time[symbol] = now
 
         # 신호 생성
-        signal = await self.generate_signal(symbol, current_price)
+        signal = await self.generate_signal(symbol, current_price, position=position)
 
         if signal:
             # 최소 점수 필터

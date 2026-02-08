@@ -581,7 +581,8 @@ class StrategyManager:
             strategy = self.strategies.get(name)
             if strategy and hasattr(strategy, 'on_market_data'):
                 try:
-                    signal = await strategy.on_market_data(event)
+                    position = self.engine.portfolio.positions.get(event.symbol)
+                    signal = await strategy.on_market_data(event, position=position)
                     if signal:
                         # 현금 없으면 BUY 신호 무시 (SELL은 통과)
                         if no_cash and signal.side == OrderSide.BUY:
@@ -600,6 +601,17 @@ class StrategyManager:
                     logger.exception(f"전략 오류 ({name}): {e}")
 
         if signals:
+            # 동일 종목에 대해 다중 BUY 신호 → 최고 점수만 통과
+            buy_signals = [s for s in signals if s.side == OrderSide.BUY]
+            if len(buy_signals) > 1:
+                best_buy = max(buy_signals, key=lambda s: s.score)
+                sell_signals = [s for s in signals if s.side == OrderSide.SELL]
+                logger.info(
+                    f"[전략→엔진] {event.symbol} 다중 BUY 신호 {len(buy_signals)}개 → "
+                    f"최고점수 {best_buy.score:.1f} ({best_buy.source}) 선택"
+                )
+                signals = [best_buy] + sell_signals
+
             self.engine.stats.signals_generated += len(signals)
             for sig in signals:
                 logger.info(f"[전략→엔진] 신호 큐 추가: {sig.symbol} {sig.side.value} 가격={sig.price} 점수={sig.score:.1f}")

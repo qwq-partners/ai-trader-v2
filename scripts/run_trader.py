@@ -825,8 +825,10 @@ class TradingBot(SchedulerMixin):
                     self._exit_pending_timestamps.pop(s, None)
                     logger.warning(f"[청산 pending] {s} 타임아웃 해제 (3분 초과)")
 
-            # 이미 ExitManager 매도 주문이 진행 중이면 중복 방지
+            # 이미 매도 주문이 진행 중이면 중복 방지 (ExitManager + 전략 SELL 양방향)
             if symbol in self._exit_pending_symbols:
+                return
+            if self.engine.risk_manager and symbol in self.engine.risk_manager._pending_orders:
                 return
 
             # 동시호가 시간대 체크 (15:20~15:30)
@@ -834,8 +836,11 @@ class TradingBot(SchedulerMixin):
             time_val = now.hour * 100 + now.minute
             is_auction = 1520 <= time_val < 1530
 
-            # 장 마감 후에는 청산 시도하지 않음 (15:31 이후)
-            if time_val >= 1531:
+            # 정규장 종료 ~ 넥스트장 시작 사이 (15:31~15:39): 청산 차단
+            if 1531 <= time_val < 1540:
+                return
+            # 넥스트장 비활성화 또는 넥스트장 종료 후 (20:00+): 청산 차단
+            if time_val >= 1540 and (not self.config.trading.enable_next_market or time_val >= 2000):
                 return
 
             # 청산 신호 확인
