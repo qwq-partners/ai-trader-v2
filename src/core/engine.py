@@ -51,8 +51,28 @@ def is_kr_market_holiday(d: date) -> bool:
         return True
     if _kr_market_holidays:
         return d in _kr_market_holidays
-    # 동적 데이터가 없으면 주말만 체크 (fallback)
-    return False
+    # 동적 데이터가 없으면 하드코딩 공휴일 체크 (fallback)
+    return d in _FALLBACK_HOLIDAYS
+
+
+# 하드코딩 공휴일 (동적 조회 실패 시 fallback) - 2026년
+_FALLBACK_HOLIDAYS: Set[date] = {
+    date(2026, 1, 1),   # 신정
+    date(2026, 1, 27),  # 설날 전날
+    date(2026, 1, 28),  # 설날
+    date(2026, 1, 29),  # 설날 다음날
+    date(2026, 3, 1),   # 삼일절
+    date(2026, 5, 5),   # 어린이날
+    date(2026, 5, 24),  # 석가탄신일
+    date(2026, 6, 6),   # 현충일
+    date(2026, 8, 15),  # 광복절
+    date(2026, 9, 24),  # 추석 전날
+    date(2026, 9, 25),  # 추석
+    date(2026, 9, 26),  # 추석 다음날
+    date(2026, 10, 3),  # 개천절
+    date(2026, 10, 9),  # 한글날
+    date(2026, 12, 25), # 크리스마스
+}
 
 
 # 이벤트 핸들러 타입
@@ -323,7 +343,7 @@ class TradingEngine:
             new_quantity = pos.quantity + fill.quantity
             if new_quantity > 0:
                 total_cost = pos.avg_price * pos.quantity + fill.price * fill.quantity
-                pos.avg_price = total_cost / new_quantity
+                pos.avg_price = total_cost / Decimal(str(new_quantity)) if new_quantity != 0 else fill.price
             pos.quantity = new_quantity
             self.portfolio.cash -= fill.total_cost
 
@@ -627,8 +647,12 @@ class RiskManager:
         stale_pending = [s for s, t in self._pending_timestamps.items()
                          if (now - t).total_seconds() >= self._PENDING_TIMEOUT_SECONDS]
         for s in stale_pending:
+            elapsed = (now - self._pending_timestamps[s]).total_seconds()
             await self.clear_pending(s)
-            logger.warning(f"[리스크] stale pending 정리: {s} ({self._PENDING_TIMEOUT_SECONDS}초 초과)")
+            logger.error(
+                f"[리스크] stale pending 강제 정리: {s} ({elapsed:.0f}초 초과) "
+                f"- 미체결 주문 확인 필요"
+            )
 
         # 거래 가능 여부 체크
         if not self.engine.is_trading_hours():

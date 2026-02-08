@@ -1190,8 +1190,8 @@ class ThemeDetector:
         2차: 이름 → stock_master DB 조회
         3차: KNOWN_STOCKS 폴백
         """
-        symbol = symbol.strip()
-        name = name.strip()
+        symbol = (symbol or "").strip()
+        name = (name or "").strip()
 
         # 1차: 6자리 코드가 주어진 경우
         if symbol and symbol.isdigit() and len(symbol) == 6:

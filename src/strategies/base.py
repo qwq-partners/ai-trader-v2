@@ -334,8 +334,9 @@ class BaseStrategy(ABC):
             indicators["high_proximity"] = closes[-1] / high_20d if high_20d > 0 else 0
             indicators["low_proximity"] = closes[-1] / low_20d if low_20d > 0 else 1
         elif len(history) >= 20:
-            high_20d = max(float(p.high) for p in history[-20:])
-            low_20d = min(float(p.low) for p in history[-20:])
+            prev_history = history[-20:-1]  # 당일 제외 (21개 미만이므로 19일까지)
+            high_20d = max(float(p.high) for p in prev_history)
+            low_20d = min(float(p.low) for p in prev_history)
             indicators["high_20d"] = high_20d
             indicators["low_20d"] = low_20d
             indicators["high_proximity"] = closes[-1] / high_20d if high_20d > 0 else 0

@@ -234,8 +234,9 @@ class KISBroker(BaseBroker):
                         await self._ensure_token()
                         continue
                     if resp.status in (429, 500, 502, 503) and attempt < 2:
-                        logger.warning(f"[API] HTTP {resp.status}, {attempt+1}회 재시도")
-                        await asyncio.sleep(1.0 * (attempt + 1))
+                        wait = 2 ** attempt  # 지수 백오프: 1초, 2초, 4초
+                        logger.warning(f"[API] HTTP {resp.status}, {attempt+1}회 재시도 ({wait}초 대기)")
+                        await asyncio.sleep(wait)
                         continue
                     try:
                         data = await resp.json()
@@ -249,8 +250,9 @@ class KISBroker(BaseBroker):
                     return data
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 if attempt < 2:
-                    logger.warning(f"[API] 네트워크 오류, {attempt+1}회 재시도: {e}")
-                    await asyncio.sleep(1.0 * (attempt + 1))
+                    wait = 2 ** attempt
+                    logger.warning(f"[API] 네트워크 오류, {attempt+1}회 재시도 ({wait}초 대기): {e}")
+                    await asyncio.sleep(wait)
                     continue
                 logger.error(f"[API] GET 실패 (3회 시도): {e}")
                 return {"rt_cd": "-1", "msg1": f"네트워크 오류: {e}"}
@@ -279,8 +281,9 @@ class KISBroker(BaseBroker):
                         await self._ensure_token()
                         continue
                     if resp.status in (429, 500, 502, 503) and attempt < 2:
-                        logger.warning(f"[API] HTTP {resp.status}, {attempt+1}회 재시도")
-                        await asyncio.sleep(1.0 * (attempt + 1))
+                        wait = 2 ** attempt  # 지수 백오프: 1초, 2초, 4초
+                        logger.warning(f"[API] HTTP {resp.status}, {attempt+1}회 재시도 ({wait}초 대기)")
+                        await asyncio.sleep(wait)
                         continue
                     try:
                         data = await resp.json()
@@ -294,8 +297,9 @@ class KISBroker(BaseBroker):
                     return data
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 if attempt < 2:
-                    logger.warning(f"[API] 네트워크 오류, {attempt+1}회 재시도: {e}")
-                    await asyncio.sleep(1.0 * (attempt + 1))
+                    wait = 2 ** attempt
+                    logger.warning(f"[API] 네트워크 오류, {attempt+1}회 재시도 ({wait}초 대기): {e}")
+                    await asyncio.sleep(wait)
                     continue
                 logger.error(f"[API] POST 실패 (3회 시도): {e}")
                 return {"rt_cd": "-1", "msg1": f"네트워크 오류: {e}"}

@@ -1,7 +1,27 @@
 # AI Trading Bot v2 - CLAUDE.md
 
-## 언어 설정
+## Project Structure
+The main project directory is `~/ai-trader-v2/` (NOT `~/ai-trader/` or other paths). Always verify the working directory before reading or editing files.
+
+## Language & Communication
 - 모든 대화는 반드시 한국어(한글)로 진행할 것
+- User communicates in Korean. '커밋해줘' often means 'commit AND push'. '푸시' means push. When ambiguous, default to commit + push.
+- When user says to build something 'new' or 'fresh', do NOT reference previous failed projects or reuse old conservative patterns.
+
+## Git & GitHub
+- Use SSH for git push (not HTTPS). PAT-based auth if SSH unavailable.
+- Always commit and push together unless explicitly told otherwise.
+- `gh auth login` interactive mode does NOT work in this environment.
+
+## OpenAI API
+- Current model: gpt-5.2 (Thinking model) requires `max_completion_tokens` NOT `max_tokens`.
+- gpt-5.2-pro is NOT compatible with chat completions endpoint.
+- Use `complete()` method for LLM calls, NOT `ask()`.
+
+## Trading Bot Operations
+- After any code change, always restart the bot and verify via logs before reporting success.
+- When fixing bugs, add debug logging for edge cases (e.g., no-changes/no-op paths) so we can verify the fix is actually running.
+- Default trading budget is 10,000,000 KRW (10M) unless specified otherwise.
 
 ## 프로젝트 개요
 - 한국 주식(KRX) 자동 매매 봇
@@ -464,6 +484,52 @@ grep "ERROR" logs/$(date +%Y%m%d)/trader_$(date +%Y%m%d).log
 - 서비스 점검: KIS Open API 공지사항 확인
 
 ---
+
+## Claude Code 고급 활용
+
+### Custom Skills
+반복 워크플로우를 `/command`로 자동화:
+```bash
+# .claude/skills/deploy/SKILL.md 생성
+mkdir -p .claude/skills/deploy && cat > .claude/skills/deploy/SKILL.md << 'EOF'
+# Deploy Skill
+1. Python 문법 체크: `python -m py_compile <file>`
+2. Git add, commit, push (SSH)
+3. 트레이딩 봇 재시작
+4. 로그 30초 모니터링하여 에러 확인
+5. 상태 요약 보고
+EOF
+```
+
+### Hooks
+파일 수정 후 자동으로 Python 문법 체크:
+```json
+// .claude/settings.json
+{
+  "hooks": {
+    "postEdit": {
+      "command": "python -m py_compile $CLAUDE_FILE_PATH 2>&1 || echo 'SYNTAX ERROR in $CLAUDE_FILE_PATH'"
+    }
+  }
+}
+```
+
+### Headless Mode (비대화형 실행)
+cron으로 로그 헬스체크 자동화:
+```bash
+# 30분마다 트레이딩 로그 분석
+*/30 * * * * cd ~/ai-trader-v2 && claude -p "Read the last 200 lines of logs/trading.log. Summarize any errors, warnings, or unusual patterns." --allowedTools "Bash,Read,Grep" > /tmp/trading-health-$(date +\%H\%M).txt 2>&1
+```
+
+### 세션 관리 팁
+- **세션 분리**: 한 세션에 3~5개 목표를 몰아넣지 말고, 버그 수정 / 신기능 / 모니터링 등 목적별로 분리
+- **계획 파일 참조**: 큰 구현 계획은 별도 마크다운 파일로 저장 후 세션에서 참조 (`docs/plan-v2.md` 등)
+- **세션 시작 검증**: 항상 (1) 프로젝트 경로 확인 (2) CLAUDE.md 읽기 (3) git status + 최근 로그 확인 후 작업 시작
+
+### 고급 워크플로우 (On the Horizon)
+- **자율 모니터링 에이전트**: Task 도구로 봇 로그를 실시간 감시 → 이상 감지 → 자동 수정 → 재시작 → 검증 루프
+- **병렬 코드 리뷰 파이프라인**: 모듈별 서브 에이전트 팬아웃 → JSON 결과 파일 저장 → 합성 에이전트가 요약본만 읽어 컨텍스트 초과 방지
+- **TDD 기반 기능 구현**: 테스트 먼저 작성 → 구현 → 테스트 통과까지 반복 → 전체 스위트 통과 후 커밋
 
 ## 재발 방지 원칙
 

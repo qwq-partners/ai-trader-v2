@@ -379,9 +379,9 @@ class TradeResult:
     @property
     def pnl_pct(self) -> float:
         """손익률 (%)"""
-        if not self.entry_price:
+        if not self.entry_price or self.entry_price == 0:
             return 0.0
-        return float((self.exit_price - self.entry_price) / self.entry_price * 100)
+        return float(Decimal(str(self.exit_price - self.entry_price)) / Decimal(str(self.entry_price)) * 100)
 
     @property
     def holding_time(self) -> float:

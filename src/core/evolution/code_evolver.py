@@ -49,10 +49,20 @@ class CodeEvolver:
         self.max_changed_files = max_changed_files
         self.claude_timeout = claude_timeout
 
+        # venv python 경로 (sys.executable이 시스템 python일 수 있으므로)
+        self._python = self._find_venv_python()
+
         # 상태 추적
         self._original_branch: Optional[str] = None
         self._evolution_branch: Optional[str] = None
         self._consecutive_rollbacks = 0
+
+    def _find_venv_python(self) -> str:
+        """venv python 경로 우선 사용"""
+        venv_python = self.project_root / "venv" / "bin" / "python"
+        if venv_python.exists():
+            return str(venv_python)
+        return sys.executable
 
     @staticmethod
     def _find_project_root() -> str:
@@ -489,7 +499,7 @@ class CodeEvolver:
                 continue
             try:
                 result = subprocess.run(
-                    [sys.executable, "-m", "py_compile", str(filepath)],
+                    [self._python, "-m", "py_compile", str(filepath)],
                     capture_output=True,
                     text=True,
                     timeout=10,
@@ -508,7 +518,7 @@ class CodeEvolver:
 
         try:
             result = subprocess.run(
-                [sys.executable, "-m", "pytest", str(test_dir), "-x", "--tb=short", "-q"],
+                [self._python, "-m", "pytest", str(test_dir), "-x", "--tb=short", "-q"],
                 capture_output=True,
                 text=True,
                 cwd=str(self.project_root),
