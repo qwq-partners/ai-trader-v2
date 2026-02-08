@@ -590,9 +590,9 @@ class RiskManager:
         self._order_fail_cooldown: Dict[str, datetime] = {}
         self._COOLDOWN_SECONDS = 300  # 5분 쿨다운
 
-        # 신호 중복 제거: 종목별 마지막 신호 시각 (60초 쿨다운)
+        # 신호 중복 제거: 종목별 마지막 신호 시각 (30초 쿨다운)
         self._last_signal_time: Dict[str, datetime] = {}
-        self._SIGNAL_COOLDOWN_SECONDS = 60
+        self._SIGNAL_COOLDOWN_SECONDS = 30  # 60→30: 빠른 신호 처리
 
         # 현금 부족 로그 쓰로틀링
         self._last_cash_warn_time: Optional[datetime] = None

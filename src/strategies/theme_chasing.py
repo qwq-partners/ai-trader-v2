@@ -36,12 +36,12 @@ class ThemeChasingConfig(StrategyConfig):
 
     # 테마 조건
     min_theme_score: float = 70.0     # 최소 테마 점수
-    max_theme_age_minutes: int = 60   # 테마 신선도 (분)
+    max_theme_age_minutes: int = 30   # 테마 신선도 (분) — 60→30: 신선한 테마만
 
     # 종목 조건
-    min_change_pct: float = 1.0       # 최소 등락률 (%)
-    max_change_pct: float = 15.0      # 최대 등락률 (%) - 과열 방지
-    min_volume_ratio: float = 1.5     # 최소 거래량 비율
+    min_change_pct: float = 2.0       # 최소 등락률 (%) — 1→2: 약한 움직임 필터링
+    max_change_pct: float = 12.0      # 최대 등락률 (%) — 15→12: 과열 필터 강화
+    min_volume_ratio: float = 1.8     # 최소 거래량 비율 — 1.5→1.8: 거래량 확인 강화
 
     # 진입 조건
     entry_window_minutes: int = 30    # 테마 발생 후 진입 가능 시간
@@ -234,8 +234,8 @@ class ThemeChasingStrategy(BaseStrategy):
                     return None
 
                 if direction == "bullish":
-                    # impact: -10 ~ +10 스케일 → 보너스 최대 10점
-                    news_bonus = min(impact * 1.0, 10.0)
+                    # impact: -10 ~ +10 스케일 → 보너스 최대 15점 (강화)
+                    news_bonus = min(impact * 1.5, 15.0)
                     news_info = f", 뉴스호재={impact}"
 
         # 외국인/기관 수급 체크
@@ -336,11 +336,13 @@ class ThemeChasingStrategy(BaseStrategy):
         score += min(theme_score * 0.5, 50)
 
         # 등락률 (25점)
-        # 1%~5% 구간이 최적
-        if 1 <= change_pct <= 5:
+        # 2%~5% 구간이 최적 (상승 초기에 진입)
+        if 2 <= change_pct <= 5:
             score += 25
-        elif change_pct <= 10:
-            score += 15
+        elif 5 < change_pct <= 8:
+            score += 18  # 중간 상승
+        elif change_pct <= 12:
+            score += 10  # 높은 상승 (과열 주의)
         else:
             score += 5
 

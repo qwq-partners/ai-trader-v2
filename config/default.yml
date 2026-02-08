@@ -36,10 +36,10 @@ risk:
   min_position_value: 200000     # 최소 포지션 금액 (20만원)
   dynamic_max_positions: true    # 자산 규모에 따라 max_positions 동적 조정
 
-  # === 손절/익절 (스윙 전략: 넓은 폭) ===
-  default_stop_loss_pct: 8.0     # 기본 손절 8.0% (3→8: 일중 변동성 흡수)
-  default_take_profit_pct: 20.0  # 기본 익절 20.0% (7→20: 트렌드 완주)
-  trailing_stop_pct: 5.0         # 트레일링 스탑 5.0% (3→5: 이익 보호 강화)
+  # === 손절/익절 (R:R 비율 2:1 목표) ===
+  default_stop_loss_pct: 4.0     # 기본 손절 4.0% (8→4: 손실 크기 축소)
+  default_take_profit_pct: 10.0  # 기본 익절 10.0% (20→10: 현실적 목표)
+  trailing_stop_pct: 2.5         # 트레일링 스탑 2.5% (5→2.5: 이익 보호 강화)
 
   # === 특별 상황 ===
   hot_theme_position_pct: 50.0   # 핫 테마 시 최대 포지션 50% (70→50: 테마 집중 리스크 완화)
@@ -66,23 +66,23 @@ risk:
 strategies:
   # 전략 공통 기본값 (각 전략은 이 값을 상속하고, 필요 시 오버라이드)
   defaults:
-    holding_period_days: 5       # 기본 보유 기간 (스윙)
-    stop_loss_pct: 8.0           # 기본 손절 (스윙 변동성 수용)
-    take_profit_pct: 20.0        # 기본 익절 (트렌드 완주)
-    trailing_stop_pct: 5.0       # 기본 트레일링 스탑
+    holding_period_days: 3       # 기본 보유 기간 (단기)
+    stop_loss_pct: 4.0           # 기본 손절 (4%: R:R 개선)
+    take_profit_pct: 10.0        # 기본 익절 (10%: 현실적 목표)
+    trailing_stop_pct: 2.5       # 기본 트레일링 스탑
     min_volume_ratio: 2.0        # 기본 거래량 비율
     min_score: 60.0              # 기본 최소 신호 점수
     position_size_multiplier: 1.0  # 기본 포지션 크기 배율
 
-  # 모멘텀 브레이크아웃 (주력 전략: 진짜 스윙 3~7일)
+  # 모멘텀 브레이크아웃 (주력 전략)
   momentum_breakout:
     enabled: true  # 주력 활성화
     time_horizon: swing          # 타임 호라이즌: 스윙 (50% 자금 풀)
-    holding_period_days: 5       # 목표 보유 기간 5일 (스윙)
+    holding_period_days: 3       # 목표 보유 기간 3일 (현실적 단기)
     breakout_period: 20          # 돌파 기준 기간 (일)
     confirm_candles: 2           # 돌파 확인 캔들 수
-    min_breakout_pct: 1.5        # 최소 돌파 비율 (0.5→1.5: 명확한 돌파만)
-    volume_surge_ratio: 3.5      # 거래량 급증 기준 (2.5→3.5: 강한 거래량만)
+    min_breakout_pct: 0.8        # 최소 돌파 비율 (1.5→0.8: 진입 기회 확대)
+    volume_surge_ratio: 2.5      # 거래량 급증 기준 (3.5→2.5: 적정 수준)
 
     # 점수 가중치
     weight_price_momentum: 40.0
@@ -90,35 +90,35 @@ strategies:
     weight_high_proximity: 20.0
     weight_theme: 10.0
 
-    # 청산 조건 (진짜 스윙: 대폭 확대)
-    stop_loss_pct: 8.0           # 3→8: 일중 변동성 흡수
-    take_profit_pct: 20.0        # 7→20: 트렌드 완주
-    trailing_stop_pct: 7.0       # 5→7: 스윙 트레일링 스탑 (하이브리드 전략)
+    # 청산 조건 (R:R 비율 개선)
+    stop_loss_pct: 4.0           # 8→4: 손실 축소
+    take_profit_pct: 10.0        # 20→10: 현실적 목표
+    trailing_stop_pct: 3.0       # 7→3: 수익 보호 강화
 
-  # 테마 추종 (단기 2~4일)
+  # 테마 추종 (단기 1~3일)
   theme_chasing:
     enabled: true                # 활성화 (단기 전략)
     time_horizon: short_term     # 타임 호라이즌: 단기 (30% 자금 풀)
-    holding_period_days: 3       # 목표 보유 기간 3일 (단기)
+    holding_period_days: 2       # 목표 보유 기간 2일 (테마는 빠르게)
     min_theme_score: 70
     entry_window_minutes: 30
-    stop_loss_pct: 6.0           # 2.5→6: 변동성 수용
-    take_profit_pct: 15.0        # 5→15: 테마 지속 수익 확대
-    trailing_stop_pct: 3.0       # 4→3: 단기 트레일링 스탑 (하이브리드 전략)
+    stop_loss_pct: 3.0           # 6→3: 테마 실패 시 빠른 손절
+    take_profit_pct: 8.0         # 15→8: 현실적 목표
+    trailing_stop_pct: 2.0       # 3→2: 빠른 수익 보호
 
-  # 갭상승 추종 (진짜 스윙 3~7일)
+  # 갭상승 추종 (단기 1~3일)
   gap_and_go:
-    enabled: true                # 활성화 (스윙 전략)
-    time_horizon: swing          # 타임 호라이즌: 스윙 (50% 자금 풀)
-    holding_period_days: 5       # 목표 보유 기간 5일 (스윙)
+    enabled: true                # 활성화
+    time_horizon: short_term     # 타임 호라이즌: 단기 (30% 자금 풀) — 스윙→단기
+    holding_period_days: 2       # 목표 보유 기간 2일 (갭 모멘텀은 빠르게 소진)
     min_gap_pct: 2.0
     max_gap_pct: 10.0
-    entry_delay_minutes: 30
-    pullback_pct: 1.0
-    min_volume_ratio: 2.8        # 2.0→2.8: 거래량 확인 강화
-    stop_loss_pct: 8.0           # 3→8: 일중 변동성 흡수
-    take_profit_pct: 20.0        # 7→20: 트렌드 완주
-    trailing_stop_pct: 7.0       # 5→7: 스윙 트레일링 스탑 (하이브리드 전략)
+    entry_delay_minutes: 20      # 30→20: 빠른 진입 (갭 모멘텀 활용)
+    pullback_pct: 0.8            # 1.0→0.8: 빠른 눌림목 포착
+    min_volume_ratio: 2.5        # 2.8→2.5: 적정 수준
+    stop_loss_pct: 3.0           # 8→3: 갭 실패 시 빠른 손절
+    take_profit_pct: 8.0         # 20→8: 현실적 목표
+    trailing_stop_pct: 2.0       # 7→2: 수익 보호 강화
 
   # 평균 회귀 (급락 반등, 보조 전략)
   mean_reversion:
@@ -177,28 +177,28 @@ notification:
     on_daily_summary: true
 
 
-# 분할 익절 관리자 (3단계 익절 + ATR 기반 동적 손절) - 진짜 스윙
+# 분할 익절 관리자 (3단계 익절 + ATR 기반 동적 손절)
 exit_manager:
   enable_partial_exit: true
 
-  # 3단계 익절 시스템 (진짜 스윙: 대폭 확대)
-  first_exit_pct: 5.0             # 1차 익절 +5% (3→5: 스윙 안정 익절)
-  first_exit_ratio: 0.20          # 20% 매도 (유지: 천천히 익절)
-  second_exit_pct: 12.0           # 2차 익절 +12% (5→12: 트렌드 중간)
-  second_exit_ratio: 0.30         # 잔여 80%의 30% = 전체 24% 매도
-  third_exit_pct: 20.0            # 3차 익절 +20% (7→20: 트렌드 완주)
-  third_exit_ratio: 0.5           # 잔여 56%의 50% = 전체 28% 매도 (나머지 28%는 trailing)
+  # 3단계 익절 시스템 (R:R 비율 2:1 목표)
+  first_exit_pct: 3.0             # 1차 익절 +3% (5→3: 빠른 수익 확보, 승률 향상)
+  first_exit_ratio: 0.30          # 30% 매도 (20→30: 수익 확정 비율 확대)
+  second_exit_pct: 6.0            # 2차 익절 +6% (12→6: 현실적 목표)
+  second_exit_ratio: 0.40         # 잔여 70%의 40% = 전체 28% 매도
+  third_exit_pct: 10.0            # 3차 익절 +10% (20→10: 도달 가능한 목표)
+  third_exit_ratio: 0.5           # 잔여 42%의 50% = 전체 21% 매도 (나머지 21%는 trailing)
 
   # ATR 기반 동적 손절 (변동성 대응)
-  stop_loss_pct: 8.0              # 기본 손절 8.0% (3→8: 일중 변동성 흡수)
+  stop_loss_pct: 4.0              # 기본 손절 4.0% (8→4: 손실 크기 절반으로 축소)
   enable_dynamic_stop: true       # ATR 기반 동적 손절 활성화
-  atr_multiplier: 3.0             # ATR × 3.0 (2.5→3: 스윙 변동성 대응)
-  min_stop_pct: 6.0               # 최소 손절폭 6.0% (3→6: 스윙 하한)
-  max_stop_pct: 10.0              # 최대 손절폭 10.0% (7→10: 스윙 상한)
+  atr_multiplier: 2.0             # ATR × 2.0 (3→2: 빠른 손절)
+  min_stop_pct: 3.0               # 최소 손절폭 3.0% (6→3: 기본 변동성 허용)
+  max_stop_pct: 6.0               # 최대 손절폭 6.0% (10→6: 과대 손실 방지)
 
-  # 트레일링 스탑 (진짜 스윙)
-  trailing_stop_pct: 5.0          # 고점 대비 하락률 5.0% (3→5: 이익 보호)
-  trailing_activate_pct: 5.0      # 트레일링 활성화 5% (3→5: 1차 익절과 동일)
+  # 트레일링 스탑
+  trailing_stop_pct: 2.5          # 고점 대비 하락률 2.5% (5→2.5: 이익 보호 강화)
+  trailing_activate_pct: 3.0      # 트레일링 활성화 3% (5→3: 빠른 활성화)
 
   include_fees: true
 

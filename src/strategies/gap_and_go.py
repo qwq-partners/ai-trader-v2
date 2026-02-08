@@ -43,7 +43,7 @@ class GapAndGoConfig(StrategyConfig):
     min_volume_ratio: float = 2.0     # 최소 거래량 비율
 
     # VWAP 조건
-    vwap_support_tolerance: float = 0.5  # VWAP 지지 허용 오차 (%)
+    vwap_support_tolerance: float = 1.0  # VWAP 지지 허용 오차 (%) — 0.5→1.0: VWAP 이탈 허용 확대
 
     # 청산 조건
     stop_loss_pct: float = 1.5        # 손절 (갭 시작점 이탈)
@@ -51,8 +51,8 @@ class GapAndGoConfig(StrategyConfig):
     trailing_stop_pct: float = 1.5    # 트레일링 스탑
 
     # 시간 제한
-    entry_start_time: str = "09:30"   # 진입 시작 시간
-    entry_end_time: str = "11:00"     # 진입 종료 시간 (장 초반만)
+    entry_start_time: str = "09:20"   # 진입 시작 시간 — 09:30→09:20: entry_delay 축소 반영
+    entry_end_time: str = "11:30"     # 진입 종료 시간 — 11:00→11:30: 기회 확대
 
 
 class GapAndGoStrategy(BaseStrategy):

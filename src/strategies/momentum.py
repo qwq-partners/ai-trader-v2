@@ -44,7 +44,7 @@ class MomentumConfig(StrategyConfig):
     trailing_stop_pct: float = 1.5   # 트레일링 스탑 (%)
 
     # 시간대 제한
-    trading_start_time: str = "09:05" # 시작 시간 (장 개시 직후)
+    trading_start_time: str = "09:15" # 시작 시간 (장 개시 15분 후: 초반 과열 회피)
     trading_end_time: str = "15:20"   # 종료 시간 (마감 10분 전)
 
 
@@ -76,7 +76,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
 
         # 중복 신호 방지
         self._last_signal_time: Dict[str, datetime] = {}  # 종목별 마지막 신호 시각
-        self._signal_cooldown: int = 300  # 5분 쿨다운 (초)
+        self._signal_cooldown: int = 180  # 3분 쿨다운 (초) — 5분→3분: 기회 확대
 
         # 손절 후 재진입 방지
         self._recently_stopped: Dict[str, datetime] = {}  # 손절한 종목
@@ -226,18 +226,24 @@ class MomentumBreakoutStrategy(BaseStrategy):
         score = 0.0
         cfg = self.momentum_config
 
-        # 1. 가격 모멘텀 (40점)
+        # 1. 가격 모멘텀 (40점) — 강도 반영
         change_1d = indicators.get("change_1d", 0)
         change_5d = indicators.get("change_5d", 0)
         change_20d = indicators.get("change_20d", 0)
 
         price_score = 0.0
-        if change_1d > 0:
-            price_score += 10
+        # 당일 모멘텀 (강도에 따라 차등)
+        if change_1d >= 3:
+            price_score += 15  # 강한 상승
+        elif change_1d >= 1:
+            price_score += 10  # 적당한 상승
+        elif change_1d > 0:
+            price_score += 5   # 약한 상승
+
         if change_5d > 0:
-            price_score += 15
+            price_score += 13
         if change_20d > 0:
-            price_score += 15
+            price_score += 12
 
         score += min(price_score, cfg.weight_price_momentum)
 
