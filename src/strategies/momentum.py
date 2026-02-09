@@ -141,6 +141,12 @@ class MomentumBreakoutStrategy(BaseStrategy):
         if price < self.config.min_price:
             return None
 
+        # 변동성 필터: 고변동성 종목 진입 제한 (승률 개선)
+        volatility = indicators.get("volatility", 0)
+        if volatility > 8.0:
+            logger.debug(f"[Momentum] {symbol} 변동성 과다 ({volatility:.1f}%) - 진입 제한")
+            return None
+
         # 20일 고가 체크
         high_20d = indicators.get("high_20d", 0)
         if high_20d <= 0:
@@ -160,9 +166,10 @@ class MomentumBreakoutStrategy(BaseStrategy):
         if vol_ratio < self.momentum_config.volume_surge_ratio:
             return None
 
-        # 모멘텀 점수 계산
+        # 모멘텀 점수 계산 (최소 점수 70: 신호 품질 강화)
         score = self.calculate_score(symbol)
-        if score < self.config.min_score:
+        effective_min_score = max(self.config.min_score, 70.0)  # 최소 70점 (승률 개선)
+        if score < effective_min_score:
             return None
 
         # 신호 강도 결정
@@ -228,18 +235,25 @@ class MomentumBreakoutStrategy(BaseStrategy):
         change_20d = indicators.get("change_20d", 0)
 
         price_score = 0.0
-        # 당일 모멘텀 (강도에 따라 차등)
-        if change_1d >= 3:
-            price_score += 15  # 강한 상승
+        # 당일 모멘텀 (강도에 따라 차등, +1% 미만은 점수 없음 — 승률 개선)
+        if change_1d >= 5:
+            price_score += 15  # 강한 상승 (5%+)
+        elif change_1d >= 3:
+            price_score += 12  # 중간 상승 (3~5%)
         elif change_1d >= 1:
-            price_score += 10  # 적당한 상승
-        elif change_1d > 0:
-            price_score += 5   # 약한 상승
+            price_score += 7   # 적당한 상승 (1~3%)
+        # change_1d < 1%: 점수 0 (약한 상승 필터링 — 승률 개선)
 
-        if change_5d > 0:
+        # 5일 모멘텀 (최소 +2% 이상 — 약한 추세 필터링)
+        if change_5d >= 5:
             price_score += 13
-        if change_20d > 0:
+        elif change_5d >= 2:
+            price_score += 8
+        # 20일 모멘텀 (최소 +3% 이상 — 약한 추세 필터링)
+        if change_20d >= 10:
             price_score += 12
+        elif change_20d >= 3:
+            price_score += 7
 
         score += min(price_score, cfg.weight_price_momentum)
 

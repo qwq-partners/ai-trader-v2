@@ -670,6 +670,9 @@ class RiskManager:
         # 부분 체결 추적: 종목별 미체결 수량
         self._pending_quantities: Dict[str, int] = {}
 
+        # 매도/매수 구분 추적 (매도 미체결 폴백용)
+        self._pending_sides: Dict[str, OrderSide] = {}
+
         # 현금 초과 주문 방지: 주문별 예약 현금 추적 (symbol → 예약 금액)
         self._reserved_by_order: Dict[str, Decimal] = {}
 
@@ -710,12 +713,51 @@ class RiskManager:
         for s in expired_signals:
             del self._last_signal_time[s]
 
-        # stale pending 주문 정리 (10분 이상 미체결 → 거래소 취소 + 내부 정리)
-        stale_pending = [s for s, t in self._pending_timestamps.items()
-                         if (now - t).total_seconds() >= self._PENDING_TIMEOUT_SECONDS]
-        for s in stale_pending:
+        # stale pending 주문 정리 (매도: 90초, 매수: 10분 타임아웃)
+        _SELL_TIMEOUT = 90  # 매도 지정가 미체결 타임아웃
+        stale_sells = []
+        stale_buys = []
+        for s, t in self._pending_timestamps.items():
+            elapsed = (now - t).total_seconds()
+            is_sell = self._pending_sides.get(s) == OrderSide.SELL
+            if is_sell and elapsed >= _SELL_TIMEOUT:
+                stale_sells.append(s)
+            elif not is_sell and elapsed >= self._PENDING_TIMEOUT_SECONDS:
+                stale_buys.append(s)
+
+        # stale 매도: 지정가 취소 → 시장가 재주문
+        for s in stale_sells:
             elapsed = (now - self._pending_timestamps[s]).total_seconds()
-            # 거래소에 남은 미체결 주문 취소 시도
+            logger.warning(f"[리스크] 매도 미체결 폴백: {s} ({elapsed:.0f}초 초과) → 시장가 전환")
+            if self.engine.broker and hasattr(self.engine.broker, 'cancel_all_for_symbol'):
+                try:
+                    await self.engine.broker.cancel_all_for_symbol(s)
+                except Exception as e:
+                    logger.warning(f"[리스크] 매도 취소 실패: {s} - {e}")
+            # 시장가 재주문
+            pos = self.engine.portfolio.positions.get(s)
+            if pos and pos.quantity > 0:
+                fallback_order = Order(
+                    symbol=s,
+                    side=OrderSide.SELL,
+                    order_type=OrderType.MARKET,
+                    quantity=pos.quantity,
+                    reason="미체결 폴백: 시장가 전환",
+                )
+                try:
+                    await self.engine.broker.submit_order(fallback_order)
+                    self._pending_timestamps[s] = datetime.now()  # 타이머 리셋
+                    self._pending_sides[s] = OrderSide.SELL
+                    logger.info(f"[리스크] 시장가 폴백 주문 제출: {s} {pos.quantity}주")
+                except Exception as e:
+                    logger.error(f"[리스크] 시장가 폴백 주문 실패: {s} - {e}")
+                    await self.clear_pending(s)
+            else:
+                await self.clear_pending(s)
+
+        # stale 매수: 기존 로직 (거래소 취소 + 내부 정리)
+        for s in stale_buys:
+            elapsed = (now - self._pending_timestamps[s]).total_seconds()
             cancel_ok = False
             if self.engine.broker and hasattr(self.engine.broker, 'cancel_all_for_symbol'):
                 try:
@@ -846,17 +888,43 @@ class RiskManager:
             self._last_signal_time[event.symbol] = datetime.now()
             return None
 
-        # 주문 생성 (시장가 주문)
-        order = Order(
-            symbol=event.symbol,
-            side=event.side,
-            order_type=OrderType.MARKET,
-            quantity=position_size,
-            price=event.price,
-            strategy=event.strategy.value,
-            reason=event.reason,
-            signal_score=event.score
-        )
+        # 주문 생성: 매도는 매수1호가 지정가, 매수는 시장가
+        if event.side == OrderSide.SELL:
+            sell_price = await self._get_sell_price(event.symbol, event.price)
+            if sell_price:
+                order = Order(
+                    symbol=event.symbol,
+                    side=OrderSide.SELL,
+                    order_type=OrderType.LIMIT,
+                    quantity=position_size,
+                    price=sell_price,
+                    strategy=event.strategy.value,
+                    reason=event.reason,
+                    signal_score=event.score
+                )
+            else:
+                # 호가+현재가 모두 실패 → 시장가 폴백
+                order = Order(
+                    symbol=event.symbol,
+                    side=OrderSide.SELL,
+                    order_type=OrderType.MARKET,
+                    quantity=position_size,
+                    price=event.price,
+                    strategy=event.strategy.value,
+                    reason=event.reason,
+                    signal_score=event.score
+                )
+        else:
+            order = Order(
+                symbol=event.symbol,
+                side=OrderSide.BUY,
+                order_type=OrderType.MARKET,
+                quantity=position_size,
+                price=event.price,
+                strategy=event.strategy.value,
+                reason=event.reason,
+                signal_score=event.score
+            )
 
         # 리스크 체크 (SELL은 포지션 축소이므로 체크 스킵)
         if order.side == OrderSide.BUY:
@@ -902,6 +970,7 @@ class RiskManager:
             self._pending_orders.add(order.symbol)
             self._pending_quantities[order.symbol] = order.quantity
             self._pending_timestamps[order.symbol] = datetime.now()
+            self._pending_sides[order.symbol] = order.side
 
             # 신호 쿨다운 등록 (60초간 동일 종목 신호 차단)
             self._last_signal_time[order.symbol] = datetime.now()
@@ -912,12 +981,28 @@ class RiskManager:
 
         return [OrderEvent.from_order(order, source="risk_manager")]
 
+    async def _get_sell_price(self, symbol: str, fallback_price: Optional[Decimal]) -> Optional[Decimal]:
+        """매도용 최적가 조회: 매수1호가 → fallback_price"""
+        if self.engine.broker and hasattr(self.engine.broker, 'get_best_bid'):
+            try:
+                bid = await self.engine.broker.get_best_bid(symbol)
+                if bid and bid > 0:
+                    logger.info(f"[리스크] 매도 호가: {symbol} 매수1호가={bid:,.0f}")
+                    return Decimal(str(bid))
+            except Exception as e:
+                logger.warning(f"[리스크] 매수1호가 조회 실패: {symbol} - {e}")
+        # 호가 조회 실패 시 event.price(현재가) 사용
+        if fallback_price and fallback_price > 0:
+            return fallback_price
+        return None
+
     async def clear_pending(self, symbol: str, amount: Decimal = Decimal("0")):
         """주문 완료/실패 시 pending 해제 (외부에서 호출) - Lock 보호"""
         async with self._pending_lock:
             self._pending_orders.discard(symbol)
             self._pending_quantities.pop(symbol, None)
             self._pending_timestamps.pop(symbol, None)
+            self._pending_sides.pop(symbol, None)
             self._reserved_by_order.pop(symbol, None)
 
     async def on_fill(self, event: FillEvent) -> Optional[List[Event]]:
@@ -929,6 +1014,7 @@ class RiskManager:
                 self._pending_orders.discard(event.symbol)
                 self._pending_quantities.pop(event.symbol, None)
                 self._pending_timestamps.pop(event.symbol, None)
+                self._pending_sides.pop(event.symbol, None)
                 # 전량 체결 시 원래 예약 금액 정확히 해제 (슬리피지 드리프트 방지)
                 self._reserved_by_order.pop(event.symbol, None)
             else:

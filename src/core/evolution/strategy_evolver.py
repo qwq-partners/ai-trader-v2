@@ -562,7 +562,7 @@ class StrategyEvolver:
 
         return round(composite, 1)
 
-    async def evaluate_changes(self) -> List[Dict]:
+    async def evaluate_changes(self) -> Dict:
         """
         변경 효과 평가 (복합 점수 기반)
 
@@ -573,8 +573,13 @@ class StrategyEvolver:
         - > +10: 효과적 (유지)
         - <= -20: 자동 롤백
         - 그 사이: 비효율적 (제거, 유지하지 않음)
+
+        Returns:
+            Dict with 'effectiveness', 'should_rollback', 'results' keys
+            (버그 수정: 호출자 bot_schedulers.py가 .get() 사용하므로 Dict 반환)
         """
         results = []
+        has_rollback = False
 
         for change in self.state.active_changes[:]:  # 복사본으로 순회
             # 평가 기간 체크
@@ -624,6 +629,7 @@ class StrategyEvolver:
                 change.is_effective = False
                 await self._rollback_change(change)
                 result_str = "롤백됨"
+                has_rollback = True
             else:
                 change.is_effective = False
                 result_str = "비효율적"
@@ -654,7 +660,27 @@ class StrategyEvolver:
                 self.state.active_changes.remove(change)
 
         self._save_state()
-        return results
+
+        # 호출자 호환 Dict 반환 (버그 수정: bot_schedulers.py가 .get() 사용)
+        if not results:
+            return {}
+
+        effective_count = sum(1 for r in results if r["result"] == "효과적")
+        total_count = len(results)
+        if effective_count == total_count:
+            effectiveness = "good"
+        elif effective_count > 0:
+            effectiveness = "mixed"
+        else:
+            effectiveness = "poor"
+
+        return {
+            "results": results,
+            "effectiveness": effectiveness,
+            "should_rollback": has_rollback,
+            "evaluated_count": total_count,
+            "effective_count": effective_count,
+        }
 
     async def _rollback_change(self, change: ParameterChange):
         """변경 롤백"""

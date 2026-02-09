@@ -164,7 +164,7 @@ function renderExitTypeChart(trades) {
         font: { color: '#e2e8f0', family: 'DM Sans, sans-serif' },
     };
 
-    Plotly.newPlot('exit-type-chart', data, layout, { displayModeBar: false, responsive: true });
+    Plotly.react('exit-type-chart', data, layout, { displayModeBar: false, responsive: true });
 }
 
 // 이벤트

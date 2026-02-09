@@ -25,14 +25,14 @@ trading:
 # 리스크 관리 설정 (일 1% 목표 최적화)
 risk:
   # === 일일 한도 ===
-  daily_max_loss_pct: 3.0        # 하루 최대 손실 3% (5%→3% 축소: 일 1% 목표 시 3일치 손실이 상한)
-  daily_max_trades: 50           # 일일 최대 거래 50회 (15→50 확대: 오전 기회 손실 방지)
+  daily_max_loss_pct: 5.0        # 하루 최대 손실 5% (3→5: 스윙 변동성 허용)
+  daily_max_trades: 10           # 일일 최대 거래 10회 (50→10: 스윙 매매 빈도)
 
   # === 포지션 관리 (진짜 스윙 전략: 집중 투자) ===
-  base_position_pct: 18.0        # 기본 포지션 비율 18% (15→18: 확신 종목 비중 확대)
-  max_position_pct: 35.0         # 최대 포지션 비율 35% (30→35: 강한 시그널 집중)
-  max_positions: 6               # 최대 동시 포지션 6개 (8→6: 집중 투자)
-  min_cash_reserve_pct: 10.0     # 최소 현금 보유 10% (유지)
+  base_position_pct: 25.0        # 기본 포지션 비율 25% (18→25: 스윙 집중 투자)
+  max_position_pct: 35.0         # 최대 포지션 비율 35%
+  max_positions: 4               # 최대 동시 포지션 4개 (6→4: 스윙 집중)
+  min_cash_reserve_pct: 20.0     # 최소 현금 보유 20% (10→20: 여유 자금 확보)
   min_position_value: 200000     # 최소 포지션 금액 (20만원)
   dynamic_max_positions: true    # 자산 규모에 따라 max_positions 동적 조정
 
@@ -47,7 +47,7 @@ risk:
 
   # === 하이브리드 전략 (타임 호라이즌별 자금 배분) ===
   hybrid:
-    enabled: true               # 하이브리드 모드 활성화
+    enabled: false              # 스윙 전용이므로 비활성화
     day_trading_pct: 20.0       # 데이 트레이딩 자금 20%
     short_term_pct: 30.0        # 단기 전략 자금 30%
     swing_pct: 50.0             # 스윙 전략 자금 50%
@@ -74,9 +74,9 @@ strategies:
     min_score: 60.0              # 기본 최소 신호 점수
     position_size_multiplier: 1.0  # 기본 포지션 크기 배율
 
-  # 모멘텀 브레이크아웃 (주력 전략)
+  # 모멘텀 브레이크아웃 (비활성화 - 스윙 전환)
   momentum_breakout:
-    enabled: true  # 주력 활성화
+    enabled: false
     time_horizon: swing          # 타임 호라이즌: 스윙 (50% 자금 풀)
     holding_period_days: 3       # 목표 보유 기간 3일 (현실적 단기)
     breakout_period: 20          # 돌파 기준 기간 (일)
@@ -95,9 +95,9 @@ strategies:
     take_profit_pct: 10.0        # 20→10: 현실적 목표
     trailing_stop_pct: 3.0       # 7→3: 수익 보호 강화
 
-  # 테마 추종 (단기 1~3일)
+  # 테마 추종 (비활성화 - 스윙 전환)
   theme_chasing:
-    enabled: true                # 활성화 (단기 전략)
+    enabled: false
     time_horizon: short_term     # 타임 호라이즌: 단기 (30% 자금 풀)
     holding_period_days: 2       # 목표 보유 기간 2일 (테마는 빠르게)
     min_theme_score: 70
@@ -106,9 +106,9 @@ strategies:
     take_profit_pct: 8.0         # 15→8: 현실적 목표
     trailing_stop_pct: 2.0       # 3→2: 빠른 수익 보호
 
-  # 갭상승 추종 (단기 1~3일)
+  # 갭상승 추종 (비활성화 - 스윙 전환)
   gap_and_go:
-    enabled: true                # 활성화
+    enabled: false
     time_horizon: short_term     # 타임 호라이즌: 단기 (30% 자금 풀) — 스윙→단기
     holding_period_days: 2       # 목표 보유 기간 2일 (갭 모멘텀은 빠르게 소진)
     min_gap_pct: 2.0
@@ -133,6 +133,28 @@ strategies:
     trailing_stop_pct: 2.0       # 데이 트레이딩: 빠른 청산
     position_size_multiplier: 0.5  # 포지션 절반 (역추세 리스크 관리)
 
+  # RSI-2 역추세 전략 (스윙 주력 60%)
+  rsi2_reversal:
+    enabled: true
+    rsi_period: 2
+    rsi_entry: 10                  # RSI < 10 매수
+    rsi_exit: 70                   # RSI > 70 매도
+    ma_trend_period: 200
+    bb_period: 20
+    bb_std: 2.0
+    stop_loss_pct: 5.0
+    max_holding_days: 10
+    min_score: 65
+    weight: 60                     # 자금 배분 60%
+
+  # 미너비니 SEPA 트렌드 전략 (스윙 보조 40%)
+  sepa_trend:
+    enabled: true
+    stop_loss_pct: 5.0
+    max_holding_days: 10
+    min_score: 70
+    weight: 40                     # 자금 배분 40%
+
 
 # 브로커 설정
 broker:
@@ -144,7 +166,7 @@ broker:
 
 # 데이터 설정
 data:
-  realtime_source: kis_websocket
+  realtime_source: rest_polling       # kis_websocket → rest_polling (스윙 전환)
 
   storage:
     type: file
@@ -182,25 +204,34 @@ exit_manager:
   enable_partial_exit: true
 
   # 3단계 익절 시스템 (R:R 비율 2:1 목표)
-  first_exit_pct: 3.0             # 1차 익절 +3% (5→3: 빠른 수익 확보, 승률 향상)
-  first_exit_ratio: 0.30          # 30% 매도 (20→30: 수익 확정 비율 확대)
-  second_exit_pct: 6.0            # 2차 익절 +6% (12→6: 현실적 목표)
+  first_exit_pct: 5.0             # 1차 익절 +5% (3→5: 스윙 목표 상향)
+  first_exit_ratio: 0.30          # 30% 매도
+  second_exit_pct: 10.0           # 2차 익절 +10% (6→10: 스윙 목표 상향)
   second_exit_ratio: 0.40         # 잔여 70%의 40% = 전체 28% 매도
-  third_exit_pct: 10.0            # 3차 익절 +10% (20→10: 도달 가능한 목표)
+  third_exit_pct: 15.0            # 3차 익절 +15% (10→15: 스윙 목표 상향)
   third_exit_ratio: 0.5           # 잔여 42%의 50% = 전체 21% 매도 (나머지 21%는 trailing)
 
   # ATR 기반 동적 손절 (변동성 대응)
-  stop_loss_pct: 4.0              # 기본 손절 4.0% (8→4: 손실 크기 절반으로 축소)
+  stop_loss_pct: 5.0              # 기본 손절 5.0% (4→5: 스윙 변동성 허용)
   enable_dynamic_stop: true       # ATR 기반 동적 손절 활성화
-  atr_multiplier: 2.0             # ATR × 2.0 (3→2: 빠른 손절)
-  min_stop_pct: 3.0               # 최소 손절폭 3.0% (6→3: 기본 변동성 허용)
-  max_stop_pct: 6.0               # 최대 손절폭 6.0% (10→6: 과대 손실 방지)
+  atr_multiplier: 2.0             # ATR × 2.0
+  min_stop_pct: 4.0               # 최소 손절폭 4.0% (3→4: 스윙 변동성 허용)
+  max_stop_pct: 7.0               # 최대 손절폭 7.0% (6→7: 스윙 허용폭 확대)
 
   # 트레일링 스탑
-  trailing_stop_pct: 2.5          # 고점 대비 하락률 2.5% (5→2.5: 이익 보호 강화)
-  trailing_activate_pct: 3.0      # 트레일링 활성화 3% (5→3: 빠른 활성화)
+  trailing_stop_pct: 3.0          # 고점 대비 하락률 3.0% (2.5→3: 스윙 하락 허용)
+  trailing_activate_pct: 5.0      # 트레일링 활성화 5% (3→5: 스윙 활성화 기준 상향)
 
   include_fees: true
+
+
+# 배치 분석 설정 (스윙 모멘텀)
+batch:
+  daily_scan_time: "15:40"           # 일일 스캔 시간
+  execute_time: "09:01"              # 시그널 실행 시간
+  position_update_interval: 30       # 포지션 시세 갱신 간격 (분)
+  max_entry_slippage_pct: 3.0        # 분석가 대비 최대 3% 상승까지 진입 허용
+  max_holding_days: 10               # 최대 보유일수
 
 
 # 종목 스크리너

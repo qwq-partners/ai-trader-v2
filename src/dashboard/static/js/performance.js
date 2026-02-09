@@ -73,7 +73,7 @@ function renderEquityCurve(data) {
         font: { color: '#e2e8f0', family: 'DM Sans, sans-serif' },
     };
 
-    Plotly.newPlot('equity-curve-chart', traces, layout, { displayModeBar: false, responsive: true });
+    Plotly.react('equity-curve-chart', traces, layout, { displayModeBar: false, responsive: true });
 
     // 핵심 지표 계산
     const totalGross = dailyPnl.filter(v => v > 0).reduce((s, v) => s + v, 0);
@@ -109,11 +109,12 @@ function renderSummary(stats) {
     }
 
     const wr = document.getElementById('perf-winrate');
-    wr.textContent = closed > 0 ? stats.win_rate.toFixed(1) + '%' : '--';
-    wr.className = 'stat-value mono ' + (stats.win_rate >= 50 ? 'text-profit' : stats.win_rate > 0 ? 'text-loss' : '');
+    const winRate = stats.win_rate || 0;
+    wr.textContent = closed > 0 ? winRate.toFixed(1) + '%' : '--';
+    wr.className = 'stat-value mono ' + (winRate >= 50 ? 'text-profit' : winRate > 0 ? 'text-loss' : '');
 
     const wl = document.getElementById('perf-wl');
-    wl.textContent = closed > 0 ? `${stats.wins}/${stats.losses}` : (open > 0 ? `보유 ${open}건` : '--');
+    wl.textContent = closed > 0 ? `${stats.wins || 0}/${stats.losses || 0}` : (open > 0 ? `보유 ${open}건` : '--');
 
     // 총 손익: 청산 손익 + 미실현 손익
     const totalPnl = (stats.total_pnl || 0) + (stats.open_pnl || 0);
@@ -181,7 +182,7 @@ function renderStrategyChart(byStrategy) {
         font: { color: '#e2e8f0', family: 'DM Sans, sans-serif' },
     };
 
-    Plotly.newPlot('strategy-chart', data, layout, { displayModeBar: false, responsive: true });
+    Plotly.react('strategy-chart', data, layout, { displayModeBar: false, responsive: true });
 }
 
 function renderExitPnlChart(byExitType) {
@@ -227,7 +228,7 @@ function renderExitPnlChart(byExitType) {
         font: { color: '#e2e8f0', family: 'DM Sans, sans-serif' },
     };
 
-    Plotly.newPlot('exit-pnl-chart', data, layout, { displayModeBar: false, responsive: true });
+    Plotly.react('exit-pnl-chart', data, layout, { displayModeBar: false, responsive: true });
 }
 
 function renderStrategyTable(byStrategy) {

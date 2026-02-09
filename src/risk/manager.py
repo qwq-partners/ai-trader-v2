@@ -157,6 +157,15 @@ class RiskManager:
                 f"포지션 50% 축소"
             )
 
+        # 연속 손실 시 포지션 축소 (손익비 개선 — 연속 손실 시 리스크 축소)
+        consec_losses = self.daily_stats.consecutive_losses
+        if consec_losses >= 2:
+            loss_multiplier = Decimal("0.5")  # 2연패 이상이면 50% 축소
+            drawdown_multiplier = min(drawdown_multiplier, loss_multiplier)
+            logger.debug(
+                f"[포지션축소] 연속 손실 {consec_losses}회 → 포지션 50% 축소"
+            )
+
         # 최종 포지션 비율
         position_pct = min(
             base_pct * strength_multiplier * drawdown_multiplier,
@@ -372,8 +381,8 @@ class RiskManager:
             if required > available:
                 return False, f"현금 부족 ({available:,.0f} < {required:,.0f})"
 
-        # 7. 연속 손실 체크
-        if self.daily_stats.consecutive_losses >= 5:
+        # 7. 연속 손실 체크 (3회 이상이면 거래 중단 — 14연패 방지 강화)
+        if self.daily_stats.consecutive_losses >= 3:
             return False, f"연속 손실 ({self.daily_stats.consecutive_losses}회) - 거래 중단"
 
         return True, ""

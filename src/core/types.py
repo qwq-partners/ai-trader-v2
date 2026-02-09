@@ -84,6 +84,8 @@ class StrategyType(str, Enum):
     GAP_AND_GO = "gap_and_go"
     MEAN_REVERSION = "mean_reversion"
     SCALPING = "scalping"
+    RSI2_REVERSAL = "rsi2_reversal"
+    SEPA_TREND = "sepa_trend"
 
 
 class TimeHorizon(str, Enum):

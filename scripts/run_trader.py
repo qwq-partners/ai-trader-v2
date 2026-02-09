@@ -177,6 +177,9 @@ class TradingBot(SchedulerMixin):
         self._watch_symbols_lock = asyncio.Lock()
         self._portfolio_lock = asyncio.Lock()
 
+        # 배치 분석기 (스윙 모멘텀)
+        self.batch_analyzer = None
+
         # 대시보드 서버
         self.dashboard: Optional[DashboardServer] = None
 
@@ -396,6 +399,11 @@ class TradingBot(SchedulerMixin):
                 self.strategy_manager.register_strategy("mean_reversion", mr_strategy)
                 logger.info("평균 회귀 전략 등록")
 
+            # 스윙 전략 설정 (배치 분석기 및 청산 파라미터용)
+            strategies_cfg = self.config.get("strategies") or {}
+            rsi2_cfg = strategies_cfg.get("rsi2_reversal") or {}
+            sepa_cfg = strategies_cfg.get("sepa_trend") or {}
+
             # 전략별 청산 파라미터 기록 (ExitManager 전달용: 손절/트레일링 + 익절 목표)
             self._strategy_exit_params = {
                 "momentum_breakout": {
@@ -425,6 +433,20 @@ class TradingBot(SchedulerMixin):
                     "first_exit_pct": mr_cfg.get("take_profit_pct", 5.0) * 0.3,   # 1.5%
                     "second_exit_pct": mr_cfg.get("take_profit_pct", 5.0) * 0.6,  # 3.0%
                     "third_exit_pct": mr_cfg.get("take_profit_pct", 5.0),          # 5.0%
+                },
+                "rsi2_reversal": {
+                    "stop_loss_pct": rsi2_cfg.get("stop_loss_pct", 5.0),
+                    "trailing_stop_pct": 3.0,
+                    "first_exit_pct": 5.0,
+                    "second_exit_pct": 10.0,
+                    "third_exit_pct": 15.0,
+                },
+                "sepa_trend": {
+                    "stop_loss_pct": sepa_cfg.get("stop_loss_pct", 5.0),
+                    "trailing_stop_pct": 3.0,
+                    "first_exit_pct": 5.0,
+                    "second_exit_pct": 10.0,
+                    "third_exit_pct": 15.0,
                 },
             }
 
@@ -522,11 +544,38 @@ class TradingBot(SchedulerMixin):
             self.engine.risk_manager = engine_risk_manager
             logger.info("엔진 리스크 매니저 (SIGNAL 핸들러 + 리스크 검증 위임) 등록 완료")
 
-            # WebSocket 피드 초기화 (실시간 모드)
-            if not self.dry_run:
+            # 데이터 소스 확인
+            data_cfg = self.config.get("data") or {}
+            realtime_source = data_cfg.get("realtime_source", "kis_websocket")
+
+            # WebSocket 피드 초기화 (실시간 모드만)
+            if not self.dry_run and realtime_source == "kis_websocket":
                 self.ws_feed = KISWebSocketFeed(KISWebSocketConfig.from_env())
                 self.ws_feed.on_market_data(self._on_market_data)
                 logger.info("WebSocket 피드 초기화 완료")
+            elif realtime_source == "rest_polling":
+                logger.info("REST 폴링 모드: WebSocket 비활성화")
+
+            # 배치 분석기 초기화 (스윙 모멘텀 모드)
+            if rsi2_cfg.get("enabled") or sepa_cfg.get("enabled"):
+                from src.core.batch_analyzer import BatchAnalyzer
+                self.batch_analyzer = BatchAnalyzer(
+                    engine=self.engine,
+                    broker=self.broker,
+                    kis_market_data=self.kis_market_data,
+                    stock_master=self.stock_master,
+                    exit_manager=self.exit_manager,
+                    config={
+                        "rsi2_reversal": rsi2_cfg,
+                        "sepa_trend": sepa_cfg,
+                        "batch": self.config.get("batch") or {},
+                    },
+                )
+                # ExitManager 보유기간 설정
+                batch_cfg = self.config.get("batch") or {}
+                if self.exit_manager:
+                    self.exit_manager._max_holding_days = batch_cfg.get("max_holding_days", 10)
+                logger.info("배치 분석기 초기화 완료 (스윙 모멘텀 모드)")
 
             # 이벤트 핸들러 등록
             self._register_event_handlers()
@@ -1466,6 +1515,12 @@ class TradingBot(SchedulerMixin):
                     self._run_daily_candle_refresh(), name="daily_candle_refresh"
                 ))
 
+            # 10-3. 배치 분석 스케줄러 (스윙 모멘텀)
+            if self.batch_analyzer:
+                tasks.append(asyncio.create_task(
+                    self._run_batch_scheduler(), name="batch_scheduler"
+                ))
+
             # 10. 대시보드 서버 실행
             dashboard_cfg = self.config.get("dashboard") or {}
             if dashboard_cfg.get("enabled", True):
@@ -1754,6 +1809,12 @@ class TradingBot(SchedulerMixin):
                 logger.info("종목 마스터 종료")
         except Exception as e:
             logger.error(f"종목 마스터 종료 실패: {e}")
+
+        try:
+            if self.batch_analyzer:
+                logger.info("배치 분석기 종료")
+        except Exception as e:
+            logger.error(f"배치 분석기 종료 실패: {e}")
 
         try:
             if self.broker:

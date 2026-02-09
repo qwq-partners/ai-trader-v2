@@ -31,6 +31,8 @@ def setup_api_routes(app: web.Application, data_collector):
     app.router.add_get("/api/health", handler.get_system_health)
     app.router.add_get("/api/premarket", handler.get_premarket)
     app.router.add_get("/api/events", handler.get_events)
+    app.router.add_get("/api/orders/pending", handler.get_pending_orders)
+    app.router.add_get("/api/orders/history", handler.get_order_history)
     app.router.add_get("/api/equity-curve", handler.get_equity_curve)
     app.router.add_post("/api/evolution/apply", handler.apply_evolution_parameter)
 
@@ -72,7 +74,10 @@ class APIHandler:
         return web.json_response(self.dc.get_trades_by_date(trade_date))
 
     async def get_trade_stats(self, request: web.Request) -> web.Response:
-        days = int(request.query.get("days", "30"))
+        try:
+            days = int(request.query.get("days", "30"))
+        except ValueError:
+            return web.json_response({"error": "Invalid days parameter"}, status=400)
         days = max(1, min(days, 365))
         return web.json_response(self.dc.get_trade_stats(days))
 
@@ -104,13 +109,25 @@ class APIHandler:
         return web.json_response(self.dc.get_premarket())
 
     async def get_events(self, request: web.Request) -> web.Response:
-        since_id = int(request.query.get("since", "0"))
+        try:
+            since_id = int(request.query.get("since", "0"))
+        except ValueError:
+            since_id = 0
         return web.json_response(self.dc.get_events(since_id))
 
     async def get_equity_curve(self, request: web.Request) -> web.Response:
-        days = int(request.query.get("days", "30"))
+        try:
+            days = int(request.query.get("days", "30"))
+        except ValueError:
+            return web.json_response({"error": "Invalid days parameter"}, status=400)
         days = max(1, min(days, 90))
         return web.json_response(self.dc.get_equity_curve(days))
+
+    async def get_pending_orders(self, request: web.Request) -> web.Response:
+        return web.json_response(self.dc.get_pending_orders())
+
+    async def get_order_history(self, request: web.Request) -> web.Response:
+        return web.json_response(self.dc.get_order_history())
 
     async def apply_evolution_parameter(self, request: web.Request) -> web.Response:
         """

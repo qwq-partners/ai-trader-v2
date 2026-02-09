@@ -4,8 +4,6 @@ AI Trading Bot v2 - 대시보드 데이터 수집기
 봇의 런타임 데이터를 JSON 변환하여 API/SSE에 제공합니다.
 """
 
-import asyncio
-import glob
 import json
 from datetime import datetime, date, timedelta
 from decimal import Decimal
@@ -20,13 +18,6 @@ try:
 except ImportError:
     PYKRX_AVAILABLE = False
     logger.warning("pykrx not available - stock names will not be enriched")
-
-
-def _decimal_to_float(obj):
-    """Decimal → float 변환 (JSON 직렬화용)"""
-    if isinstance(obj, Decimal):
-        return float(obj)
-    return obj
 
 
 def _serialize(data: Any) -> Any:
@@ -882,6 +873,64 @@ class DashboardDataCollector:
         return result
 
     # ----------------------------------------------------------
+    # 대기 주문 (Pending Orders)
+    # ----------------------------------------------------------
+
+    def get_pending_orders(self) -> List[Dict[str, Any]]:
+        """대기 중인 주문 목록 (RiskManager 기반)"""
+        engine = self.bot.engine
+        rm = engine.risk_manager
+        if not rm:
+            return []
+
+        name_cache = self._build_name_cache()
+        now = datetime.now()
+        result = []
+
+        # 스냅샷 복사 (순회 중 수정 방어)
+        pending_orders = set(getattr(rm, '_pending_orders', set()))
+        pending_sides = dict(getattr(rm, '_pending_sides', {}))
+        pending_timestamps = dict(getattr(rm, '_pending_timestamps', {}))
+        pending_quantities = dict(getattr(rm, '_pending_quantities', {}))
+
+        for symbol in pending_orders:
+            side = pending_sides.get(symbol)
+            side_str = side.value if side else "UNKNOWN"
+            ts = pending_timestamps.get(symbol)
+            elapsed = (now - ts).total_seconds() if ts else 0
+            is_sell = side_str == "SELL"
+            timeout = 90 if is_sell else 600
+            remaining = max(timeout - elapsed, 0)
+            progress = min(elapsed / timeout * 100, 100) if timeout > 0 else 0
+
+            result.append({
+                "symbol": symbol,
+                "name": name_cache.get(symbol, symbol),
+                "side": side_str,
+                "quantity": pending_quantities.get(symbol, 0),
+                "elapsed_seconds": round(elapsed),
+                "timeout_seconds": timeout,
+                "remaining_seconds": round(remaining),
+                "progress_pct": round(progress, 1),
+            })
+
+        # 경과 시간 내림차순 정렬
+        result.sort(key=lambda x: x["elapsed_seconds"], reverse=True)
+        return result
+
+    # ----------------------------------------------------------
+    # 주문 내역 (Order History)
+    # ----------------------------------------------------------
+
+    def get_order_history(self) -> List[Dict[str, Any]]:
+        """주문 관련 이벤트 히스토리 (주문/체결/취소/폴백)"""
+        engine = self.bot.engine
+        events = getattr(engine, '_dashboard_events', [])
+        keywords = ("주문", "체결", "폴백", "취소")
+        return [e for e in events if any(kw in e.get("type", "") for kw in keywords)
+                or any(kw in e.get("message", "") for kw in keywords)]
+
+    # ----------------------------------------------------------
     # 시스템 건강 메트릭
     # ----------------------------------------------------------
 
@@ -912,9 +961,14 @@ class DashboardDataCollector:
         risk_stats = {}
         if engine.risk_manager:
             rm = engine.risk_manager
+            pending_sides = getattr(rm, '_pending_sides', {})
             risk_stats = {
                 "pending_orders": len(getattr(rm, '_pending_orders', set())),
                 "pending_quantities": len(getattr(rm, '_pending_quantities', {})),
+                "pending_sells": sum(
+                    1 for s in pending_sides.values()
+                    if s and s.value == 'SELL'
+                ),
                 "cooldown_symbols": len(getattr(rm, '_order_fail_cooldown', {})),
                 "reserved_cash": float(getattr(rm, '_reserved_cash', 0)),
             }

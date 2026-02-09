@@ -96,6 +96,8 @@ class PositionExitState:
     # ATR 기반 동적 손절
     atr_pct: Optional[float] = None
     dynamic_stop_pct: Optional[float] = None
+    # 1R 도달 후 본전 이동 트레일링
+    breakeven_activated: bool = False
 
 
 class ExitManager:
@@ -111,6 +113,10 @@ class ExitManager:
 
         # 포지션별 청산 상태
         self._states: Dict[str, PositionExitState] = {}
+
+        # 보유기간 체크용 (포지션별 진입 시간)
+        self._entry_times: Dict[str, datetime] = {}
+        self._max_holding_days: int = 10  # 설정에서 오버라이드 가능
 
     def register_position(
         self,
@@ -219,6 +225,12 @@ class ExitManager:
             dynamic_stop_pct=dynamic_stop,
         )
 
+        # 보유기간 체크용 진입 시간 기록
+        if position.entry_time:
+            self._entry_times[position.symbol] = position.entry_time
+        elif position.symbol not in self._entry_times:
+            self._entry_times[position.symbol] = datetime.now()
+
         effective_stop = dynamic_stop or stop_loss_pct or self.config.stop_loss_pct
         eff_1st = first_exit_pct or self.config.first_exit_pct
         logger.debug(
@@ -248,6 +260,16 @@ class ExitManager:
         if current_price > state.highest_price:
             state.highest_price = current_price
 
+        # 보유기간 초과 체크
+        entry_time = self._entry_times.get(symbol)
+        if entry_time and self._max_holding_days > 0:
+            holding_days = (datetime.now() - entry_time).days
+            if holding_days > self._max_holding_days:
+                return self._create_exit(
+                    state, "sell_all", state.remaining_quantity,
+                    f"보유기간 초과: {holding_days}일 (최대 {self._max_holding_days}일)"
+                )
+
         # 순손익률 계산 (수수료 포함, float로 통일)
         if self.config.include_fees:
             _, net_pnl_pct = self.fee_calc.calculate_net_pnl(
@@ -272,8 +294,37 @@ class ExitManager:
             if exit_signal:
                 return exit_signal
 
-        # 3. 트레일링 스탑 (수익 구간에서만, 전략별 파라미터 우선)
-        if net_pnl_pct >= self.config.trailing_activate_pct:
+        # 3. 1R 본전 이동 체크
+        one_r = state.dynamic_stop_pct or state.stop_loss_pct or self.config.stop_loss_pct
+        if net_pnl_pct >= one_r and not state.breakeven_activated:
+            state.breakeven_activated = True
+            logger.info(
+                f"[ExitManager] {symbol} 1R({one_r:.1f}%) 도달 → 본전 이동 활성화 "
+                f"(현재 +{net_pnl_pct:.2f}%)"
+            )
+
+        # 4. 트레일링 스탑
+        if state.breakeven_activated:
+            # ATR 기반 트레일링 폭: 1.5×ATR, 기존 트레일링과 비교하여 작은 값 사용
+            atr_trail = (state.atr_pct or 2.0) * 1.5
+            ts_pct_used = min(atr_trail, state.trailing_stop_pct or self.config.trailing_stop_pct)
+            trail_from_high = float((current_price - state.highest_price) / state.highest_price * 100)
+
+            if trail_from_high <= -ts_pct_used:
+                return self._create_exit(
+                    state, "sell_all", state.remaining_quantity,
+                    f"ATR트레일링: 고점 대비 {trail_from_high:.2f}% (한도=-{ts_pct_used:.1f}%)"
+                )
+
+            # 본전 보호: 1R 도달 후 수익이 0 이하로 역전 시 청산
+            if net_pnl_pct <= 0:
+                return self._create_exit(
+                    state, "sell_all", state.remaining_quantity,
+                    f"본전 이탈: +{net_pnl_pct:.2f}% (1R 도달 후 역전)"
+                )
+
+        elif net_pnl_pct >= self.config.trailing_activate_pct:
+            # 기존 트레일링 (breakeven 미활성 상태에서도 기본 트레일링)
             trailing_pct = float((current_price - state.highest_price) / state.highest_price * 100)
             ts_pct = state.trailing_stop_pct or self.config.trailing_stop_pct
             if trailing_pct <= -ts_pct:
@@ -397,6 +448,7 @@ class ExitManager:
         if state.remaining_quantity <= 0:
             total_pnl = state.total_realized_pnl
             del self._states[symbol]
+            self._entry_times.pop(symbol, None)
             logger.info(f"[ExitManager] {symbol} 완전 청산, 총 실현손익: {total_pnl:+,.0f}원")
 
     def get_state(self, symbol: str) -> Optional[PositionExitState]:
@@ -415,6 +467,7 @@ class ExitManager:
         """
         if symbol in self._states:
             del self._states[symbol]
+            self._entry_times.pop(symbol, None)
             logger.debug(f"[ExitManager] 포지션 상태 제거: {symbol}")
             return True
         return False

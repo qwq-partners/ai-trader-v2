@@ -156,6 +156,8 @@ class SchedulerMixin:
                         if self.engine.risk_manager:
                             self.engine.risk_manager._pending_orders.clear()
                             self.engine.risk_manager._pending_quantities.clear()
+                            self.engine.risk_manager._pending_timestamps.clear()
+                            self.engine.risk_manager._pending_sides.clear()
 
                         # 거래 로거 일일 기록 플러시 및 초기화
                         trading_logger.flush()
@@ -1045,6 +1047,89 @@ class SchedulerMixin:
             except Exception as e:
                 logger.error(f"동기화 루프 오류: {e}")
             await asyncio.sleep(120)  # 2분마다 동기화 (KIS API 응답 지연 대응)
+
+    async def _run_batch_scheduler(self):
+        """
+        스윙 모멘텀 배치 스케줄러
+
+        - 15:40 일일 스캔 (장 마감 후)
+        - 09:01 시그널 실행 (장 시작 후)
+        - 09:30~15:20 매 30분 포지션 모니터링
+        """
+        if not hasattr(self, 'batch_analyzer') or not self.batch_analyzer:
+            logger.info("[배치스케줄러] batch_analyzer 없음, 스킵")
+            return
+
+        # config에서 스케줄 시간 로드
+        batch_cfg = self.config.get("batch") or {}
+        scan_time_str = batch_cfg.get("daily_scan_time", "15:40")
+        execute_time_str = batch_cfg.get("execute_time", "09:01")
+        monitor_interval = batch_cfg.get("position_update_interval", 30)  # 분
+
+        scan_hour, scan_min = (int(x) for x in scan_time_str.split(":"))
+        exec_hour, exec_min = (int(x) for x in execute_time_str.split(":"))
+
+        last_scan_date = None
+        last_execute_date = None
+        last_monitor_time = None
+
+        try:
+            while self.running:
+                now = datetime.now()
+                today = now.date()
+
+                if is_kr_market_holiday(today):
+                    await asyncio.sleep(60)
+                    continue
+
+                # 15:40 일일 스캔
+                if (now.hour == scan_hour
+                        and scan_min <= now.minute < scan_min + 5
+                        and last_scan_date != today):
+                    logger.info("[배치스케줄러] 일일 스캔 시작")
+                    try:
+                        await self.batch_analyzer.run_daily_scan()
+                    except Exception as e:
+                        logger.error(f"[배치스케줄러] 일일 스캔 오류: {e}")
+                    last_scan_date = today
+
+                # 09:01 시그널 실행
+                if (now.hour == exec_hour
+                        and exec_min <= now.minute < exec_min + 4
+                        and last_execute_date != today):
+                    logger.info("[배치스케줄러] 시그널 실행 시작")
+                    try:
+                        await self.batch_analyzer.execute_pending_signals()
+                    except Exception as e:
+                        logger.error(f"[배치스케줄러] 시그널 실행 오류: {e}")
+                    last_execute_date = today
+
+                # 09:30~15:20 매 30분 포지션 모니터링
+                if 9 <= now.hour <= 15:
+                    should_monitor = False
+                    if last_monitor_time is None:
+                        should_monitor = (now.hour == 9 and now.minute >= 30) or now.hour >= 10
+                    else:
+                        elapsed = (now - last_monitor_time).total_seconds() / 60
+                        should_monitor = elapsed >= monitor_interval
+
+                    # 15:20 이후 제외
+                    if now.hour == 15 and now.minute >= 20:
+                        should_monitor = False
+
+                    if should_monitor:
+                        try:
+                            await self.batch_analyzer.monitor_positions()
+                        except Exception as e:
+                            logger.error(f"[배치스케줄러] 포지션 모니터링 오류: {e}")
+                        last_monitor_time = now
+
+                await asyncio.sleep(30)
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"[배치스케줄러] 스케줄러 오류: {e}")
 
     async def _run_log_cleanup(self):
         """

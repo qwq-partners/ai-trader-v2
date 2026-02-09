@@ -121,7 +121,7 @@ function renderRecommendations(recs) {
                     </div>
                     <div class="rec-reason">${escapeHtml(rec.reason || '이유 없음')}</div>
                 </div>
-                <button class="btn-apply" onclick="applyParameterChange(${idx})" data-rec-idx="${idx}">
+                <button class="btn-apply" onclick="applyParameterChange(event, ${idx})" data-rec-idx="${idx}">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
                     반영
                 </button>
@@ -145,7 +145,7 @@ function renderChangesTable(changes) {
 
         return `<tr style="border-bottom: 1px solid var(--border-subtle);">
             <td style="padding: 10px 12px 10px 0;"><span class="badge badge-purple" style="font-size:0.65rem;">${escapeHtml(ch.strategy || '')}</span></td>
-            <td style="padding: 10px 12px 10px 0;" class="mono" style="font-size:0.82rem;">${escapeHtml(ch.parameter || '')}</td>
+            <td style="padding: 10px 12px 10px 0; font-size:0.82rem;" class="mono">${escapeHtml(ch.parameter || '')}</td>
             <td style="padding: 10px 12px 10px 0; text-align: right;" class="mono">${formatValue(ch.as_is)}</td>
             <td style="padding: 10px 8px; text-align: center;" class="arrow-to">&rarr;</td>
             <td style="padding: 10px 12px 10px 0; text-align: right; color: var(--accent-cyan);" class="mono">${formatValue(ch.to_be)}</td>
@@ -206,7 +206,7 @@ function renderHistory(history) {
     tbody.innerHTML = sorted.map(ch => {
         const ts = ch.timestamp ? formatDateTime(new Date(ch.timestamp)) : '--';
         return `<tr style="border-bottom: 1px solid var(--border-subtle);">
-            <td style="padding: 10px 12px 10px 0;" class="mono" style="font-size:0.75rem;color:var(--text-muted);">${ts}</td>
+            <td style="padding: 10px 12px 10px 0; font-size:0.75rem; color:var(--text-muted);" class="mono">${ts}</td>
             <td style="padding: 10px 12px 10px 0;"><span class="badge badge-purple" style="font-size:0.65rem;">${escapeHtml(ch.strategy || '')}</span></td>
             <td style="padding: 10px 12px 10px 0; font-size:0.82rem;" class="mono">${escapeHtml(ch.parameter || '')}</td>
             <td style="padding: 10px 12px 10px 0; text-align: right;" class="mono">${formatValue(ch.as_is)}</td>
@@ -269,7 +269,7 @@ function effectBadge(isEffective) {
 
 let currentRecommendations = [];
 
-async function applyParameterChange(idx) {
+async function applyParameterChange(event, idx) {
     if (!currentRecommendations[idx]) {
         alert('추천 데이터를 찾을 수 없습니다.');
         return;

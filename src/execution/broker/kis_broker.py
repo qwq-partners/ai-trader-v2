@@ -1109,6 +1109,14 @@ class KISBroker(BaseBroker):
             logger.exception(f"호가 조회 오류: {e}")
             return {}
 
+    async def get_best_bid(self, symbol: str) -> Optional[float]:
+        """매수1호가 조회 (매도 시 사용)"""
+        orderbook = await self.get_orderbook(symbol)
+        bids = orderbook.get("bids", [])
+        if bids and bids[0]["price"] > 0:
+            return bids[0]["price"]
+        return None
+
     # ============================================================
     # 과거 일봉 데이터 조회
     # ============================================================

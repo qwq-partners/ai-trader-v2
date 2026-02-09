@@ -105,6 +105,10 @@ sse.on('events', (data) => {
     }
 });
 
+sse.on('pending_orders', (data) => {
+    renderPendingOrders(data);
+});
+
 // ============================================================
 // 포지션 테이블
 // ============================================================
@@ -284,6 +288,55 @@ function addLogEntry(time, type, message) {
 }
 
 // ============================================================
+// 대기 주문 카드 렌더링
+// ============================================================
+
+function renderPendingOrders(orders) {
+    const card = document.getElementById('pending-orders-card');
+    const list = document.getElementById('pending-orders-list');
+    const countEl = document.getElementById('pending-orders-count');
+
+    if (!orders || orders.length === 0) {
+        card.style.display = 'none';
+        return;
+    }
+
+    card.style.display = 'block';
+    countEl.textContent = orders.length + '건';
+
+    const items = orders.map(o => {
+        const sideCls = o.side === 'SELL' ? 'badge-red' : 'badge-blue';
+        const sideLabel = o.side === 'SELL' ? '매도' : '매수';
+        const gaugeColor = o.progress_pct >= 80 ? 'var(--accent-red)' : 'var(--accent-blue)';
+        const elapsed = o.elapsed_seconds;
+        const elapsedStr = elapsed >= 60 ? `${Math.floor(elapsed / 60)}분 ${elapsed % 60}초` : `${elapsed}초`;
+        const remainStr = o.remaining_seconds >= 60 ? `${Math.floor(o.remaining_seconds / 60)}분 ${o.remaining_seconds % 60}초` : `${o.remaining_seconds}초`;
+
+        return `<div style="background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 12px 16px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-weight: 600; font-size: 0.88rem; color: var(--text-primary);">${o.name || o.symbol}</span>
+                    <span style="font-size: 0.72rem; color: var(--text-muted);">${o.symbol}</span>
+                    <span class="badge ${sideCls}">${sideLabel}</span>
+                </div>
+                <span class="mono" style="font-size: 0.78rem; color: var(--text-secondary);">${o.quantity}주</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <div style="flex: 1; background: rgba(99,102,241,0.08); border-radius: 4px; height: 6px; overflow: hidden;">
+                    <div style="width: ${o.progress_pct}%; height: 100%; background: ${gaugeColor}; border-radius: 4px; transition: width 0.3s;"></div>
+                </div>
+                <span class="mono" style="font-size: 0.72rem; color: ${o.progress_pct >= 80 ? 'var(--accent-red)' : 'var(--text-muted)'}; white-space: nowrap;">
+                    ${elapsedStr} / ${o.timeout_seconds}초
+                </span>
+            </div>
+            ${o.progress_pct >= 80 ? '<div style="margin-top: 6px; font-size: 0.72rem; color: var(--accent-amber);">시장가 폴백 임박 (잔여 ' + remainStr + ')</div>' : ''}
+        </div>`;
+    }).join('');
+
+    list.innerHTML = items;
+}
+
+// ============================================================
 // 프리마켓 (NXT) 표시
 // ============================================================
 
@@ -362,6 +415,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     api('/api/status').then(data => {
         sse._dispatch('status', data);
+    }).catch(() => {});
+
+    // 대기 주문 초기 로드
+    api('/api/orders/pending').then(data => {
+        renderPendingOrders(data);
     }).catch(() => {});
 
     // 프리마켓 데이터 로드
