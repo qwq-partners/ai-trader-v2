@@ -58,7 +58,7 @@ class BaseStrategy(ABC):
 
         # 상태
         self._signals_generated: int = 0
-        self._last_signal_time: Optional[datetime] = None
+        self._last_signal_at: Optional[datetime] = None
 
         # 데이터 캐시 (LRU: 최대 500 종목, 오래 미접근 종목 자동 제거)
         self._price_history: OrderedDict[str, List[Price]] = OrderedDict()
@@ -151,7 +151,7 @@ class BaseStrategy(ABC):
                 return None
 
             self._signals_generated += 1
-            self._last_signal_time = datetime.now()
+            self._last_signal_at = datetime.now()
             logger.info(
                 f"[{self.name}] 신호 생성: {symbol} {signal.side.value} "
                 f"점수={signal.score:.1f} 이유={signal.reason}"
@@ -413,7 +413,7 @@ class BaseStrategy(ABC):
             "name": self.name,
             "enabled": self.enabled,
             "signals_generated": self._signals_generated,
-            "last_signal_time": self._last_signal_time.isoformat() if self._last_signal_time else None,
+            "last_signal_time": self._last_signal_at.isoformat() if self._last_signal_at else None,
             "tracked_symbols": len(self._price_history),
         }
 

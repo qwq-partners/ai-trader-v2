@@ -842,6 +842,8 @@ class RiskManager:
                 f"[리스크] 포지션 크기 0: {event.symbol} "
                 f"(자산={equity:,.0f}, 현금={cash:,.0f}, 가격={event.price})"
             )
+            # 거절되더라도 신호 쿨다운 등록 (동일 종목 신호 반복 방지)
+            self._last_signal_time[event.symbol] = datetime.now()
             return None
 
         # 주문 생성 (시장가 주문)
