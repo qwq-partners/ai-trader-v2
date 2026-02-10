@@ -109,6 +109,10 @@ sse.on('pending_orders', (data) => {
     renderPendingOrders(data);
 });
 
+sse.on('health_checks', (data) => {
+    renderHealthChecks(data, true);
+});
+
 // ============================================================
 // 포지션 테이블
 // ============================================================
@@ -337,6 +341,90 @@ function renderPendingOrders(orders) {
 }
 
 // ============================================================
+// 헬스체크 카드 렌더링
+// ============================================================
+
+function renderHealthChecks(checks, failedOnly) {
+    const card = document.getElementById('health-checks-card');
+    const grid = document.getElementById('health-checks-grid');
+    const badge = document.getElementById('health-checks-badge');
+    const dot = document.getElementById('health-dot');
+
+    if (!checks || checks.length === 0) {
+        card.style.display = 'none';
+        return;
+    }
+
+    card.style.display = 'block';
+
+    // SSE는 실패 항목만 전달, API는 전체 항목 전달
+    const failed = failedOnly ? checks : checks.filter(c => !c.ok);
+    const hasCritical = checks.some(c => c.level === 'critical' && !c.ok);
+    const hasWarning = checks.some(c => c.level === 'warning' && !c.ok);
+
+    // 배지 + 도트 색상
+    if (hasCritical) {
+        badge.textContent = failed.length + '건 이상';
+        badge.style.color = 'var(--accent-red)';
+        badge.style.background = 'rgba(248,113,113,0.08)';
+        badge.style.borderColor = 'rgba(248,113,113,0.12)';
+        dot.style.background = 'var(--accent-red)';
+        dot.style.boxShadow = '0 0 8px var(--accent-red)';
+    } else if (hasWarning) {
+        badge.textContent = failed.length + '건 주의';
+        badge.style.color = 'var(--accent-amber)';
+        badge.style.background = 'rgba(251,191,36,0.08)';
+        badge.style.borderColor = 'rgba(251,191,36,0.12)';
+        dot.style.background = 'var(--accent-amber)';
+        dot.style.boxShadow = '0 0 8px var(--accent-amber)';
+    } else {
+        badge.textContent = '정상';
+        badge.style.color = 'var(--accent-green)';
+        badge.style.background = 'rgba(52,211,153,0.08)';
+        badge.style.borderColor = 'rgba(52,211,153,0.12)';
+        dot.style.background = 'var(--accent-green)';
+        dot.style.boxShadow = '0 0 8px var(--accent-green)';
+    }
+
+    // 그리드 아이템 렌더링
+    const items = checks.map(c => {
+        const isOk = c.ok !== false;
+        let color, bg, border, icon;
+        if (!isOk && c.level === 'critical') {
+            color = 'var(--accent-red)'; bg = 'rgba(248,113,113,0.06)'; border = 'rgba(248,113,113,0.15)'; icon = '\u26d4';
+        } else if (!isOk && c.level === 'warning') {
+            color = 'var(--accent-amber)'; bg = 'rgba(251,191,36,0.06)'; border = 'rgba(251,191,36,0.15)'; icon = '\u26a0\ufe0f';
+        } else {
+            color = 'var(--accent-green)'; bg = 'rgba(52,211,153,0.04)'; border = 'rgba(52,211,153,0.08)'; icon = '\u2705';
+        }
+
+        const nameMap = {
+            event_loop_stall: '\uc774\ubca4\ud2b8 \ub8e8\ud504',
+            ws_feed: 'WebSocket',
+            daily_loss: '\uc77c\uc77c \uc190\uc775',
+            pending_deadlock: 'Pending',
+            memory: '\uba54\ubaa8\ub9ac',
+            queue_saturation: '\uc774\ubca4\ud2b8 \ud050',
+            broker: '\ube0c\ub85c\ucee4',
+            rolling_perf: '\ub864\ub9c1 \uc131\uacfc',
+        };
+        const label = nameMap[c.name] || c.name;
+        const valStr = c.value != null ? `<span class="mono" style="font-size:0.72rem; color:var(--text-secondary);">${typeof c.value === 'number' ? c.value.toFixed(1) : c.value}</span>` : '';
+
+        return `<div style="background:${bg}; border:1px solid ${border}; border-radius:10px; padding:10px 12px;">
+            <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+                <span style="font-size:0.75rem;">${icon}</span>
+                <span style="font-size:0.78rem; font-weight:500; color:${isOk ? 'var(--text-primary)' : color};">${label}</span>
+                ${valStr}
+            </div>
+            <div style="font-size:0.72rem; color:${isOk ? 'var(--text-muted)' : color};">${c.message}</div>
+        </div>`;
+    }).join('');
+
+    grid.innerHTML = items;
+}
+
+// ============================================================
 // 프리마켓 (NXT) 표시
 // ============================================================
 
@@ -421,6 +509,17 @@ document.addEventListener('DOMContentLoaded', () => {
     api('/api/orders/pending').then(data => {
         renderPendingOrders(data);
     }).catch(() => {});
+
+    // 헬스체크 초기 로드
+    api('/api/health-checks').then(data => {
+        renderHealthChecks(data, false);
+    }).catch(() => {});
+    // 30초마다 헬스체크 갱신
+    setInterval(() => {
+        api('/api/health-checks').then(data => {
+            renderHealthChecks(data, false);
+        }).catch(() => {});
+    }, 30000);
 
     // 프리마켓 데이터 로드
     loadPremarket();

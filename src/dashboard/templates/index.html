@@ -478,6 +478,16 @@
             </div>
         </div>
 
+        <!-- Health Checks Card -->
+        <div id="health-checks-card" class="card animate-in delay-3" style="padding: 24px; margin-bottom: 16px; display: none;">
+            <div class="card-header">
+                <span class="dot" id="health-dot" style="background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green);"></span>
+                시스템 헬스
+                <span id="health-checks-badge" style="margin-left: auto; font-size: 0.7rem; color: var(--accent-green); font-family: 'JetBrains Mono', monospace; background: rgba(52,211,153,0.08); padding: 3px 10px; border-radius: 6px; border: 1px solid rgba(52,211,153,0.12);">정상</span>
+            </div>
+            <div id="health-checks-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px;"></div>
+        </div>
+
         <!-- Pending Orders Card -->
         <div id="pending-orders-card" class="card animate-in delay-3" style="padding: 24px; margin-bottom: 16px; display: none;">
             <div class="card-header">
