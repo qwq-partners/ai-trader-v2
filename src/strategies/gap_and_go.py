@@ -186,8 +186,8 @@ class GapAndGoStrategy(BaseStrategy):
         else:
             strength = SignalStrength.NORMAL
 
-        # 점수 계산
-        score = self._calculate_entry_score(gap_pct, pullback_pct, vol_ratio) + vwap_bonus
+        # 점수 계산 (vwap_bonus 포함, 100점 상한)
+        score = min(self._calculate_entry_score(gap_pct, pullback_pct, vol_ratio) + vwap_bonus, 100.0)
 
         # 손절가: 갭 시작점, VWAP, 또는 고정 % 중 현재가 미만인 후보 중 가장 높은 값
         gap_start = float(gap_info["open_price"])

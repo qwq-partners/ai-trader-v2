@@ -174,10 +174,11 @@ class DashboardDataCollector:
 
         config = engine.config.risk
 
-        # 동적 max_positions 계산
+        # 동적 max_positions 계산 (flex 포함)
         effective_max = config.max_positions
         if risk_mgr and hasattr(risk_mgr, 'get_effective_max_positions'):
-            effective_max = risk_mgr.get_effective_max_positions(portfolio.total_equity)
+            avail_cash = float(engine.get_available_cash()) if hasattr(engine, 'get_available_cash') else None
+            effective_max = risk_mgr.get_effective_max_positions(portfolio.total_equity, available_cash=avail_cash)
 
         result = {
             "can_trade": True,
@@ -522,15 +523,21 @@ class DashboardDataCollector:
 
         if state:
             result["summary"]["version"] = state.version
-            result["summary"]["total_evolutions"] = state.total_evolutions
-            result["summary"]["successful_changes"] = state.successful_changes
-            result["summary"]["rolled_back_changes"] = state.rolled_back_changes
-            result["summary"]["last_evolution"] = (
-                state.last_evolution.isoformat() if state.last_evolution else None
-            )
+            result["summary"]["total_evolutions"] = state.total_applied
+            result["summary"]["successful_changes"] = state.total_kept
+            result["summary"]["rolled_back_changes"] = state.total_rolled_back
 
-            # active_changes → AS-IS/TO-BE 매핑
-            for ch in state.active_changes:
+            # 마지막 진화 시간
+            last_ts = None
+            if state.active_change:
+                last_ts = state.active_change.timestamp
+            elif state.history:
+                last_ts = state.history[-1].timestamp
+            result["summary"]["last_evolution"] = last_ts
+
+            # active_change → AS-IS/TO-BE 매핑 (단수)
+            if state.active_change:
+                ch = state.active_change
                 result["parameter_changes"].append({
                     "strategy": ch.strategy,
                     "parameter": ch.parameter,
@@ -538,17 +545,14 @@ class DashboardDataCollector:
                     "to_be": ch.new_value,
                     "reason": ch.reason,
                     "source": ch.source,
-                    "confidence": getattr(ch, 'confidence', None),
-                    "expected_impact": getattr(ch, 'expected_impact', None),
+                    "confidence": None,
+                    "expected_impact": None,
                     "is_effective": ch.is_effective,
                     "win_rate_before": ch.win_rate_before,
                     "win_rate_after": ch.win_rate_after,
                     "trades_before": ch.trades_before,
                     "trades_after": ch.trades_after,
-                    "timestamp": (
-                        ch.timestamp.isoformat()
-                        if isinstance(ch.timestamp, datetime) else ch.timestamp
-                    ),
+                    "timestamp": ch.timestamp,
                 })
 
         # advice JSON 보강
@@ -587,7 +591,7 @@ class DashboardDataCollector:
             return []
 
         history = []
-        for ch in state.change_history:
+        for ch in state.history:
             history.append(_serialize({
                 "strategy": ch.strategy,
                 "parameter": ch.parameter,
@@ -600,77 +604,10 @@ class DashboardDataCollector:
                 "win_rate_after": ch.win_rate_after,
                 "trades_before": ch.trades_before,
                 "trades_after": ch.trades_after,
-                "timestamp": (
-                    ch.timestamp.isoformat()
-                    if isinstance(ch.timestamp, datetime) else ch.timestamp
-                ),
+                "timestamp": ch.timestamp,
             }))
 
         return history
-
-    def get_code_evolution(self) -> Dict[str, Any]:
-        """코드 진화 이력 (대시보드용)
-
-        Returns:
-            {
-                "latest": {...},  # 최근 진화 결과
-                "history": [...],  # 이력 (최근 10개)
-                "summary": {...}   # 통계
-            }
-        """
-        try:
-            from src.core.evolution.code_evolver import CodeEvolver
-
-            history = CodeEvolver.get_evolution_history(limit=10)
-
-            # 통계 계산
-            total = len(history)
-            successful = sum(1 for h in history if h.get("success"))
-            failed = total - successful
-            auto_merged = sum(1 for h in history if h.get("auto_merged"))
-
-            # 최근 실행 결과
-            latest = history[0] if history else None
-
-            # 에러 패턴 집계 (최근 3개)
-            all_error_patterns = {}
-            for h in history[:3]:
-                for error_msg, count in h.get("error_patterns", {}).items():
-                    if error_msg in all_error_patterns:
-                        all_error_patterns[error_msg] += count
-                    else:
-                        all_error_patterns[error_msg] = count
-
-            # 빈도순 정렬
-            sorted_errors = sorted(
-                all_error_patterns.items(),
-                key=lambda x: x[1],
-                reverse=True
-            )[:5]
-
-            return {
-                "latest": latest,
-                "history": history,
-                "summary": {
-                    "total": total,
-                    "successful": successful,
-                    "failed": failed,
-                    "auto_merged": auto_merged,
-                },
-                "error_patterns": [
-                    {"message": msg, "count": count}
-                    for msg, count in sorted_errors
-                ],
-            }
-
-        except Exception as e:
-            logger.error(f"[대시보드] 코드 진화 이력 조회 실패: {e}")
-            return {
-                "latest": None,
-                "history": [],
-                "summary": {"total": 0, "successful": 0, "failed": 0, "auto_merged": 0},
-                "error_patterns": [],
-            }
 
     # ----------------------------------------------------------
     # US 마켓 데이터
@@ -929,6 +866,22 @@ class DashboardDataCollector:
         keywords = ("주문", "체결", "폴백", "취소")
         return [e for e in events if any(kw in e.get("type", "") for kw in keywords)
                 or any(kw in e.get("message", "") for kw in keywords)]
+
+    # ----------------------------------------------------------
+    # 헬스체크 결과
+    # ----------------------------------------------------------
+
+    def get_health_checks(self) -> List[Dict[str, Any]]:
+        """최신 헬스체크 결과"""
+        hm = getattr(self.bot, 'health_monitor', None)
+        if not hm or not hm._results:
+            return []
+        return [
+            {"name": r.name, "level": r.level, "ok": r.ok,
+             "message": r.message, "value": r.value,
+             "timestamp": r.timestamp.isoformat()}
+            for r in hm._results
+        ]
 
     # ----------------------------------------------------------
     # 시스템 건강 메트릭

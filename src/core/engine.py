@@ -48,32 +48,62 @@ def set_kr_market_holidays(holidays: Set[date]):
 
 
 def is_kr_market_holiday(d: date) -> bool:
-    """한국 시장 휴장일 여부 (주말 + 공휴일)"""
+    """한국 시장 휴장일 여부 (주말 + 공휴일)
+
+    동적 데이터(API)와 Fallback(하드코딩)을 합쳐서 체크합니다.
+    API는 당월/익월만 로드하므로 3개월 후 공휴일은 Fallback에서 커버합니다.
+    """
     if d.weekday() >= 5:
         return True
     if _kr_market_holidays:
-        return d in _kr_market_holidays
+        return d in _kr_market_holidays or d in _FALLBACK_HOLIDAYS
     # 동적 데이터가 없으면 하드코딩 공휴일 체크 (fallback)
     return d in _FALLBACK_HOLIDAYS
 
 
-# 하드코딩 공휴일 (동적 조회 실패 시 fallback) - 2026년
+# 하드코딩 공휴일 (동적 조회 실패 시 fallback) - 2026~2027년
 _FALLBACK_HOLIDAYS: Set[date] = {
+    # 2026년
     date(2026, 1, 1),   # 신정
     date(2026, 1, 27),  # 설날 전날
     date(2026, 1, 28),  # 설날
     date(2026, 1, 29),  # 설날 다음날
-    date(2026, 3, 1),   # 삼일절
+    date(2026, 3, 1),   # 삼일절 (일→3/2 대체)
+    date(2026, 3, 2),   # 삼일절 대체공휴일
     date(2026, 5, 5),   # 어린이날
-    date(2026, 5, 24),  # 석가탄신일
-    date(2026, 6, 6),   # 현충일
-    date(2026, 8, 15),  # 광복절
+    date(2026, 5, 24),  # 석가탄신일 (일→5/25 대체)
+    date(2026, 5, 25),  # 석가탄신일 대체공휴일
+    date(2026, 6, 6),   # 현충일 (토)
+    date(2026, 8, 15),  # 광복절 (토)
+    date(2026, 8, 17),  # 광복절 대체공휴일
     date(2026, 9, 24),  # 추석 전날
     date(2026, 9, 25),  # 추석
-    date(2026, 9, 26),  # 추석 다음날
-    date(2026, 10, 3),  # 개천절
+    date(2026, 9, 26),  # 추석 다음날 (토)
+    date(2026, 10, 3),  # 개천절 (토)
+    date(2026, 10, 5),  # 개천절 대체공휴일
     date(2026, 10, 9),  # 한글날
     date(2026, 12, 25), # 크리스마스
+    # 2027년
+    date(2027, 1, 1),   # 신정
+    date(2027, 2, 8),   # 설날 전날
+    date(2027, 2, 9),   # 설날
+    date(2027, 2, 10),  # 설날 다음날
+    date(2027, 3, 1),   # 삼일절
+    date(2027, 5, 5),   # 어린이날
+    date(2027, 5, 13),  # 석가탄신일
+    date(2027, 6, 6),   # 현충일 (일→6/7 대체)
+    date(2027, 6, 7),   # 현충일 대체공휴일
+    date(2027, 8, 15),  # 광복절 (일→8/16 대체)
+    date(2027, 8, 16),  # 광복절 대체공휴일
+    date(2027, 10, 3),  # 개천절 (일→10/4 대체)
+    date(2027, 10, 4),  # 개천절 대체공휴일
+    date(2027, 10, 9),  # 한글날 (토)
+    date(2027, 10, 11), # 한글날 대체공휴일
+    date(2027, 10, 13), # 추석 전날
+    date(2027, 10, 14), # 추석
+    date(2027, 10, 15), # 추석 다음날
+    date(2027, 12, 25), # 크리스마스 (토)
+    date(2027, 12, 27), # 크리스마스 대체공휴일
 }
 
 
@@ -111,6 +141,7 @@ class TradingEngine:
         # 이벤트 큐 (우선순위 힙)
         self._event_queue: List[Event] = []
         self._queue_lock = asyncio.Lock()
+        self._MAX_QUEUE_SIZE = 1000  # 큐 크기 상한 (메모리 보호)
 
         # 이벤트 핸들러 레지스트리
         self._handlers: Dict[EventType, List[EventHandler]] = {
@@ -187,12 +218,23 @@ class TradingEngine:
     async def emit(self, event: Event):
         """이벤트 발행 (큐에 추가)"""
         async with self._queue_lock:
+            if len(self._event_queue) >= self._MAX_QUEUE_SIZE:
+                logger.warning(f"이벤트 큐 포화 ({len(self._event_queue)}건) → 최저 우선순위 이벤트 폐기")
+                # 가장 낮은 우선순위(큰 값) 이벤트 제거
+                self._event_queue.sort()
+                self._event_queue = self._event_queue[:self._MAX_QUEUE_SIZE - 1]
+                heapq.heapify(self._event_queue)
             heapq.heappush(self._event_queue, event)
 
     async def emit_many(self, events: List[Event]):
         """여러 이벤트 일괄 발행"""
         async with self._queue_lock:
             for event in events:
+                if len(self._event_queue) >= self._MAX_QUEUE_SIZE:
+                    logger.warning(f"이벤트 큐 포화 ({len(self._event_queue)}건) → 최저 우선순위 이벤트 폐기")
+                    self._event_queue.sort()
+                    self._event_queue = self._event_queue[:self._MAX_QUEUE_SIZE - 1]
+                    heapq.heapify(self._event_queue)
                 heapq.heappush(self._event_queue, event)
 
     # ============================================================
@@ -394,6 +436,7 @@ class TradingEngine:
                 total_cost = pos.avg_price * pos.quantity + fill.price * fill.quantity
                 pos.avg_price = total_cost / Decimal(str(new_quantity)) if new_quantity != 0 else fill.price
             pos.quantity = new_quantity
+            pos.current_price = fill.price  # 미실현 손익 -100% 방지
             self.portfolio.cash -= fill.total_cost
 
             # 신규 포지션 시 highest_price 초기화
@@ -453,6 +496,26 @@ class TradingEngine:
         min_reserve = self.portfolio.total_equity * Decimal(str(self.config.risk.min_cash_reserve_pct / 100))
         return max(self.portfolio.cash - min_reserve, Decimal("0"))
 
+    def get_effective_max_positions(self) -> int:
+        """자산 규모 + 여유자금 기반 실효 최대 포지션 수"""
+        risk = self.config.risk
+        max_pos = risk.max_positions
+        if risk.dynamic_max_positions and risk.min_position_value > 0:
+            equity_f = float(self.portfolio.total_equity)
+            if equity_f > 0:
+                investable = equity_f * (1 - risk.min_cash_reserve_pct / 100)
+                per_pos = max(equity_f * risk.base_position_pct / 100, risk.min_position_value)
+                calculated = int(investable / per_pos) if per_pos > 0 else 0
+                max_pos = min(max(1, calculated), risk.max_positions)
+        # Flex: 가용현금 여유 시 추가 슬롯
+        if risk.flex_extra_positions > 0 and float(self.portfolio.total_equity) > 0:
+            avail_cash = float(self.get_available_cash())
+            avail_ratio = avail_cash / float(self.portfolio.total_equity) * 100
+            if avail_ratio >= risk.flex_cash_threshold_pct and avail_cash >= risk.min_position_value:
+                max_pos = min(max_pos + risk.flex_extra_positions,
+                              risk.max_positions + risk.flex_extra_positions)
+        return max_pos
+
     # ============================================================
     # 리스크 체크
     # ============================================================
@@ -477,19 +540,12 @@ class TradingEngine:
         if self.portfolio.daily_trades >= risk.daily_max_trades:
             return False, f"일일 거래 횟수 한도 도달 ({self.portfolio.daily_trades}회)"
 
-        # 3. 최대 포지션 수 제한 (pending 주문 포함, 동적 계산)
+        # 3. 최대 포지션 수 제한 (pending 주문 포함, 동적 계산 + flex)
         if symbol not in self.portfolio.positions:
             effective_positions = len(self.portfolio.positions) + len(
                 _pending - set(self.portfolio.positions.keys())
             )
-            # 동적 max_positions 계산
-            max_pos = risk.max_positions
-            if risk.dynamic_max_positions and risk.min_position_value > 0:
-                equity_f = float(self.portfolio.total_equity)
-                investable = equity_f * (1 - risk.min_cash_reserve_pct / 100)
-                per_pos = max(equity_f * risk.base_position_pct / 100, risk.min_position_value)
-                calculated = int(investable / per_pos) if per_pos > 0 else 0
-                max_pos = min(max(1, calculated), risk.max_positions)
+            max_pos = self.get_effective_max_positions()
             if effective_positions >= max_pos:
                 return False, f"최대 포지션 수 도달 ({effective_positions}/{max_pos}개, pending 포함)"
 
@@ -529,10 +585,14 @@ class TradingEngine:
 
     def reset_daily_stats(self):
         """일일 통계 초기화"""
+        # 미실현 손익 기준선 기록 (전일 보유 포지션의 미실현 손익을 기준점으로)
+        self.portfolio.daily_start_unrealized_pnl = self.portfolio.total_unrealized_pnl
         self.portfolio.daily_pnl = Decimal("0")
         self.portfolio.daily_trades = 0
         self.risk_metrics = RiskMetrics()
-        logger.info("일일 통계 초기화")
+        logger.info(
+            f"일일 통계 초기화 (시작 미실현손익: {self.portfolio.daily_start_unrealized_pnl:+,.0f}원)"
+        )
 
 
 class StrategyManager:
@@ -673,6 +733,9 @@ class RiskManager:
         # 매도/매수 구분 추적 (매도 미체결 폴백용)
         self._pending_sides: Dict[str, OrderSide] = {}
 
+        # 매도 시장가 폴백 횟수 추적 (무한 루프 방지, 최대 2회)
+        self._pending_fallback_count: Dict[str, int] = {}
+
         # 현금 초과 주문 방지: 주문별 예약 현금 추적 (symbol → 예약 금액)
         self._reserved_by_order: Dict[str, Decimal] = {}
 
@@ -725,10 +788,18 @@ class RiskManager:
             elif not is_sell and elapsed >= self._PENDING_TIMEOUT_SECONDS:
                 stale_buys.append(s)
 
-        # stale 매도: 지정가 취소 → 시장가 재주문
+        # stale 매도: 지정가 취소 → 시장가 재주문 (최대 2회 폴백)
+        _MAX_FALLBACK = 2
         for s in stale_sells:
             elapsed = (now - self._pending_timestamps[s]).total_seconds()
-            logger.warning(f"[리스크] 매도 미체결 폴백: {s} ({elapsed:.0f}초 초과) → 시장가 전환")
+            fallback_cnt = self._pending_fallback_count.get(s, 0)
+            if fallback_cnt >= _MAX_FALLBACK:
+                logger.warning(
+                    f"[리스크] 매도 폴백 최대 횟수 초과: {s} ({fallback_cnt}회) → pending 해제"
+                )
+                await self.clear_pending(s)
+                continue
+            logger.warning(f"[리스크] 매도 미체결 폴백: {s} ({elapsed:.0f}초 초과, 폴백 {fallback_cnt+1}/{_MAX_FALLBACK}회) → 시장가 전환")
             if self.engine.broker and hasattr(self.engine.broker, 'cancel_all_for_symbol'):
                 try:
                     await self.engine.broker.cancel_all_for_symbol(s)
@@ -748,7 +819,8 @@ class RiskManager:
                     await self.engine.broker.submit_order(fallback_order)
                     self._pending_timestamps[s] = datetime.now()  # 타이머 리셋
                     self._pending_sides[s] = OrderSide.SELL
-                    logger.info(f"[리스크] 시장가 폴백 주문 제출: {s} {pos.quantity}주")
+                    self._pending_fallback_count[s] = fallback_cnt + 1
+                    logger.info(f"[리스크] 시장가 폴백 주문 제출: {s} {pos.quantity}주 (폴백 {fallback_cnt+1}/{_MAX_FALLBACK}회)")
                 except Exception as e:
                     logger.error(f"[리스크] 시장가 폴백 주문 실패: {s} - {e}")
                     await self.clear_pending(s)
@@ -1004,6 +1076,7 @@ class RiskManager:
             self._pending_timestamps.pop(symbol, None)
             self._pending_sides.pop(symbol, None)
             self._reserved_by_order.pop(symbol, None)
+            self._pending_fallback_count.pop(symbol, None)
 
     async def on_fill(self, event: FillEvent) -> Optional[List[Event]]:
         """체결 후 리스크 업데이트 (부분 체결 지원) - Lock 보호"""
@@ -1017,6 +1090,7 @@ class RiskManager:
                 self._pending_sides.pop(event.symbol, None)
                 # 전량 체결 시 원래 예약 금액 정확히 해제 (슬리피지 드리프트 방지)
                 self._reserved_by_order.pop(event.symbol, None)
+                self._pending_fallback_count.pop(event.symbol, None)
             else:
                 self._pending_quantities[event.symbol] = remaining
                 logger.info(f"[리스크] 부분 체결: {event.symbol} 잔여 {remaining}주")
@@ -1126,21 +1200,18 @@ class RiskManager:
             )
             return 0
 
-        # 동적 max_positions 계산
-        max_pos = self.config.max_positions
-        if self.config.dynamic_max_positions and self.config.min_position_value > 0:
-            equity_f = float(equity)
-            investable = equity_f * (1 - self.config.min_cash_reserve_pct / 100)
-            per_pos = max(equity_f * self.config.base_position_pct / 100, self.config.min_position_value)
-            calculated = int(investable / per_pos) if per_pos > 0 else 0
-            max_pos = min(max(1, calculated), self.config.max_positions)
+        # 동적 max_positions 계산 (flex 포함)
+        max_pos = self.engine.get_effective_max_positions()
 
         # 남은 슬롯 기반 균등 배분 (유휴 자본 방지)
         # 기존 포지션 매도 주문(pending)은 이중 카운트 방지
         new_pending = self._pending_orders - set(self.engine.portfolio.positions.keys())
         current_count = len(self.engine.portfolio.positions) + len(new_pending)
-        remaining_slots = max(max_pos - current_count, 1)
-        slot_value = available / Decimal(str(remaining_slots))
+        remaining_slots = max_pos - current_count
+        if remaining_slots <= 0:
+            slot_value = Decimal("0")
+        else:
+            slot_value = available / Decimal(str(remaining_slots))
 
         # 비율 기반 vs 슬롯 기반 중 큰 값 → 자본 활용률 향상
         max_value = equity * Decimal(str(self.config.max_position_pct / 100))
@@ -1164,20 +1235,25 @@ class RiskManager:
             )
             return 0
 
-        # 수량 계산
+        # 수량 계산 (시장가 주문 시 상한가 +30% 증거금 고려)
         quantity = int(position_value / price)
+        max_qty_for_market = int(available / (price * Decimal("1.3")))
+        if max_qty_for_market < quantity:
+            quantity = max_qty_for_market
 
-        # 최소 수량 체크: 분할 익절에 최소 3주 필요
+        # 최소 수량 체크: 분할 익절에 최소 3주 권장
         MIN_QTY_FOR_PARTIAL_EXIT = 3
         if quantity < MIN_QTY_FOR_PARTIAL_EXIT:
             cost_for_min = price * MIN_QTY_FOR_PARTIAL_EXIT * Decimal("1.001")
             if cost_for_min <= available and cost_for_min <= max_value:
                 quantity = MIN_QTY_FOR_PARTIAL_EXIT
-            else:
+            elif quantity >= 1:
+                # 3주는 못 사지만 1~2주는 가능 → 분할익절 불가하나 거래 허용
                 logger.info(
-                    f"[리스크] 최소 수량 미달 스킵: {signal.symbol} "
-                    f"(가격={price:,.0f}, 3주 비용={cost_for_min:,.0f}, 가용={available:,.0f})"
+                    f"[리스크] 분할익절 불가 수량: {signal.symbol} "
+                    f"(수량={quantity}, 3주 비용={cost_for_min:,.0f}, 가용={available:,.0f})"
                 )
+            else:
                 return 0
 
         return max(quantity, 0)

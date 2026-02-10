@@ -129,7 +129,7 @@ class BaseBroker(ABC):
         else:
             # 매도: 수수료 + 세금
             commission = value * Decimal("0.00015")  # 0.015%
-            tax = value * Decimal("0.003")  # 0.30%
+            tax = value * Decimal("0.002")  # 0.20% (2026년 기준)
             return commission + tax
 
     @staticmethod

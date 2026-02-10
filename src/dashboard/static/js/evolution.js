@@ -11,19 +11,16 @@ async function loadEvolution() {
     btn.classList.add('loading');
 
     try {
-        const [evoRes, histRes, codeEvoRes] = await Promise.allSettled([
+        const [evoRes, histRes] = await Promise.allSettled([
             fetch('/api/evolution').then(r => r.json()),
             fetch('/api/evolution/history').then(r => r.json()),
-            fetch('/api/code-evolution').then(r => r.json()),
         ]);
 
         const evo = evoRes.status === 'fulfilled' ? evoRes.value : {};
         const history = histRes.status === 'fulfilled' ? histRes.value : [];
-        const codeEvo = codeEvoRes.status === 'fulfilled' ? codeEvoRes.value : {};
 
         if (evoRes.status === 'rejected') console.error('Evolution data load error:', evoRes.reason);
         if (histRes.status === 'rejected') console.error('Evolution history load error:', histRes.reason);
-        if (codeEvoRes.status === 'rejected') console.error('Code evolution load error:', codeEvoRes.reason);
 
         renderSummary(evo.summary);
         renderInsights(evo.insights);
@@ -33,11 +30,6 @@ async function loadEvolution() {
         renderFocus(evo.focus_opportunities);
         renderOutlook(evo.next_week_outlook);
         renderHistory(history);
-
-        // 코드 진화 데이터 렌더링
-        renderErrorPatterns(codeEvo.error_patterns || []);
-        renderCodeEvoSummary(codeEvo.summary || {});
-        renderCodeEvoHistory(codeEvo.history || []);
     } catch (e) {
         console.error('Evolution load error:', e);
     } finally {
@@ -319,71 +311,6 @@ async function applyParameterChange(event, idx) {
         btn.disabled = false;
         btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> 반영';
     }
-}
-
-// ----------------------------------------------------------
-// 코드 진화 렌더링 함수들
-// ----------------------------------------------------------
-
-function renderErrorPatterns(patterns) {
-    const el = document.getElementById('error-patterns');
-    if (!patterns || patterns.length === 0) {
-        el.innerHTML = '<div style="padding: 20px 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">에러 없음 ✓</div>';
-        return;
-    }
-
-    el.innerHTML = patterns.map(p => {
-        const msg = escapeHtml(p.message || '').substring(0, 120);
-        const count = p.count || 0;
-        return `<div class="error-item">
-            <span style="flex: 1;">${msg}</span>
-            <span class="error-count">${count}회</span>
-        </div>`;
-    }).join('');
-}
-
-function renderCodeEvoSummary(summary) {
-    document.getElementById('code-evo-total').textContent = summary.total || 0;
-    document.getElementById('code-evo-success').textContent = summary.successful || 0;
-    document.getElementById('code-evo-failed').textContent = summary.failed || 0;
-    document.getElementById('code-evo-merged').textContent = summary.auto_merged || 0;
-}
-
-function renderCodeEvoHistory(history) {
-    const el = document.getElementById('code-evo-history');
-    if (!history || history.length === 0) {
-        el.innerHTML = '<div style="padding: 20px 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">이력 없음</div>';
-        return;
-    }
-
-    el.innerHTML = history.slice(0, 5).map(h => {
-        const ts = h.timestamp ? formatDateTime(new Date(h.timestamp)) : '--';
-        const status = h.success ? 'success' : 'failed';
-        const statusText = h.success ? '성공' : '실패';
-        const trigger = escapeHtml(h.trigger || '');
-        const message = escapeHtml(h.message || '').substring(0, 100);
-        const changedFiles = h.changed_files_count || 0;
-        const prUrl = h.pr_url || '';
-        const merged = h.auto_merged ? ' • 자동 머지됨' : '';
-
-        return `<div class="code-evo-item">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <span class="code-evo-status ${status}">${statusText}</span>
-                    <span class="mono" style="font-size: 0.75rem; color: var(--text-muted);">${ts}</span>
-                    <span class="badge badge-blue" style="font-size: 0.6rem;">${trigger}</span>
-                </div>
-                ${changedFiles > 0 ? `<span style="font-size: 0.72rem; color: var(--text-muted);">${changedFiles}개 파일 변경</span>` : ''}
-            </div>
-            <div style="font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 6px;">${message}</div>
-            ${prUrl ? `<div style="font-size: 0.72rem;">
-                <a href="${prUrl}" target="_blank" style="color: var(--accent-blue); text-decoration: none;">
-                    🔗 PR 보기
-                </a>
-                <span style="color: var(--text-muted);">${merged}</span>
-            </div>` : ''}
-        </div>`;
-    }).join('');
 }
 
 // ----------------------------------------------------------

@@ -79,34 +79,48 @@ class RiskManager:
             f"최대비율={config.max_position_pct}%, 최소금액={config.min_position_value:,}원"
         )
 
-    def get_effective_max_positions(self, equity: Decimal = None) -> int:
+    def get_effective_max_positions(self, equity: Decimal = None, available_cash: float = None) -> int:
         """
         자산 규모 기반 실효 최대 포지션 수
 
         dynamic_max_positions가 True이면:
           - 종목당 최소 금액(min_position_value)을 기준으로 수용 가능한 종목 수 계산
           - config.max_positions를 상한으로 적용
+        flex_extra_positions > 0 이면:
+          - 가용현금이 총자산의 flex_cash_threshold_pct 이상이면 추가 슬롯 허용
         """
         if not self.config.dynamic_max_positions:
-            return self.config.max_positions
+            max_pos = self.config.max_positions
+        else:
+            if equity is None:
+                equity = self.initial_capital
+            equity_f = float(equity) if isinstance(equity, Decimal) else float(equity)
 
-        if equity is None:
-            equity = self.initial_capital
-        equity_f = float(equity) if isinstance(equity, Decimal) else float(equity)
+            if equity_f <= 0 or self.config.min_position_value <= 0:
+                max_pos = self.config.max_positions
+            else:
+                # 가용 자산 = 총 자산 - 현금 예비금
+                investable = equity_f * (1 - self.config.min_cash_reserve_pct / 100)
+                # 종목당 목표 금액 = base_position_pct 기준
+                target_per_position = equity_f * (self.config.base_position_pct / 100)
+                # 최소 금액보다 작으면 최소 금액 사용
+                per_position = max(target_per_position, self.config.min_position_value)
 
-        if equity_f <= 0 or self.config.min_position_value <= 0:
-            return self.config.max_positions
+                dynamic_max = max(1, int(investable / per_position))
+                # config 상한 적용 (config.max_positions를 ceiling으로)
+                max_pos = min(dynamic_max, self.config.max_positions)
 
-        # 가용 자산 = 총 자산 - 현금 예비금
-        investable = equity_f * (1 - self.config.min_cash_reserve_pct / 100)
-        # 종목당 목표 금액 = base_position_pct 기준
-        target_per_position = equity_f * (self.config.base_position_pct / 100)
-        # 최소 금액보다 작으면 최소 금액 사용
-        per_position = max(target_per_position, self.config.min_position_value)
+        # Flex: 가용현금 여유 시 추가 슬롯
+        flex = getattr(self.config, 'flex_extra_positions', 0)
+        if flex > 0 and available_cash is not None:
+            equity_f = float(equity) if equity is not None else float(self.initial_capital)
+            if equity_f > 0:
+                avail_ratio = available_cash / equity_f * 100
+                threshold = getattr(self.config, 'flex_cash_threshold_pct', 10.0)
+                if avail_ratio >= threshold and available_cash >= self.config.min_position_value:
+                    max_pos = min(max_pos + flex, self.config.max_positions + flex)
 
-        dynamic_max = max(3, int(investable / per_position))
-        # config 상한 적용 (config.max_positions를 ceiling으로)
-        return min(dynamic_max, self.config.max_positions)
+        return max_pos
 
     # ============================================================
     # 포지션 크기 계산
@@ -148,7 +162,9 @@ class RiskManager:
         }.get(signal.strength, Decimal("1.0"))
 
         # 하락장 포지션 축소 (-3% ~ -5% 구간에서 50% 축소)
-        daily_pnl_pct = float(portfolio.daily_pnl / equity * 100) if equity > 0 else 0.0
+        # 미실현 손익 포함 (일일손실 한도 체크와 동일 기준)
+        effective_pnl = getattr(portfolio, 'effective_daily_pnl', portfolio.daily_pnl)
+        daily_pnl_pct = float(effective_pnl / equity * 100) if equity > 0 else 0.0
         drawdown_multiplier = Decimal("1.0")
         if -5.0 < daily_pnl_pct <= -self.config.daily_max_loss_pct:
             drawdown_multiplier = Decimal("0.5")  # 50% 축소
@@ -362,8 +378,9 @@ class RiskManager:
         if self.daily_stats.trades >= self.config.daily_max_trades:
             return False, f"일일 거래 횟수 한도 ({self.config.daily_max_trades}회)"
 
-        # 4. 최대 포지션 수 체크 (동적 계산)
-        effective_max = self.get_effective_max_positions(portfolio.total_equity)
+        # 4. 최대 포지션 수 체크 (동적 계산 + flex)
+        avail_cash = float(self._get_available_cash(portfolio))
+        effective_max = self.get_effective_max_positions(portfolio.total_equity, available_cash=avail_cash)
         if symbol not in portfolio.positions:
             if len(portfolio.positions) >= effective_max:
                 return False, f"최대 포지션 수 도달 ({len(portfolio.positions)}/{effective_max}개)"
@@ -381,7 +398,7 @@ class RiskManager:
             if required > available:
                 return False, f"현금 부족 ({available:,.0f} < {required:,.0f})"
 
-        # 7. 연속 손실 체크 (3회 이상이면 거래 중단 — 14연패 방지 강화)
+        # 7. 연속 손실 체크 (변경: 2회->3회, 분할익절 순손실 오탐 방지)
         if self.daily_stats.consecutive_losses >= 3:
             return False, f"연속 손실 ({self.daily_stats.consecutive_losses}회) - 거래 중단"
 
@@ -390,6 +407,9 @@ class RiskManager:
     def _is_daily_loss_limit_hit(self, portfolio: Portfolio, strategy_type: str = "") -> bool:
         """
         일일 손실 한도 도달 여부 (차등 리스크 관리)
+
+        변경: 실현 손익만이 아닌 미실현 손익도 포함하여 체크
+        (기존: portfolio.daily_pnl, 변경: effective_daily_pnl)
 
         Args:
             portfolio: 포트폴리오
@@ -402,7 +422,9 @@ class RiskManager:
         if equity <= 0:
             return False
 
-        daily_pnl_pct = float(portfolio.daily_pnl / equity * 100)
+        # 변경: 미실현 손익 포함 (실현+미실현 합산으로 손실 한도 정확히 체크)
+        effective_pnl = getattr(portfolio, 'effective_daily_pnl', portfolio.daily_pnl)
+        daily_pnl_pct = float(effective_pnl / equity * 100)
 
         # 1단계: -3% ~ -5% → 방어적 전략만 허용
         if -5.0 < daily_pnl_pct <= -self.config.daily_max_loss_pct:
@@ -441,9 +463,10 @@ class RiskManager:
         if fill_event.side == OrderSide.BUY:
             self.daily_stats.trades += 1
 
-        # 일일 손실 체크 (현재 자산 기준)
+        # 일일 손실 체크 (변경: 미실현 손익 포함, 현재 자산 기준)
         equity = portfolio.total_equity
-        daily_pnl_pct = float(portfolio.daily_pnl / equity * 100) if equity > 0 else 0.0
+        effective_pnl = getattr(portfolio, 'effective_daily_pnl', portfolio.daily_pnl)
+        daily_pnl_pct = float(effective_pnl / equity * 100) if equity > 0 else 0.0
 
         # 경고 임계값 체크
         if daily_pnl_pct <= -self._warn_threshold_pct:

@@ -8,8 +8,10 @@ run_trader.py의 TradingBot에서 상속하여 사용.
 
 import asyncio
 import aiohttp
+import os
 from datetime import datetime, date, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Optional
 
 from loguru import logger
@@ -122,6 +124,10 @@ class SchedulerMixin:
                         if self.risk_manager:
                             self.risk_manager.reset_daily_stats()
 
+                        # 엔진 RiskManager 일일 상태 초기화
+                        if self.engine.risk_manager and hasattr(self.engine.risk_manager, '_stop_loss_today'):
+                            self.engine.risk_manager._stop_loss_today.clear()
+
                         # 전략별 일일 상태 초기화
                         for name, strat in self.strategy_manager.strategies.items():
                             if hasattr(strat, 'clear_gap_stocks'):
@@ -211,13 +217,10 @@ class SchedulerMixin:
 
     async def _run_evolution_scheduler(self):
         """
-        자가 진화 스케줄러
+        자가 진화 스케줄러 (단순화)
 
-        - 넥스트장 마감 후: 일일 진화 실행
-          1. 거래 저널에서 데이터 분석
-          2. LLM으로 전략 개선안 도출
-          3. 파라미터 자동 조정
-          4. 효과 평가 및 롤백
+        - 넥스트장 마감 후 1회 실행
+        - evolve() 내부에서 평가/롤백/적용 모두 처리
         """
         last_evolution_date: Optional[date] = None
 
@@ -242,64 +245,36 @@ class SchedulerMixin:
                         logger.info("[진화] 일일 자가 진화 시작...")
 
                         try:
-                            # 1. 복기 및 진화 실행
                             evolution_cfg = self.config.get("evolution") or {}
                             analysis_days = evolution_cfg.get("analysis_days", 7)
-                            min_trades = evolution_cfg.get("min_trades_for_evolution", 5)
 
-                            # 최소 거래 수 체크
-                            recent_trades = self.trade_journal.get_recent_trades(days=analysis_days)
+                            result = await self.strategy_evolver.evolve(days=analysis_days)
 
-                            if len(recent_trades) >= min_trades:
-                                # 진화 실행
-                                result = await self.strategy_evolver.evolve(days=analysis_days)
+                            status = result.get("status", "unknown")
+                            reason = result.get("reason", "")
+                            change = result.get("change")
 
-                                if result:
-                                    # 진화 결과 로깅
-                                    logger.info(
-                                        f"[진화] 완료 - 평가={result.overall_assessment}, "
-                                        f"인사이트 {len(result.key_insights)}개, "
-                                        f"파라미터 조정 {len(result.parameter_adjustments)}개"
-                                    )
+                            logger.info(f"[진화] 결과: status={status}, reason={reason}")
 
-                                    # 핵심 인사이트 로그
-                                    for insight in result.key_insights[:3]:
-                                        logger.info(f"  [인사이트] {insight}")
-
-                                    # 파라미터 변경 로그
-                                    for adj in result.parameter_adjustments:
-                                        logger.info(
-                                            f"  [파라미터] {adj.parameter}: "
-                                            f"{adj.current_value} -> {adj.suggested_value} "
-                                            f"(신뢰도: {adj.confidence:.0%})"
-                                        )
-
-                                    # 텔레그램 알림 (선택적)
-                                    if evolution_cfg.get("send_telegram", True):
-                                        await self._send_evolution_report(result)
-
-                                    # 거래 로그에 기록 (복기용)
-                                    trading_logger.log_evolution(
-                                        assessment=result.overall_assessment,
-                                        confidence=result.confidence_score,
-                                        insights=result.key_insights,
-                                        parameter_changes=[
-                                            {
-                                                "parameter": p.parameter,
-                                                "from": p.current_value,
-                                                "to": p.suggested_value,
-                                                "confidence": p.confidence,
-                                            }
-                                            for p in result.parameter_adjustments
-                                        ],
-                                    )
-                                else:
-                                    logger.info("[진화] 진화 결과 없음 (변경 불필요)")
-                            else:
+                            if change:
                                 logger.info(
-                                    f"[진화] 거래 부족으로 스킵 "
-                                    f"({len(recent_trades)}/{min_trades}건)"
+                                    f"[진화] 변경: {change.get('parameter', '?')} "
+                                    f"= {change.get('new_value', '?')} "
+                                    f"(이유: {change.get('reason', '?')})"
                                 )
+
+                            # 텔레그램 알림 (적용/롤백/확정 시)
+                            if status in ("applied", "rollback", "keep") and evolution_cfg.get("send_telegram", True):
+                                emoji = {"applied": "🔧", "rollback": "⏪", "keep": "✅"}.get(status, "📊")
+                                msg = f"{emoji} <b>[진화]</b> {status.upper()}"
+                                if change:
+                                    msg += f"\n파라미터: {change.get('parameter', '?')}"
+                                    msg += f"\n값: {change.get('new_value', '?')}"
+                                    msg += f"\n이유: {change.get('reason', '?')}"
+                                try:
+                                    await send_alert(msg)
+                                except Exception:
+                                    pass
 
                             last_evolution_date = today
 
@@ -311,29 +286,7 @@ class SchedulerMixin:
                                 "자가 진화 실행 오류",
                                 traceback.format_exc()
                             )
-
-                # 매 시간 정각에 진화 효과 평가 (적용된 변경이 있는 경우)
-                if now.minute < 15 and 9 <= now.hour <= 15:
-                    try:
-                        # 진화 상태 확인 및 효과 평가
-                        state = self.strategy_evolver.get_evolution_state()
-
-                        if state and state.active_changes:
-                            evaluation = await self.strategy_evolver.evaluate_changes()
-
-                            if evaluation:
-                                logger.info(
-                                    f"[진화 평가] 활성 변경 {len(state.active_changes)}개, "
-                                    f"효과: {evaluation.get('effectiveness', 'unknown')}"
-                                )
-
-                                # 효과 없으면 롤백 고려
-                                if evaluation.get('should_rollback', False):
-                                    logger.warning("[진화] 효과 없음 - 롤백 실행")
-                                    await self.strategy_evolver.rollback_last_change()
-
-                    except Exception as e:
-                        logger.error(f"[진화 평가] 오류: {e}")
+                            last_evolution_date = today
 
                 # 1분마다 체크
                 await asyncio.sleep(60)
@@ -342,40 +295,6 @@ class SchedulerMixin:
             pass
         except Exception as e:
             logger.error(f"진화 스케줄러 오류: {e}")
-
-    async def _send_evolution_report(self, result):
-        """진화 결과 텔레그램 알림"""
-        try:
-            emoji_map = {"good": "✅", "fair": "⚠️", "poor": "❌", "no_data": "📊"}
-            emoji = emoji_map.get(result.overall_assessment, "📊")
-
-            text = f"""
-{emoji} <b>AI Trader v2 - 일일 진화 리포트</b>
-
-<b>분석 기간:</b> 최근 {result.period_days}일
-<b>전체 평가:</b> {result.overall_assessment.upper()}
-<b>신뢰도:</b> {result.confidence_score:.0%}
-
-<b>핵심 인사이트:</b>
-"""
-            for i, insight in enumerate(result.key_insights[:5], 1):
-                text += f"{i}. {insight}\n"
-
-            if result.parameter_adjustments:
-                text += "\n<b>파라미터 조정:</b>\n"
-                for adj in result.parameter_adjustments[:3]:
-                    text += (
-                        f"- {adj.parameter}: {adj.current_value} -> {adj.suggested_value} "
-                        f"({adj.confidence:.0%})\n"
-                    )
-
-            if result.next_week_outlook:
-                text += f"\n<b>전망:</b> {result.next_week_outlook[:200]}"
-
-            await send_alert(text)
-
-        except Exception as e:
-            logger.error(f"진화 리포트 전송 실패: {e}")
 
     async def _run_stock_master_refresh(self):
         """
@@ -920,124 +839,6 @@ class SchedulerMixin:
         except Exception as e:
             logger.error(f"포트폴리오 동기화 오류: {e}")
 
-    async def _run_code_evolution_scheduler(self):
-        """
-        코드 자동 진화 스케줄러
-
-        - 매일 또는 주 1회 지정 시간에 실행 (schedule_daily 설정)
-        - 또는 연속 롤백 3회 시 트리거
-        - auto_merge=true 시 자동 머지 + 봇 재시작
-        """
-        from src.core.evolution.code_evolver import get_code_evolver
-
-        code_evo_cfg = self.config.get("code_evolution") or {}
-        if not code_evo_cfg.get("enabled", False):
-            logger.info("[코드진화] 비활성화됨 (code_evolution.enabled=false)")
-            return
-
-        schedule_daily = code_evo_cfg.get("schedule_daily", False)  # 매일 실행 여부
-        schedule_day = code_evo_cfg.get("schedule_day", 5)  # 0=월, 5=토 (주간 실행 시)
-        schedule_hour = code_evo_cfg.get("schedule_hour", 10)
-        auto_merge = code_evo_cfg.get("auto_merge", False)  # 자동 머지 여부
-        last_run_date = None
-
-        code_evolver = get_code_evolver()
-
-        try:
-            while self.running:
-                now = datetime.now()
-                today = now.date()
-
-                # 스케줄 조건: 매일 or 특정 요일
-                if schedule_daily:
-                    # 매일 지정 시간 (±15분)
-                    scheduled_run = (
-                        now.hour == schedule_hour
-                        and 0 <= now.minute < 15
-                        and last_run_date != today
-                    )
-                else:
-                    # 주 1회 특정 요일 지정 시간 (±15분)
-                    scheduled_run = (
-                        now.weekday() == schedule_day
-                        and now.hour == schedule_hour
-                        and 0 <= now.minute < 15
-                        and last_run_date != today
-                    )
-
-                # 연속 롤백 트리거
-                rollback_trigger = code_evolver.should_trigger_by_rollbacks
-
-                if scheduled_run or rollback_trigger:
-                    trigger = "scheduled" if scheduled_run else "rollback_threshold"
-                    logger.info(f"[코드진화] 스케줄러 트리거: {trigger}")
-
-                    try:
-                        result = await code_evolver.run_evolution(
-                            trigger_reason=trigger,
-                            auto_merge=auto_merge,
-                        )
-
-                        if result["success"]:
-                            logger.info(f"[코드진화] 성공: {result['pr_url']}")
-
-                            # 텔레그램 알림
-                            try:
-                                msg = (
-                                    f"<b>[코드진화]</b> PR 생성\n"
-                                    f"사유: {trigger}\n"
-                                    f"변경: {result['changed_files']}개 파일\n"
-                                    f"PR: {result['pr_url']}"
-                                )
-                                if result.get("auto_merged"):
-                                    msg += "\n✅ 자동 머지 완료"
-                                await send_alert(msg)
-                            except Exception:
-                                pass
-
-                            # 자동 머지 성공 시 봇 재시작
-                            if result.get("auto_merged"):
-                                logger.info("[코드진화] 자동 머지 완료 → 5초 후 봇 재시작")
-                                await send_alert(
-                                    "<b>[코드진화]</b> 자동 머지 완료\n"
-                                    "5초 후 봇 재시작..."
-                                )
-                                await asyncio.sleep(5)
-                                # 봇 재시작 (main 복귀 후 프로세스 종료 → systemd/supervisor가 재시작)
-                                logger.warning("[코드진화] 봇 재시작 중...")
-                                os._exit(0)  # 즉시 종료 (systemd/cron이 재시작)
-
-                        else:
-                            logger.warning(f"[코드진화] 실패: {result['message']}")
-                            # 실패 텔레그램 알림
-                            try:
-                                await send_alert(
-                                    f"<b>[코드진화]</b> 실패\n"
-                                    f"사유: {result['message'][:200]}"
-                                )
-                            except Exception:
-                                pass
-
-                        last_run_date = today
-
-                    except Exception as e:
-                        logger.error(f"[코드진화] 실행 오류: {e}")
-                        last_run_date = today
-                        try:
-                            await send_alert(
-                                f"<b>[코드진화]</b> 실행 오류\n"
-                                f"{str(e)[:200]}"
-                            )
-                        except Exception:
-                            pass
-
-                await asyncio.sleep(60)
-
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error(f"[코드진화] 스케줄러 오류: {e}")
-
     async def _run_portfolio_sync(self):
         """주기적 포트폴리오 동기화 루프"""
         await asyncio.sleep(30)  # 시작 후 30초 대기
@@ -1073,6 +874,8 @@ class SchedulerMixin:
         last_execute_date = None
         last_monitor_time = None
 
+        pending_signals_path = Path.home() / ".cache" / "ai_trader" / "pending_signals.json"
+
         try:
             while self.running:
                 now = datetime.now()
@@ -1081,6 +884,18 @@ class SchedulerMixin:
                 if is_kr_market_holiday(today):
                     await asyncio.sleep(60)
                     continue
+
+                # catch-up: 봇 시작 시 오늘 미실행 시그널이 있으면 즉시 실행
+                if (last_execute_date != today
+                        and now.hour >= exec_hour
+                        and now.hour < 15  # 장 마감 전까지만
+                        and pending_signals_path.exists()):
+                    try:
+                        result = await self.batch_analyzer.execute_pending_signals()
+                        last_execute_date = today
+                        logger.info(f"[배치] catch-up 실행: {result}")
+                    except Exception as e:
+                        logger.error(f"[배치] catch-up 실행 오류: {e}")
 
                 # 15:40 일일 스캔
                 if (now.hour == scan_hour
@@ -1161,3 +976,13 @@ class SchedulerMixin:
             pass
         except Exception as e:
             logger.error(f"로그 정리 스케줄러 오류: {e}")
+
+    async def _run_health_monitor(self):
+        """헬스 모니터링 루프"""
+        try:
+            if self.health_monitor:
+                await self.health_monitor.run_loop()
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"[HealthMonitor] 루프 종료: {e}")

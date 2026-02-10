@@ -10,11 +10,6 @@ from typing import Tuple
 from src.core.types import MarketSession, TradingConfig
 
 
-def is_kr_market_holiday(d: date) -> bool:
-    """한국 시장 휴장일 여부 (주말만 체크)"""
-    return d.weekday() >= 5  # 토요일(5), 일요일(6)
-
-
 class SessionUtil:
     """시장 세션 관리 유틸리티"""
 
@@ -35,7 +30,8 @@ class SessionUtil:
         """
         now = datetime.now()
 
-        # 주말 + 공휴일
+        # 주말 + 공휴일 (engine.py의 정확한 휴장일 함수 사용)
+        from src.core.engine import is_kr_market_holiday
         if is_kr_market_holiday(now.date()):
             return MarketSession.CLOSED
 

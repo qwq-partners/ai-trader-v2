@@ -5,8 +5,11 @@ AI Trading Bot v2 - 진화된 설정 영속화
 봇 재시작 시에도 최적화된 설정이 유지되도록 합니다.
 
 default.yml은 절대 수정하지 않습니다.
+
+출처 추적: _meta 섹션에 source(evolution|manual|rollback), timestamp 기록
 """
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -19,9 +22,10 @@ class EvolvedConfigManager:
     진화된 설정 관리자
 
     - 저장: config/evolved_overrides.yml (default.yml은 절대 수정 안 함)
-    - save_override(component, param, value) - 진화 성공 시 호출
+    - save_override(component, param, value, source) - 진화 성공 시 호출
     - remove_override(component, param) - 롤백 시 호출
     - get_overrides() - 봇 시작 시 로드
+    - get_meta(component, param) - 출처/시점 조회
     """
 
     def __init__(self, config_dir: Optional[str] = None):
@@ -39,7 +43,9 @@ class EvolvedConfigManager:
         try:
             with open(self._override_file, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
-            logger.info(f"진화 오버라이드 로드: {self._override_file} ({len(data)}개 섹션)")
+            # _meta 섹션 제외한 섹션 수 로그
+            sections = [k for k in data if k != "_meta"]
+            logger.info(f"진화 오버라이드 로드: {self._override_file} ({len(sections)}개 섹션)")
             return data
         except Exception as e:
             logger.warning(f"진화 오버라이드 로드 실패: {e}")
@@ -61,14 +67,15 @@ class EvolvedConfigManager:
         except Exception as e:
             logger.error(f"진화 오버라이드 저장 실패: {e}")
 
-    def save_override(self, component: str, param: str, value: Any):
+    def save_override(self, component: str, param: str, value: Any, source: str = "evolution"):
         """
-        파라미터 오버라이드 저장
+        파라미터 오버라이드 저장 (출처 추적)
 
         Args:
             component: 컴포넌트명 (e.g., "momentum_breakout", "exit_manager", "risk_config")
             param: 파라미터명 (e.g., "stop_loss_pct")
             value: 값
+            source: 출처 ("evolution" | "manual" | "rollback" | "dashboard")
         """
         if component not in self._overrides:
             self._overrides[component] = {}
@@ -78,8 +85,18 @@ class EvolvedConfigManager:
             value = value.item()
 
         self._overrides[component][param] = value
+
+        # 메타데이터 저장 (_meta 섹션)
+        if "_meta" not in self._overrides:
+            self._overrides["_meta"] = {}
+        meta_key = f"{component}.{param}"
+        self._overrides["_meta"][meta_key] = {
+            "source": source,
+            "timestamp": datetime.now().isoformat(),
+        }
+
         self._save()
-        logger.info(f"[영속화] 저장: {component}.{param} = {value}")
+        logger.info(f"[영속화] 저장: {component}.{param} = {value} (source={source})")
 
     def remove_override(self, component: str, param: str):
         """
@@ -94,21 +111,38 @@ class EvolvedConfigManager:
             # 빈 섹션 제거
             if not self._overrides[component]:
                 del self._overrides[component]
-            self._save()
-            logger.info(f"[영속화] 제거: {component}.{param}")
+
+        # 메타데이터도 제거
+        meta_key = f"{component}.{param}"
+        if "_meta" in self._overrides:
+            self._overrides["_meta"].pop(meta_key, None)
+            if not self._overrides["_meta"]:
+                del self._overrides["_meta"]
+
+        self._save()
+        logger.info(f"[영속화] 제거: {component}.{param}")
 
     def get_overrides(self) -> Dict[str, Dict[str, Any]]:
         """
-        모든 오버라이드 반환
+        모든 오버라이드 반환 (_meta 제외)
 
         Returns:
             {"component_name": {"param": value, ...}, ...}
         """
-        return dict(self._overrides)
+        return {k: v for k, v in self._overrides.items() if k != "_meta"}
 
     def get_component_overrides(self, component: str) -> Dict[str, Any]:
         """특정 컴포넌트의 오버라이드 반환"""
         return dict(self._overrides.get(component, {}))
+
+    def get_meta(self, component: str, param: str) -> Optional[Dict[str, str]]:
+        """특정 파라미터의 메타데이터 (source, timestamp) 반환"""
+        meta = self._overrides.get("_meta", {})
+        return meta.get(f"{component}.{param}")
+
+    def get_all_meta(self) -> Dict[str, Dict[str, str]]:
+        """모든 메타데이터 반환"""
+        return dict(self._overrides.get("_meta", {}))
 
 
 # 싱글톤

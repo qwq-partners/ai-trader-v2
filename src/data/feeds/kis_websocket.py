@@ -162,6 +162,14 @@ class KISWebSocketFeed:
             return True
 
         try:
+            # 재연결 시 기존 구독 종목을 pending에 복사하여 재구독 보장
+            if self._subscribed_symbols:
+                logger.info(
+                    f"[WS] 재연결 감지: 기존 구독 {len(self._subscribed_symbols)}개 → pending으로 이동"
+                )
+                self._pending_subscriptions |= self._subscribed_symbols
+                self._subscribed_symbols.clear()
+
             # 세션 생성
             if not self._session or self._session.closed:
                 self._session = aiohttp.ClientSession()
@@ -184,7 +192,7 @@ class KISWebSocketFeed:
 
             logger.info(f"WebSocket 연결 완료: {self.config.ws_url}")
 
-            # 대기 중인 구독 처리
+            # 대기 중인 구독 처리 (재연결 시 기존 종목 포함)
             for symbol in self._pending_subscriptions:
                 await self._subscribe_symbol(symbol)
             self._pending_subscriptions.clear()

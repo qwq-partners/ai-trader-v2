@@ -80,6 +80,8 @@ def create_trading_config(config: Optional[Dict[str, Any]] = None) -> TradingCon
         trailing_stop_pct=float(risk_cfg.get("trailing_stop_pct", 1.5)),
         hot_theme_position_pct=float(risk_cfg.get("hot_theme_position_pct", 50.0)),
         momentum_multiplier=float(risk_cfg.get("momentum_multiplier", 1.5)),
+        flex_extra_positions=int(risk_cfg.get("flex_extra_positions", 2)),
+        flex_cash_threshold_pct=float(risk_cfg.get("flex_cash_threshold_pct", 10.0)),
     )
 
     # TradingConfig 생성

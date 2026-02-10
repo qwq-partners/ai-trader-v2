@@ -1,7 +1,8 @@
 """
 AI Trading Bot v2 - 전략 진화기 (Strategy Evolver)
 
-LLM의 조언을 실제 전략에 반영하고, 성과를 추적합니다.
+규칙 기반 자동 튜닝 + LLM 보조 분석.
+한 번에 1개 파라미터만 변경, 3영업일+5건 평가, 즉시 롤백.
 """
 
 import json
@@ -14,90 +15,174 @@ from loguru import logger
 
 from .trade_journal import get_trade_journal
 from .trade_reviewer import get_trade_reviewer, ReviewResult
-from .llm_strategist import (
-    LLMStrategist, StrategyAdvice, ParameterAdjustment, get_llm_strategist
-)
 from .config_persistence import get_evolved_config_manager
 
+
+# ============================================================
+# 데이터 클래스
+# ============================================================
 
 @dataclass
 class ParameterChange:
     """파라미터 변경 기록"""
-    timestamp: datetime
+    timestamp: str  # ISO format
     strategy: str
     parameter: str
     old_value: Any
     new_value: Any
     reason: str
-    source: str  # "llm" or "manual" or "rollback"
+    source: str  # "rule" | "llm" | "manual" | "rollback"
 
-    # 성과 추적
-    trades_before: int = 0
-    win_rate_before: float = 0
-    trades_after: int = 0
-    win_rate_after: float = 0
-    is_effective: Optional[bool] = None
-
-    # 복합 평가 지표
+    # 변경 전 지표 (비교 기준)
+    win_rate_before: float = 0.0
     profit_factor_before: float = 0.0
+    trades_before: int = 0
+
+    # 변경 후 지표 (평가 시 채워짐)
+    win_rate_after: float = 0.0
     profit_factor_after: float = 0.0
-    avg_daily_return_before: float = 0.0
-    avg_daily_return_after: float = 0.0
-    composite_score: float = 0.0
+    trades_after: int = 0
+    is_effective: Optional[bool] = None  # True=유지, False=롤백, None=평가중
+
+    # 평가 메타
+    applied_date: str = ""  # 적용 날짜 (YYYY-MM-DD)
 
     def to_dict(self) -> Dict:
-        return {
-            **asdict(self),
-            "timestamp": self.timestamp.isoformat(),
-        }
+        return asdict(self)
 
 
 @dataclass
 class EvolutionState:
-    """진화 상태"""
+    """진화 상태 (단순화)"""
     version: int = 1
-    last_evolution: Optional[datetime] = None
-    total_evolutions: int = 0
-    successful_changes: int = 0
-    rolled_back_changes: int = 0
-
-    # 현재 적용된 변경 사항
-    active_changes: List[ParameterChange] = field(default_factory=list)
-
-    # 변경 이력
-    change_history: List[ParameterChange] = field(default_factory=list)
+    # 현재 활성 변경 (최대 1개만)
+    active_change: Optional[ParameterChange] = None
+    # 이력
+    history: List[ParameterChange] = field(default_factory=list)
+    # 통계
+    total_applied: int = 0
+    total_kept: int = 0
+    total_rolled_back: int = 0
 
     def to_dict(self) -> Dict:
         return {
             "version": self.version,
-            "last_evolution": self.last_evolution.isoformat() if self.last_evolution else None,
-            "total_evolutions": self.total_evolutions,
-            "successful_changes": self.successful_changes,
-            "rolled_back_changes": self.rolled_back_changes,
-            "active_changes": [c.to_dict() for c in self.active_changes],
-            "change_history": [c.to_dict() for c in self.change_history[-100:]],  # 최근 100개
+            "active_change": self.active_change.to_dict() if self.active_change else None,
+            "history": [h.to_dict() for h in self.history[-50:]],
+            "total_applied": self.total_applied,
+            "total_kept": self.total_kept,
+            "total_rolled_back": self.total_rolled_back,
         }
 
 
+@dataclass
+class AutoTuningRule:
+    """자동 튜닝 규칙"""
+    name: str
+    condition: Callable[[ReviewResult], bool]
+    parameter: str  # 조정 대상 ("*.min_score" or "exit_manager.stop_loss_pct")
+    adjustment: Callable[[Any], Any]  # current_value -> new_value
+    reason_template: str  # 사유 템플릿 (f-string 변수: review)
+
+
+# ============================================================
+# 영업일 계산 헬퍼
+# ============================================================
+
+def _count_trading_days(start_date: date, end_date: date) -> int:
+    """두 날짜 사이의 영업일 수 (주말 제외, 공휴일은 근사)"""
+    days = 0
+    current = start_date + timedelta(days=1)
+    while current <= end_date:
+        if current.weekday() < 5:  # 월~금
+            days += 1
+        current += timedelta(days=1)
+    return days
+
+
+# ============================================================
+# 내장 규칙
+# ============================================================
+
+def _build_rules() -> List[AutoTuningRule]:
+    """내장 자동 튜닝 규칙 목록"""
+    return [
+        # 승률 낮으면 → 진입 기준 강화
+        AutoTuningRule(
+            name="low_win_rate",
+            condition=lambda r: r.win_rate < 40 and r.total_trades >= 5,
+            parameter="*.min_score",
+            adjustment=lambda v: min(v + 5, 90),
+            reason_template="승률 {win_rate:.0f}% < 40% -> 진입 기준 +5",
+        ),
+
+        # 승률 높으면 → 진입 기준 완화
+        AutoTuningRule(
+            name="high_win_rate",
+            condition=lambda r: r.win_rate > 65 and r.total_trades >= 10,
+            parameter="*.min_score",
+            adjustment=lambda v: max(v - 5, 40),
+            reason_template="승률 {win_rate:.0f}% > 65% -> 진입 기준 -5",
+        ),
+
+        # 손익비 < 1.0 → 손절 축소
+        AutoTuningRule(
+            name="bad_profit_factor",
+            condition=lambda r: r.profit_factor < 1.0 and r.total_trades >= 5,
+            parameter="exit_manager.stop_loss_pct",
+            adjustment=lambda v: max(v - 0.5, 1.5),
+            reason_template="손익비 {profit_factor:.2f} < 1.0 -> 손절 -0.5%",
+        ),
+
+        # 거래 부족 → 진입 기준 완화
+        AutoTuningRule(
+            name="low_frequency",
+            condition=lambda r: r.total_trades > 0 and r.total_trades < 5,
+            parameter="*.min_score",
+            adjustment=lambda v: max(v - 3, 40),
+            reason_template="거래 부족 ({total_trades}건/7일) -> 기준 완화 -3",
+        ),
+
+        # 평균 손실 크면 → ATR 손절 상한 축소
+        AutoTuningRule(
+            name="large_avg_loss",
+            condition=lambda r: r.avg_pnl_pct < -2.0 and r.total_trades >= 5,
+            parameter="exit_manager.max_stop_pct",
+            adjustment=lambda v: max(v - 1.0, 3.0),
+            reason_template="평균 손익 {avg_pnl_pct:.1f}% < -2% -> ATR상한 -1%",
+        ),
+    ]
+
+
+# ============================================================
+# StrategyEvolver (재작성)
+# ============================================================
+
 class StrategyEvolver:
     """
-    전략 진화기
+    전략 진화기 (단순화 재설계)
 
-    LLM 조언을 바탕으로:
-    1. 전략 파라미터 자동 조정
-    2. 변경 효과 추적
-    3. 비효율적인 변경 롤백
-    4. 진화 이력 관리
+    원칙:
+    1. 규칙 기반 우선 (LLM 없이 독립 작동)
+    2. 한 번에 1개만 변경
+    3. 3영업일 + 5건 최소 거래로 평가
+    4. 악화 시 즉시 롤백
     """
 
     def __init__(
         self,
-        llm_strategist: LLMStrategist = None,
         storage_dir: str = None,
     ):
-        self.strategist = llm_strategist or get_llm_strategist()
         self.reviewer = get_trade_reviewer()
         self.journal = get_trade_journal()
+
+        # LLM 전략가 (선택적, 초기화 실패해도 무방)
+        self.strategist = None
+        try:
+            from .llm_strategist import get_llm_strategist
+            self.strategist = get_llm_strategist()
+        except Exception:
+            logger.info("[진화] LLM 전략가 미사용 (규칙 기반만 작동)")
 
         # 저장소
         self.storage_dir = Path(storage_dir or os.getenv(
@@ -109,150 +194,99 @@ class StrategyEvolver:
         # 상태
         self.state = self._load_state()
 
-        # 전략 참조 (외부에서 설정)
-        self._strategies: Dict[str, Any] = {}  # name -> strategy object
-        self._param_setters: Dict[str, Callable] = {}  # "strategy.param" -> setter function
+        # 규칙
+        self._rules = _build_rules()
 
-        # 설정
-        self.min_trades_for_evaluation = 10  # 평가에 필요한 최소 거래 수
-        self.evaluation_period_days = 7      # 변경 효과 평가 기간
-        self.min_confidence_to_apply = 0.6   # 적용 최소 신뢰도
-        self.auto_rollback_threshold = -5.0  # 승률 감소 시 롤백 임계값
+        # 전략/컴포넌트 참조 (외부에서 설정)
+        self._strategies: Dict[str, Any] = {}
+        self._components: Dict[str, Any] = {}
+        self._component_config_attrs: Dict[str, str] = {}
 
-        # 컴포넌트 참조 (ExitManager, RiskConfig 등)
-        self._components: Dict[str, Any] = {}  # name -> component object
-        self._component_config_attrs: Dict[str, str] = {}  # name -> config attr name
-
-        # 파라미터 변경 허용 범위 (bounds)
+        # 파라미터 범위
         self._param_bounds: Dict[str, Tuple[Any, Any]] = {
-            # 전략 파라미터
             "min_score": (30, 90),
-            "stop_loss_pct": (0.5, 5.0),
-            "take_profit_pct": (1.0, 10.0),
+            "stop_loss_pct": (1.0, 8.0),
+            "take_profit_pct": (2.0, 20.0),
             "trailing_stop_pct": (0.5, 5.0),
-            "volume_surge_ratio": (1.0, 5.0),
-            "min_change_pct": (0.5, 5.0),
-            "max_change_pct": (5.0, 30.0),
-            "min_gap_pct": (1.0, 5.0),
-            "pullback_pct": (0.3, 3.0),
-            "min_theme_score": (30, 95),
-            "max_rsi": (20, 50),
-            "bb_threshold": (0.0, 0.5),
-            # RiskConfig 파라미터
+            "max_stop_pct": (3.0, 10.0),
+            "min_stop_pct": (1.0, 5.0),
+            "first_exit_pct": (1.5, 10.0),
             "base_position_pct": (5.0, 30.0),
-            "max_position_pct": (15.0, 50.0),
-            "min_cash_reserve_pct": (5.0, 30.0),
             "daily_max_loss_pct": (1.0, 5.0),
-            # ExitConfig 파라미터
-            "first_exit_pct": (1.5, 6.0),
-            "first_exit_ratio": (0.1, 0.5),
-            "second_exit_pct": (3.0, 10.0),
-            "second_exit_ratio": (0.3, 0.7),
-            "trailing_activate_pct": (1.5, 6.0),
         }
 
-        logger.info(f"StrategyEvolver 초기화: {self.storage_dir}")
+        logger.info(f"StrategyEvolver 초기화: 규칙 {len(self._rules)}개, 저장소 {self.storage_dir}")
+
+    # ============================================================
+    # 상태 로드/저장
+    # ============================================================
 
     def _load_state(self) -> EvolutionState:
         """진화 상태 로드"""
         state_file = self.storage_dir / "evolution_state.json"
+        if not state_file.exists():
+            return EvolutionState()
 
-        if state_file.exists():
-            try:
-                with open(state_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+        try:
+            with open(state_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
 
-                # active_changes 역직렬화
-                active_changes = []
-                for cd in data.get("active_changes", []):
-                    try:
-                        active_changes.append(ParameterChange(
-                            timestamp=datetime.fromisoformat(cd["timestamp"]),
-                            strategy=cd["strategy"],
-                            parameter=cd["parameter"],
-                            old_value=cd["old_value"],
-                            new_value=cd["new_value"],
-                            reason=cd["reason"],
-                            source=cd.get("source", "llm"),
-                            trades_before=cd.get("trades_before", 0),
-                            win_rate_before=cd.get("win_rate_before", 0),
-                            trades_after=cd.get("trades_after", 0),
-                            win_rate_after=cd.get("win_rate_after", 0),
-                            is_effective=cd.get("is_effective"),
-                        ))
-                    except (KeyError, ValueError) as e:
-                        logger.warning(f"active_change 역직렬화 실패, 건너뜀: {e}")
+            active = None
+            if data.get("active_change"):
+                ac = data["active_change"]
+                active = ParameterChange(**{
+                    k: ac.get(k)
+                    for k in ParameterChange.__dataclass_fields__
+                    if k in ac
+                })
 
-                # change_history 역직렬화
-                change_history = []
-                for cd in data.get("change_history", []):
-                    try:
-                        change_history.append(ParameterChange(
-                            timestamp=datetime.fromisoformat(cd["timestamp"]),
-                            strategy=cd["strategy"],
-                            parameter=cd["parameter"],
-                            old_value=cd["old_value"],
-                            new_value=cd["new_value"],
-                            reason=cd["reason"],
-                            source=cd.get("source", "llm"),
-                            trades_before=cd.get("trades_before", 0),
-                            win_rate_before=cd.get("win_rate_before", 0),
-                            trades_after=cd.get("trades_after", 0),
-                            win_rate_after=cd.get("win_rate_after", 0),
-                            is_effective=cd.get("is_effective"),
-                        ))
-                    except (KeyError, ValueError) as e:
-                        logger.warning(f"change_history 역직렬화 실패, 건너뜀: {e}")
+            history = []
+            for h in data.get("history", []):
+                try:
+                    history.append(ParameterChange(**{
+                        k: h.get(k)
+                        for k in ParameterChange.__dataclass_fields__
+                        if k in h
+                    }))
+                except Exception:
+                    pass
 
-                state = EvolutionState(
-                    version=data.get("version", 1),
-                    last_evolution=datetime.fromisoformat(data["last_evolution"]) if data.get("last_evolution") else None,
-                    total_evolutions=data.get("total_evolutions", 0),
-                    successful_changes=data.get("successful_changes", 0),
-                    rolled_back_changes=data.get("rolled_back_changes", 0),
-                    active_changes=active_changes,
-                    change_history=change_history,
-                )
+            state = EvolutionState(
+                version=data.get("version", 1),
+                active_change=active,
+                history=history,
+                total_applied=data.get("total_applied", 0),
+                total_kept=data.get("total_kept", 0),
+                total_rolled_back=data.get("total_rolled_back", 0),
+            )
 
-                logger.info(
-                    f"진화 상태 로드: v{state.version}, 총 {state.total_evolutions}회 진화, "
-                    f"활성 변경 {len(active_changes)}개, 이력 {len(change_history)}개"
-                )
-                return state
+            logger.info(
+                f"진화 상태 로드: v{state.version}, "
+                f"적용={state.total_applied}, 유지={state.total_kept}, 롤백={state.total_rolled_back}, "
+                f"활성={'있음' if state.active_change else '없음'}"
+            )
+            return state
 
-            except Exception as e:
-                logger.warning(f"진화 상태 로드 실패: {e}")
-
-        return EvolutionState()
+        except Exception as e:
+            logger.warning(f"진화 상태 로드 실패: {e}")
+            return EvolutionState()
 
     def _save_state(self):
         """진화 상태 저장"""
         state_file = self.storage_dir / "evolution_state.json"
-
         with open(state_file, "w", encoding="utf-8") as f:
             json.dump(self.state.to_dict(), f, ensure_ascii=False, indent=2)
 
-    def register_strategy(
-        self,
-        name: str,
-        strategy: Any,
-        param_setters: Dict[str, Callable] = None,
-    ):
-        """
-        전략 등록
+    # ============================================================
+    # 전략/컴포넌트 등록
+    # ============================================================
 
-        Args:
-            name: 전략 이름
-            strategy: 전략 객체
-            param_setters: 파라미터 설정 함수 맵 {"param_name": setter_func}
-        """
+    def register_strategy(self, name: str, strategy: Any, param_setters: Dict[str, Callable] = None):
+        """전략 등록"""
         self._strategies[name] = strategy
-        if param_setters:
-            for param, setter in param_setters.items():
-                self._param_setters[f"{name}.{param}"] = setter
 
         # LLM 전략가에 현재 파라미터 전달
-        if hasattr(strategy, 'config'):
+        if self.strategist and hasattr(strategy, 'config'):
             config = strategy.config
             params = {
                 k: getattr(config, k)
@@ -263,158 +297,422 @@ class StrategyEvolver:
 
         logger.info(f"전략 등록: {name}")
 
-    def register_component(
-        self,
-        name: str,
-        component: Any,
-        config_attr: str = "config",
-    ):
-        """
-        컴포넌트 등록 (ExitManager, RiskManager 등)
-
-        전략과 동일한 방식으로 파라미터 자동 조정 대상에 포함시킵니다.
-
-        Args:
-            name: 컴포넌트 이름 (e.g., "exit_manager", "risk_config")
-            component: 컴포넌트 객체 (config 속성을 가져야 함)
-            config_attr: config 속성명 (기본: "config")
-        """
+    def register_component(self, name: str, component: Any, config_attr: str = "config"):
+        """컴포넌트 등록 (ExitManager, RiskManager 등)"""
         self._components[name] = component
         self._component_config_attrs[name] = config_attr
 
-        # config 객체에서 파라미터 추출
         config_obj = getattr(component, config_attr, None)
         if config_obj is None:
-            # component 자체가 config일 수 있음 (e.g., RiskConfig dataclass)
             config_obj = component
             self._component_config_attrs[name] = "__self__"
 
-        params = {
-            k: getattr(config_obj, k)
-            for k in dir(config_obj)
-            if not k.startswith('_') and not callable(getattr(config_obj, k))
-        }
-
         # LLM 전략가에 현재 파라미터 전달
-        self.strategist.set_current_params(name, params)
+        if self.strategist:
+            params = {
+                k: getattr(config_obj, k)
+                for k in dir(config_obj)
+                if not k.startswith('_') and not callable(getattr(config_obj, k))
+            }
+            self.strategist.set_current_params(name, params)
 
-        logger.info(f"컴포넌트 등록: {name} ({len(params)}개 파라미터)")
+        logger.info(f"컴포넌트 등록: {name}")
 
-    async def evolve(
-        self,
-        days: int = 7,
-        dry_run: bool = False,
-    ) -> StrategyAdvice:
+    # ============================================================
+    # 진화 실행 (핵심)
+    # ============================================================
+
+    async def evolve(self, days: int = 7, dry_run: bool = False) -> Dict[str, Any]:
         """
         전략 진화 실행
 
-        1. LLM에게 분석 요청
-        2. 조언 검토 및 필터링
-        3. 파라미터 적용 (dry_run=False인 경우)
-        4. 상태 업데이트
-
-        Args:
-            days: 분석 기간 (일)
-            dry_run: True면 실제 적용 없이 조언만 반환
+        Returns:
+            {"status": "applied|skipped|waiting|no_change|rollback|keep",
+             "change": {...} or None, "reason": str}
         """
-        logger.info(f"[진화] 최근 {days}일 분석 및 진화 시작 (dry_run={dry_run})")
+        logger.info(f"[진화] 최근 {days}일 분석 시작 (dry_run={dry_run})")
 
-        # 1. LLM 분석
-        advice = await self.strategist.analyze_and_advise(days)
+        # 1. 복기
+        review = self.reviewer.review_period(days)
+        if review.total_trades < 3:
+            logger.info(f"[진화] 거래 부족 ({review.total_trades}건 < 3건), 스킵")
+            return {"status": "skipped", "reason": f"거래 부족 ({review.total_trades}건)"}
 
-        if advice.overall_assessment == "no_data":
-            logger.warning("[진화] 분석할 데이터 없음")
-            return advice
+        # 2. 활성 변경이 있으면 먼저 평가
+        if self.state.active_change:
+            eval_result = self._evaluate_active_change(review)
+            if eval_result == "rollback":
+                self._rollback_active_change()
+                self._save_state()
+                return {"status": "rollback", "change": self.state.history[-1].to_dict() if self.state.history else None}
+            elif eval_result == "keep":
+                self._finalize_active_change(review)
+                self._save_state()
+                return {"status": "keep", "change": self.state.history[-1].to_dict() if self.state.history else None}
+            else:  # "wait"
+                return {
+                    "status": "waiting",
+                    "reason": "활성 변경 평가 대기 중",
+                    "active_change": self.state.active_change.to_dict(),
+                }
 
-        # 2. 현재 성과 기록 (변경 전)
-        current_review = self.reviewer.review_period(days)
+        # 3. 규칙 기반 트리거 확인 (한 번에 1개만)
+        triggered = self._find_triggered_rule(review)
 
-        # 3. 파라미터 조정 검토 및 적용
-        applied_changes = []
+        # 4. 규칙 없으면 LLM 보조 분석 (선택적)
+        if not triggered and self.strategist and not dry_run:
+            triggered = await self._get_llm_suggestion(review, days)
 
-        for adjustment in advice.parameter_adjustments:
-            # 신뢰도 체크
-            if adjustment.confidence < self.min_confidence_to_apply:
-                logger.debug(
-                    f"[진화] {adjustment.parameter} 스킵 "
-                    f"(신뢰도 {adjustment.confidence:.2f} < {self.min_confidence_to_apply})"
-                )
-                continue
-
-            # 파라미터 키 파싱 (strategy.param 형식)
-            param_key = self._find_param_key(adjustment.parameter)
-            if not param_key:
-                logger.warning(f"[진화] 알 수 없는 파라미터: {adjustment.parameter}")
-                continue
-
-            # dry_run이 아니면 실제 적용
-            if not dry_run:
-                success = self._apply_parameter_change(
-                    param_key,
-                    adjustment.current_value,
-                    adjustment.suggested_value,
-                    adjustment.reason,
-                    current_review,
-                )
-                if success:
-                    applied_changes.append(adjustment)
-            else:
-                logger.info(
-                    f"[진화][DRY] {param_key}: {adjustment.current_value} -> "
-                    f"{adjustment.suggested_value} ({adjustment.reason})"
-                )
-
-        # 4. 상태 업데이트
-        if applied_changes and not dry_run:
-            self.state.total_evolutions += 1
-            self.state.last_evolution = datetime.now()
-            self.state.version += 1
+        if triggered and not dry_run:
+            self._apply_change(triggered, review)
             self._save_state()
+            return {"status": "applied", "change": triggered}
 
-            logger.info(f"[진화] 완료: {len(applied_changes)}개 파라미터 변경")
+        if triggered and dry_run:
+            return {"status": "dry_run", "change": triggered}
 
-        # 5. 조언 로깅
-        self._log_advice(advice)
+        return {"status": "no_change", "reason": "트리거 규칙 없음"}
 
-        return advice
+    # ============================================================
+    # 평가 로직
+    # ============================================================
 
-    def _find_param_key(self, param_name: str) -> Optional[str]:
-        """파라미터 키 찾기 (전략 + 컴포넌트)"""
-        # 이미 "strategy.param" 형식이면 그대로 반환
-        if "." in param_name:
-            prefix, attr = param_name.split(".", 1)
-            if param_name in self._param_setters:
-                return param_name
-            # 전략에서 찾기
-            if prefix in self._strategies:
-                strategy = self._strategies[prefix]
-                if hasattr(strategy, 'config') and hasattr(strategy.config, attr):
-                    return param_name
-            # 컴포넌트에서 찾기
-            if prefix in self._components:
-                config_obj = self._get_component_config(prefix)
-                if config_obj and hasattr(config_obj, attr):
-                    return param_name
-            return None
+    def _evaluate_active_change(self, current_review: ReviewResult) -> str:
+        """활성 변경 평가: 'keep' | 'rollback' | 'wait'"""
+        change = self.state.active_change
+        if not change:
+            return "wait"
 
-        # 등록된 모든 전략에서 찾기
-        for strategy_name in self._strategies:
-            full_key = f"{strategy_name}.{param_name}"
-            if full_key in self._param_setters:
-                return full_key
+        # 적용 날짜 파싱
+        try:
+            applied = date.fromisoformat(change.applied_date)
+        except (ValueError, TypeError):
+            return "wait"
 
-            # config에서 찾기
-            strategy = self._strategies[strategy_name]
-            if hasattr(strategy, 'config') and hasattr(strategy.config, param_name):
-                return full_key
+        today = date.today()
+        trading_days = _count_trading_days(applied, today)
 
-        # 등록된 모든 컴포넌트에서 찾기
-        for comp_name in self._components:
-            config_obj = self._get_component_config(comp_name)
-            if config_obj and hasattr(config_obj, param_name):
-                return f"{comp_name}.{param_name}"
+        # 최소 3영업일 경과 필요
+        if trading_days < 3:
+            logger.debug(f"[진화 평가] 경과 {trading_days}영업일 < 3일, 대기")
+            return "wait"
+
+        # 최소 5건 거래 필요 (변경 적용일 이후 거래만 필터링)
+        recent = self.journal.get_closed_trades(days=trading_days + 2)  # 약간 여유
+        recent = [t for t in recent
+                  if t.exit_time and t.exit_time.date() > applied]
+        if len(recent) < 5:
+            if trading_days > 7:  # 7영업일 넘었는데도 5건 미달 → 데이터 부족으로 유지
+                logger.info(f"[진화 평가] {trading_days}영업일 경과, {len(recent)}건 < 5건 → 데이터 부족으로 유지")
+                return "keep"
+            logger.debug(f"[진화 평가] {len(recent)}건 < 5건, 대기")
+            return "wait"
+
+        # 비교 지표
+        before_wr = change.win_rate_before
+        after_wr = sum(1 for t in recent if t.is_win) / len(recent) * 100
+
+        before_pf = change.profit_factor_before
+        total_profit = sum(t.pnl for t in recent if t.is_win) or 0
+        total_loss = abs(sum(t.pnl for t in recent if not t.is_win)) or 1
+        after_pf = total_profit / total_loss
+
+        logger.info(
+            f"[진화 평가] {change.strategy}.{change.parameter}: "
+            f"승률 {before_wr:.1f}% -> {after_wr:.1f}%, "
+            f"PF {before_pf:.2f} -> {after_pf:.2f}"
+        )
+
+        # 판정: 승률 5%p 이상 하락 OR 손익비 0.3 이상 하락 → 롤백
+        if after_wr < before_wr - 5 or after_pf < before_pf - 0.3:
+            logger.warning(
+                f"[진화 평가] 악화 감지 → 롤백 "
+                f"(승률 차이: {after_wr - before_wr:+.1f}%p, PF 차이: {after_pf - before_pf:+.2f})"
+            )
+            return "rollback"
+
+        # 그 외 → 유지
+        return "keep"
+
+    def _rollback_active_change(self):
+        """활성 변경 롤백"""
+        change = self.state.active_change
+        if not change:
+            return
+
+        # 원래 값으로 복원
+        self._set_param_value(change.strategy, change.parameter, change.old_value)
+
+        # 영속화에서 제거
+        try:
+            config_mgr = get_evolved_config_manager()
+            config_mgr.remove_override(change.strategy, change.parameter)
+        except Exception as e:
+            logger.warning(f"[진화] 영속화 롤백 실패: {e}")
+
+        # 이력 기록
+        rollback_record = ParameterChange(
+            timestamp=datetime.now().isoformat(),
+            strategy=change.strategy,
+            parameter=change.parameter,
+            old_value=change.new_value,
+            new_value=change.old_value,
+            reason=f"자동 롤백 (원래 변경: {change.reason})",
+            source="rollback",
+            applied_date=date.today().isoformat(),
+        )
+        self.state.history.append(rollback_record)
+        self.state.active_change = None
+        self.state.total_rolled_back += 1
+
+        logger.warning(
+            f"[진화] 롤백: {change.strategy}.{change.parameter} "
+            f"= {change.new_value} -> {change.old_value}"
+        )
+
+    def _finalize_active_change(self, review: ReviewResult):
+        """활성 변경 확정 (유지)"""
+        change = self.state.active_change
+        if not change:
+            return
+
+        change.is_effective = True
+        change.win_rate_after = review.win_rate
+        change.profit_factor_after = review.profit_factor
+        change.trades_after = review.total_trades
+
+        self.state.history.append(change)
+        self.state.active_change = None
+        self.state.total_kept += 1
+
+        logger.info(
+            f"[진화] 확정 유지: {change.strategy}.{change.parameter} "
+            f"= {change.new_value}"
+        )
+
+    # ============================================================
+    # 규칙 기반 트리거
+    # ============================================================
+
+    def _find_triggered_rule(self, review: ReviewResult) -> Optional[Dict]:
+        """트리거된 규칙 찾기 (최초 1개만)"""
+        for rule in self._rules:
+            try:
+                if not rule.condition(review):
+                    continue
+
+                # 파라미터 대상 결정
+                targets = self._resolve_param_targets(rule.parameter)
+                if not targets:
+                    continue
+
+                # 첫 번째 대상만 사용
+                strategy_name, param_name = targets[0]
+                current_value = self._get_param_value(strategy_name, param_name)
+                if current_value is None:
+                    continue
+
+                new_value = rule.adjustment(current_value)
+
+                # bounds 적용
+                new_value = self._clamp_value(param_name, new_value, current_value)
+
+                # 변경 없으면 스킵
+                if new_value == current_value:
+                    continue
+
+                # 사유 생성
+                reason = rule.reason_template.format(
+                    win_rate=review.win_rate,
+                    profit_factor=review.profit_factor,
+                    total_trades=review.total_trades,
+                    avg_pnl_pct=review.avg_pnl_pct,
+                )
+
+                logger.info(f"[진화] 규칙 트리거: {rule.name} -> {strategy_name}.{param_name}")
+
+                return {
+                    "strategy": strategy_name,
+                    "parameter": param_name,
+                    "old_value": current_value,
+                    "new_value": new_value,
+                    "reason": reason,
+                    "source": "rule",
+                    "rule_name": rule.name,
+                }
+
+            except Exception as e:
+                logger.warning(f"[진화] 규칙 체크 오류 ({rule.name}): {e}")
 
         return None
+
+    def _resolve_param_targets(self, param_pattern: str) -> List[Tuple[str, str]]:
+        """파라미터 패턴 해석: "*.min_score" -> [(strategy1, min_score), ...]"""
+        if "." in param_pattern:
+            prefix, param = param_pattern.split(".", 1)
+        else:
+            return []
+
+        targets = []
+        if prefix == "*":
+            # 모든 전략에서 찾기
+            for name, strategy in self._strategies.items():
+                if hasattr(strategy, 'config') and hasattr(strategy.config, param):
+                    targets.append((name, param))
+            # 컴포넌트에서도 찾기
+            for name in self._components:
+                config_obj = self._get_component_config(name)
+                if config_obj and hasattr(config_obj, param):
+                    targets.append((name, param))
+        else:
+            # 특정 컴포넌트/전략
+            if prefix in self._strategies:
+                strategy = self._strategies[prefix]
+                if hasattr(strategy, 'config') and hasattr(strategy.config, param):
+                    targets.append((prefix, param))
+            elif prefix in self._components:
+                config_obj = self._get_component_config(prefix)
+                if config_obj and hasattr(config_obj, param):
+                    targets.append((prefix, param))
+
+        return targets
+
+    # ============================================================
+    # LLM 보조 분석 (선택적)
+    # ============================================================
+
+    async def _get_llm_suggestion(self, review: ReviewResult, days: int) -> Optional[Dict]:
+        """LLM에게 파라미터 조정 제안 받기 (실패해도 무방)"""
+        if not self.strategist:
+            return None
+
+        try:
+            advice = await self.strategist.analyze_and_advise(days)
+            if not advice or not advice.parameter_adjustments:
+                return None
+
+            # 신뢰도 높은 첫 번째 제안만 사용
+            for adj in advice.parameter_adjustments:
+                if adj.confidence < 0.6:
+                    continue
+
+                # 파라미터 키 찾기
+                param_key = adj.parameter
+                if "." in param_key:
+                    strategy_name, param_name = param_key.split(".", 1)
+                else:
+                    # 전체 검색
+                    found = False
+                    for name in list(self._strategies.keys()) + list(self._components.keys()):
+                        targets = self._resolve_param_targets(f"{name}.{param_key}")
+                        if targets:
+                            strategy_name, param_name = targets[0]
+                            found = True
+                            break
+                    if not found:
+                        continue
+
+                current = self._get_param_value(strategy_name, param_name)
+                if current is None:
+                    continue
+
+                new_value = self._clamp_value(param_name, adj.suggested_value, current)
+
+                if new_value == current:
+                    continue
+
+                return {
+                    "strategy": strategy_name,
+                    "parameter": param_name,
+                    "old_value": current,
+                    "new_value": new_value,
+                    "reason": adj.reason,
+                    "source": "llm",
+                }
+
+        except Exception as e:
+            logger.warning(f"[진화] LLM 분석 실패 (무시): {e}")
+
+        return None
+
+    # ============================================================
+    # 파라미터 적용
+    # ============================================================
+
+    def _apply_change(self, change_dict: Dict, review: ReviewResult):
+        """변경 적용"""
+        strategy_name = change_dict["strategy"]
+        param_name = change_dict["parameter"]
+        new_value = change_dict["new_value"]
+
+        # 실제 파라미터 설정
+        self._set_param_value(strategy_name, param_name, new_value)
+
+        # 영속화
+        try:
+            config_mgr = get_evolved_config_manager()
+            config_mgr.save_override(strategy_name, param_name, new_value, source=change_dict.get("source", "rule"))
+        except Exception as e:
+            logger.warning(f"[진화] 영속화 실패 (런타임 변경은 유지): {e}")
+
+        # 활성 변경으로 등록
+        change = ParameterChange(
+            timestamp=datetime.now().isoformat(),
+            strategy=strategy_name,
+            parameter=param_name,
+            old_value=change_dict["old_value"],
+            new_value=new_value,
+            reason=change_dict["reason"],
+            source=change_dict.get("source", "rule"),
+            win_rate_before=review.win_rate,
+            profit_factor_before=review.profit_factor,
+            trades_before=review.total_trades,
+            applied_date=date.today().isoformat(),
+        )
+
+        self.state.active_change = change
+        self.state.total_applied += 1
+        self.state.version += 1
+
+        logger.info(
+            f"[진화] 변경 적용: {strategy_name}.{param_name} "
+            f"= {change_dict['old_value']} -> {new_value} "
+            f"(사유: {change_dict['reason']})"
+        )
+
+    # ============================================================
+    # 파라미터 값 읽기/쓰기
+    # ============================================================
+
+    def _get_param_value(self, strategy_name: str, param_name: str) -> Optional[Any]:
+        """파라미터 현재 값 조회"""
+        if strategy_name in self._strategies:
+            strategy = self._strategies[strategy_name]
+            if hasattr(strategy, 'config') and hasattr(strategy.config, param_name):
+                return getattr(strategy.config, param_name)
+
+        if strategy_name in self._components:
+            config_obj = self._get_component_config(strategy_name)
+            if config_obj and hasattr(config_obj, param_name):
+                return getattr(config_obj, param_name)
+
+        return None
+
+    def _set_param_value(self, strategy_name: str, param_name: str, value: Any) -> bool:
+        """파라미터 값 설정"""
+        if strategy_name in self._strategies:
+            strategy = self._strategies[strategy_name]
+            if hasattr(strategy, 'config') and hasattr(strategy.config, param_name):
+                setattr(strategy.config, param_name, value)
+                return True
+
+        if strategy_name in self._components:
+            config_obj = self._get_component_config(strategy_name)
+            if config_obj and hasattr(config_obj, param_name):
+                setattr(config_obj, param_name, value)
+                return True
+
+        return False
 
     def _get_component_config(self, comp_name: str) -> Any:
         """컴포넌트의 config 객체 반환"""
@@ -426,368 +724,66 @@ class StrategyEvolver:
             return component
         return getattr(component, config_attr, None)
 
-    def _apply_parameter_change(
-        self,
-        param_key: str,
-        old_value: Any,
-        new_value: Any,
-        reason: str,
-        current_review: ReviewResult,
-    ) -> bool:
-        """파라미터 변경 적용"""
+    def _clamp_value(self, param_name: str, new_value: Any, current_value: Any) -> Any:
+        """파라미터 범위 제한"""
+        if param_name not in self._param_bounds:
+            return new_value
+        min_val, max_val = self._param_bounds[param_name]
         try:
-            strategy_name, param_name = param_key.split(".", 1)
+            clamped = type(current_value)(max(min_val, min(max_val, float(new_value))))
+            return clamped
+        except (ValueError, TypeError):
+            return current_value
 
-            # bounds 검증 (극단값 방지)
-            if param_name in self._param_bounds:
-                min_val, max_val = self._param_bounds[param_name]
-                try:
-                    clamped = type(old_value)(max(min_val, min(max_val, float(new_value))))
-                    if clamped != new_value:
-                        logger.warning(
-                            f"[진화] 파라미터 범위 보정: {param_key} "
-                            f"{new_value} → {clamped} (범위: {min_val}~{max_val})"
-                        )
-                        new_value = clamped
-                except (ValueError, TypeError):
-                    logger.error(f"[진화] 파라미터 타입 오류: {param_key} = {new_value}")
-                    return False
-
-            # setter 함수가 있으면 사용
-            if param_key in self._param_setters:
-                self._param_setters[param_key](new_value)
-            # 전략 config 직접 수정
-            elif strategy_name in self._strategies:
-                strategy = self._strategies[strategy_name]
-                if hasattr(strategy, 'config') and hasattr(strategy.config, param_name):
-                    setattr(strategy.config, param_name, new_value)
-                else:
-                    return False
-            # 컴포넌트 config 수정
-            elif strategy_name in self._components:
-                config_obj = self._get_component_config(strategy_name)
-                if config_obj and hasattr(config_obj, param_name):
-                    setattr(config_obj, param_name, new_value)
-                else:
-                    return False
-            else:
-                return False
-
-            # 변경 기록 (복합 지표 포함)
-            profit_factor = getattr(current_review, 'profit_factor', 0.0)
-            avg_pnl_pct = getattr(current_review, 'avg_pnl_pct', 0.0)
-            change = ParameterChange(
-                timestamp=datetime.now(),
-                strategy=strategy_name,
-                parameter=param_name,
-                old_value=old_value,
-                new_value=new_value,
-                reason=reason,
-                source="llm",
-                trades_before=current_review.total_trades,
-                win_rate_before=current_review.win_rate,
-                profit_factor_before=profit_factor,
-                avg_daily_return_before=avg_pnl_pct,
-            )
-
-            self.state.active_changes.append(change)
-            self.state.change_history.append(change)
-
-            logger.info(
-                f"[진화] 파라미터 변경: {param_key} = {old_value} -> {new_value} "
-                f"(사유: {reason})"
-            )
-
-            # 영속화: evolved_overrides.yml에 저장
-            try:
-                config_mgr = get_evolved_config_manager()
-                config_mgr.save_override(strategy_name, param_name, new_value)
-            except Exception as pe:
-                logger.warning(f"[진화] 영속화 실패 (런타임 변경은 유지): {pe}")
-
-            return True
-
-        except Exception as e:
-            logger.error(f"[진화] 파라미터 변경 실패: {param_key} - {e}")
-            return False
-
-    def _calculate_composite_score(
-        self,
-        change: 'ParameterChange',
-        strategy_trades: List,
-    ) -> float:
-        """
-        복합 평가 점수 계산
-
-        가중치:
-        - 승률 변화: 30%
-        - 손익비 변화: 30%
-        - 일평균 수익률: 25%
-        - 연속 손실 감소: 15%
-
-        Returns:
-            복합 점수 (-100 ~ +100)
-        """
-        # 승률 변화 (30%)
-        win_rate_diff = change.win_rate_after - change.win_rate_before
-        win_rate_score = min(max(win_rate_diff * 5, -100), 100)  # ±20%p → ±100
-
-        # 손익비 변화 (30%)
-        pf_diff = change.profit_factor_after - change.profit_factor_before
-        pf_score = min(max(pf_diff * 50, -100), 100)  # ±2.0 → ±100
-
-        # 일평균 수익률 변화 (25%)
-        daily_diff = change.avg_daily_return_after - change.avg_daily_return_before
-        daily_score = min(max(daily_diff * 100, -100), 100)  # ±1%p → ±100
-
-        # 연속 손실 (15%) — 현재 거래에서 연속 손실 추정
-        max_consecutive_losses = 0
-        current_streak = 0
-        for trade in strategy_trades:
-            if not trade.is_win:
-                current_streak += 1
-                max_consecutive_losses = max(max_consecutive_losses, current_streak)
-            else:
-                current_streak = 0
-
-        # 연속 손실 3회 이하면 +, 5회 이상이면 -
-        loss_score = max(-100, min(100, (3 - max_consecutive_losses) * 33))
-
-        composite = (
-            win_rate_score * 0.30 +
-            pf_score * 0.30 +
-            daily_score * 0.25 +
-            loss_score * 0.15
-        )
-
-        return round(composite, 1)
-
-    async def evaluate_changes(self) -> Dict:
-        """
-        변경 효과 평가 (복합 점수 기반)
-
-        적용된 변경 사항들의 효과를 평가하고,
-        비효율적인 변경은 롤백합니다.
-
-        복합 점수 기준:
-        - > +10: 효과적 (유지)
-        - <= -20: 자동 롤백
-        - 그 사이: 비효율적 (제거, 유지하지 않음)
-
-        Returns:
-            Dict with 'effectiveness', 'should_rollback', 'results' keys
-            (버그 수정: 호출자 bot_schedulers.py가 .get() 사용하므로 Dict 반환)
-        """
-        results = []
-        has_rollback = False
-
-        for change in self.state.active_changes[:]:  # 복사본으로 순회
-            # 평가 기간 체크
-            days_since = (datetime.now() - change.timestamp).days
-            if days_since < self.evaluation_period_days:
-                continue
-
-            # 현재 성과 조회
-            strategy_trades = self.journal.get_trades_by_strategy(
-                change.strategy,
-                days=self.evaluation_period_days
-            )
-
-            if len(strategy_trades) < self.min_trades_for_evaluation:
-                logger.debug(f"[진화] {change.parameter} 평가 대기 중 (거래 부족)")
-                continue
-
-            # 승률 계산
-            wins = len([t for t in strategy_trades if t.is_win])
-            current_win_rate = wins / len(strategy_trades) * 100 if strategy_trades else 0
-
-            # 손익비 계산
-            total_profit = sum(t.pnl for t in strategy_trades if t.is_win)
-            total_loss = abs(sum(t.pnl for t in strategy_trades if not t.is_win))
-            current_pf = total_profit / total_loss if total_loss > 0 else 2.0
-
-            # 일평균 수익률 계산
-            total_pnl_pct = sum(getattr(t, 'pnl_pct', 0) for t in strategy_trades)
-            current_daily_return = total_pnl_pct / max(days_since, 1)
-
-            # 성과 기록
-            change.trades_after = len(strategy_trades)
-            change.win_rate_after = current_win_rate
-            change.profit_factor_after = current_pf
-            change.avg_daily_return_after = current_daily_return
-
-            # 복합 점수 계산
-            composite = self._calculate_composite_score(change, strategy_trades)
-            change.composite_score = composite
-
-            # 복합 점수 기반 판정
-            if composite > 10:
-                change.is_effective = True
-                self.state.successful_changes += 1
-                result_str = "효과적"
-            elif composite <= -20:
-                change.is_effective = False
-                await self._rollback_change(change)
-                result_str = "롤백됨"
-                has_rollback = True
-            else:
-                change.is_effective = False
-                result_str = "비효율적"
-
-            # 결과 기록
-            result = {
-                "parameter": f"{change.strategy}.{change.parameter}",
-                "old_value": change.old_value,
-                "new_value": change.new_value,
-                "win_rate_before": change.win_rate_before,
-                "win_rate_after": current_win_rate,
-                "profit_factor_before": change.profit_factor_before,
-                "profit_factor_after": current_pf,
-                "avg_daily_return_after": current_daily_return,
-                "composite_score": composite,
-                "result": result_str,
-            }
-            results.append(result)
-
-            logger.info(
-                f"[진화] 변경 평가: {change.parameter} -> {result_str} "
-                f"(복합={composite:+.1f}, 승률 {change.win_rate_before:.1f}→{current_win_rate:.1f}%, "
-                f"PF {change.profit_factor_before:.2f}→{current_pf:.2f})"
-            )
-
-            # 평가 완료된 항목 제거
-            if change in self.state.active_changes:
-                self.state.active_changes.remove(change)
-
-        self._save_state()
-
-        # 호출자 호환 Dict 반환 (버그 수정: bot_schedulers.py가 .get() 사용)
-        if not results:
-            return {}
-
-        effective_count = sum(1 for r in results if r["result"] == "효과적")
-        total_count = len(results)
-        if effective_count == total_count:
-            effectiveness = "good"
-        elif effective_count > 0:
-            effectiveness = "mixed"
-        else:
-            effectiveness = "poor"
-
-        return {
-            "results": results,
-            "effectiveness": effectiveness,
-            "should_rollback": has_rollback,
-            "evaluated_count": total_count,
-            "effective_count": effective_count,
-        }
-
-    async def _rollback_change(self, change: ParameterChange):
-        """변경 롤백"""
-        try:
-            param_key = f"{change.strategy}.{change.parameter}"
-
-            # 원래 값으로 복원
-            rolled_back = False
-            if param_key in self._param_setters:
-                self._param_setters[param_key](change.old_value)
-                rolled_back = True
-            elif change.strategy in self._strategies:
-                strategy = self._strategies[change.strategy]
-                if hasattr(strategy, 'config') and hasattr(strategy.config, change.parameter):
-                    setattr(strategy.config, change.parameter, change.old_value)
-                    rolled_back = True
-            elif change.strategy in self._components:
-                config_obj = self._get_component_config(change.strategy)
-                if config_obj and hasattr(config_obj, change.parameter):
-                    setattr(config_obj, change.parameter, change.old_value)
-                    rolled_back = True
-
-            if not rolled_back:
-                logger.warning(f"[진화] 롤백 대상 없음: {param_key} (setter/config 미등록)")
-                return
-
-            self.state.rolled_back_changes += 1
-
-            # 영속화에서 제거
-            try:
-                config_mgr = get_evolved_config_manager()
-                config_mgr.remove_override(change.strategy, change.parameter)
-            except Exception as pe:
-                logger.warning(f"[진화] 영속화 롤백 실패: {pe}")
-
-            # 롤백 기록
-            rollback_record = ParameterChange(
-                timestamp=datetime.now(),
-                strategy=change.strategy,
-                parameter=change.parameter,
-                old_value=change.new_value,
-                new_value=change.old_value,
-                reason=f"자동 롤백 (승률 {change.win_rate_after:.1f}% < {change.win_rate_before:.1f}%)",
-                source="rollback",
-            )
-            self.state.change_history.append(rollback_record)
-
-            logger.warning(
-                f"[진화] 롤백: {param_key} = {change.new_value} -> {change.old_value}"
-            )
-
-        except Exception as e:
-            logger.error(f"[진화] 롤백 실패: {change.parameter} - {e}")
-
-    def _log_advice(self, advice: StrategyAdvice):
-        """조언 로깅"""
-        # 조언 파일 저장
-        advice_file = self.storage_dir / f"advice_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-
-        with open(advice_file, "w", encoding="utf-8") as f:
-            json.dump(advice.to_dict(), f, ensure_ascii=False, indent=2)
-
-        # 핵심 인사이트 로깅
-        logger.info(f"[진화] 전체 평가: {advice.overall_assessment}")
-        for insight in advice.key_insights[:5]:
-            logger.info(f"  - {insight}")
-
-        if advice.avoid_situations:
-            logger.info("[진화] 피해야 할 상황:")
-            for situation in advice.avoid_situations[:3]:
-                logger.info(f"  - {situation}")
+    # ============================================================
+    # 외부 인터페이스 (하위 호환)
+    # ============================================================
 
     def get_evolution_summary(self) -> Dict:
         """진화 요약"""
+        total_decided = self.state.total_kept + self.state.total_rolled_back
         return {
             "version": self.state.version,
-            "total_evolutions": self.state.total_evolutions,
-            "last_evolution": self.state.last_evolution.isoformat() if self.state.last_evolution else None,
-            "active_changes": len(self.state.active_changes),
-            "successful_changes": self.state.successful_changes,
-            "rolled_back_changes": self.state.rolled_back_changes,
+            "total_evolutions": self.state.total_applied,
+            "last_evolution": self.state.active_change.timestamp if self.state.active_change else (
+                self.state.history[-1].timestamp if self.state.history else None
+            ),
+            "active_changes": 1 if self.state.active_change else 0,
+            "successful_changes": self.state.total_kept,
+            "rolled_back_changes": self.state.total_rolled_back,
             "success_rate": (
-                self.state.successful_changes /
-                (self.state.successful_changes + self.state.rolled_back_changes) * 100
-                if (self.state.successful_changes + self.state.rolled_back_changes) > 0
-                else 0
+                self.state.total_kept / total_decided * 100
+                if total_decided > 0 else 0
             ),
         }
 
-    def get_evolution_state(self) -> Optional[EvolutionState]:
-        """현재 진화 상태 반환"""
+    def get_evolution_state(self) -> Optional['EvolutionState']:
+        """현재 진화 상태 반환 (대시보드 호환)"""
         return self.state
+
+    async def evaluate_changes(self) -> Dict:
+        """변경 효과 평가 (스케줄러 호환)"""
+        if not self.state.active_change:
+            return {}
+        review = self.reviewer.review_period(7)
+        result = self._evaluate_active_change(review)
+        if result == "rollback":
+            self._rollback_active_change()
+            self._save_state()
+            return {"effectiveness": "poor", "should_rollback": True}
+        elif result == "keep":
+            self._finalize_active_change(review)
+            self._save_state()
+            return {"effectiveness": "good", "should_rollback": False}
+        return {"effectiveness": "pending", "should_rollback": False}
 
     async def rollback_last_change(self) -> bool:
         """마지막 변경 롤백"""
-        if not self.state.active_changes:
-            logger.warning("[진화] 롤백할 활성 변경 사항 없음")
+        if not self.state.active_change:
+            logger.warning("[진화] 롤백할 활성 변경 없음")
             return False
-
-        # 가장 최근 변경 롤백
-        last_change = self.state.active_changes[-1]
-        await self._rollback_change(last_change)
-
-        # 활성 변경에서 제거
-        self.state.active_changes.remove(last_change)
+        self._rollback_active_change()
         self._save_state()
-
         return True
 
     async def manual_adjust(
@@ -798,38 +794,23 @@ class StrategyEvolver:
         reason: str = "수동 조정",
     ) -> bool:
         """수동 파라미터 조정"""
-        param_key = f"{strategy}.{parameter}"
+        current = self._get_param_value(strategy, parameter)
+        review = self.reviewer.review_period(7)
 
-        # 현재 값 가져오기
-        old_value = None
-        if strategy in self._strategies:
-            strat = self._strategies[strategy]
-            if hasattr(strat, 'config') and hasattr(strat.config, parameter):
-                old_value = getattr(strat.config, parameter)
-
-        # 현재 성과
-        current_review = self.reviewer.review_period(7)
-
-        # 적용
-        success = self._apply_parameter_change(
-            param_key,
-            old_value,
-            new_value,
-            reason,
-            current_review,
-        )
-
-        if success:
-            # 소스를 manual로 변경
-            if self.state.active_changes:
-                self.state.active_changes[-1].source = "manual"
-
-            self._save_state()
-
-        return success
+        change_dict = {
+            "strategy": strategy,
+            "parameter": parameter,
+            "old_value": current,
+            "new_value": new_value,
+            "reason": reason,
+            "source": "manual",
+        }
+        self._apply_change(change_dict, review)
+        self._save_state()
+        return True
 
 
-# 싱글톤 인스턴스
+# 싱글톤
 _strategy_evolver: Optional[StrategyEvolver] = None
 
 

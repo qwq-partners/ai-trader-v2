@@ -273,6 +273,7 @@ class Portfolio:
     # 일일 통계
     daily_pnl: Decimal = Decimal("0")
     daily_trades: int = 0
+    daily_start_unrealized_pnl: Decimal = Decimal("0")  # 당일 시작 시점 미실현 손익
 
     @property
     def total_position_value(self) -> Decimal:
@@ -303,8 +304,12 @@ class Portfolio:
 
     @property
     def effective_daily_pnl(self) -> Decimal:
-        """실효 일일 손익 (실현 + 미실현)"""
-        return self.daily_pnl + self.total_unrealized_pnl
+        """실효 일일 손익 (실현 + 금일 미실현 변동분)
+
+        전일부터 보유 중인 포지션의 미실현 손익 중 '오늘 발생한 변동분'만 반영합니다.
+        daily_start_unrealized_pnl은 장 시작 시 reset_daily()에서 세팅됩니다.
+        """
+        return self.daily_pnl + (self.total_unrealized_pnl - self.daily_start_unrealized_pnl)
 
     @property
     def cash_ratio(self) -> float:
@@ -463,6 +468,8 @@ class RiskConfig:
     min_cash_reserve_pct: float = 15.0 # 최소 현금 예비 (안전마진)
     min_position_value: int = 500000   # 최소 포지션 금액 (50만원 — 이하면 매수 안 함)
     dynamic_max_positions: bool = True # 자산 규모에 따라 max_positions 동적 조정
+    flex_extra_positions: int = 2            # 여유자금 시 추가 허용 슬롯 수 (0=비활성화)
+    flex_cash_threshold_pct: float = 10.0    # 가용현금이 총자산의 N% 이상이면 슬롯 추가
 
     # 손절/익절
     default_stop_loss_pct: float = 2.5

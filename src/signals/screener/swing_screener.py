@@ -448,6 +448,11 @@ class SwingScreener:
         z_foreign = zscore_list(all_foreign)
         z_inst = zscore_list(all_inst)
 
+        # 수급 데이터 전무(std≈0) 시 z-score 전부 0 → LCI=None으로 설정하여 폴백 경로 활성화
+        all_zero = all(z == 0.0 for z in z_foreign) and all(z == 0.0 for z in z_inst)
         for i, c in enumerate(candidates):
-            lci = 0.5 * z_foreign[i] + 0.5 * z_inst[i]
-            c.indicators["lci"] = round(lci, 3)
+            if all_zero:
+                c.indicators["lci"] = None
+            else:
+                lci = 0.5 * z_foreign[i] + 0.5 * z_inst[i]
+                c.indicators["lci"] = round(lci, 3)

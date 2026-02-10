@@ -95,6 +95,19 @@ class MomentumBreakoutStrategy(BaseStrategy):
         for s in expired:
             del self._breakout_candidates[s]
 
+        # 만료된 손절 페널티 정리 (메모리 누수 방지)
+        now = datetime.now()
+        expired_stops = [s for s, t in self._recently_stopped.items()
+                         if (now - t).total_seconds() >= self._stop_penalty]
+        for s in expired_stops:
+            del self._recently_stopped[s]
+
+        # 만료된 신호 쿨다운 정리 (메모리 누수 방지)
+        expired_signals = [s for s, t in self._last_signal_time.items()
+                           if (now - t).total_seconds() >= self._signal_cooldown]
+        for s in expired_signals:
+            del self._last_signal_time[s]
+
         indicators = self.get_indicators(symbol)
 
         if not indicators:
@@ -141,9 +154,9 @@ class MomentumBreakoutStrategy(BaseStrategy):
         if price < self.config.min_price:
             return None
 
-        # 변동성 필터: 고변동성 종목 진입 제한 (승률 개선)
+        # 변동성 필터: 고변동성 종목 진입 제한 (변경: 8%->6%, 승률 개선)
         volatility = indicators.get("volatility", 0)
-        if volatility > 8.0:
+        if volatility > 6.0:  # 변경: 8%->6% 강화
             logger.debug(f"[Momentum] {symbol} 변동성 과다 ({volatility:.1f}%) - 진입 제한")
             return None
 
@@ -166,9 +179,9 @@ class MomentumBreakoutStrategy(BaseStrategy):
         if vol_ratio < self.momentum_config.volume_surge_ratio:
             return None
 
-        # 모멘텀 점수 계산 (최소 점수 70: 신호 품질 강화)
+        # 모멘텀 점수 계산 (설정값 사용, 하드코딩 제거)
         score = self.calculate_score(symbol)
-        effective_min_score = max(self.config.min_score, 70.0)  # 최소 70점 (승률 개선)
+        effective_min_score = self.config.min_score
         if score < effective_min_score:
             return None
 
@@ -235,31 +248,32 @@ class MomentumBreakoutStrategy(BaseStrategy):
         change_20d = indicators.get("change_20d", 0)
 
         price_score = 0.0
-        # 당일 모멘텀 (강도에 따라 차등, +1% 미만은 점수 없음 — 승률 개선)
+        # 당일 모멘텀 (변경: +2% 미만 점수 0, 기준 상향으로 신호 품질 강화)
         if change_1d >= 5:
             price_score += 15  # 강한 상승 (5%+)
         elif change_1d >= 3:
-            price_score += 12  # 중간 상승 (3~5%)
-        elif change_1d >= 1:
-            price_score += 7   # 적당한 상승 (1~3%)
-        # change_1d < 1%: 점수 0 (약한 상승 필터링 — 승률 개선)
+            price_score += 10  # 중간 상승 (3~5%) - 12->10
+        elif change_1d >= 2:
+            price_score += 5   # 적당한 상승 (2~3%) - 변경: 1%->2%, 7->5점
+        # change_1d < 2%: 점수 0 (변경: 최소 기준 1%->2% 상향)
 
-        # 5일 모멘텀 (최소 +2% 이상 — 약한 추세 필터링)
-        if change_5d >= 5:
+        # 5일 모멘텀 (변경: +3% 이상 필수, 추세 확인 강화)
+        if change_5d >= 7:
             price_score += 13
-        elif change_5d >= 2:
-            price_score += 8
-        # 20일 모멘텀 (최소 +3% 이상 — 약한 추세 필터링)
+        elif change_5d >= 3:
+            price_score += 7   # 변경: 2%->3%, 8->7점
+        # change_5d < 3%: 점수 0 (변경: 기존 2%->3% 최소)
+        # 20일 모멘텀 (변경: +5% 이상 필수, 장기 추세 확인)
         if change_20d >= 10:
             price_score += 12
-        elif change_20d >= 3:
-            price_score += 7
+        elif change_20d >= 5:
+            price_score += 6   # 변경: 3%->5%, 7->6점
 
         score += min(price_score, cfg.weight_price_momentum)
 
-        # 2. 거래량 모멘텀 (30점)
+        # 2. 거래량 모멘텀 (30점) - 변경: x10->x5, 거래량만으로 높은 점수 방지
         vol_ratio = indicators.get("vol_ratio", 0)
-        volume_score = min(vol_ratio * 10, cfg.weight_volume_momentum)
+        volume_score = min(vol_ratio * 5, cfg.weight_volume_momentum)  # 변경: 2배=10점, 3배=15점
         score += volume_score
 
         # 3. 신고가 근접도 (20점)

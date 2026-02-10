@@ -27,13 +27,13 @@ def setup_api_routes(app: web.Application, data_collector):
     app.router.add_get("/api/us-market", handler.get_us_market)
     app.router.add_get("/api/evolution", handler.get_evolution)
     app.router.add_get("/api/evolution/history", handler.get_evolution_history)
-    app.router.add_get("/api/code-evolution", handler.get_code_evolution)
     app.router.add_get("/api/health", handler.get_system_health)
     app.router.add_get("/api/premarket", handler.get_premarket)
     app.router.add_get("/api/events", handler.get_events)
     app.router.add_get("/api/orders/pending", handler.get_pending_orders)
     app.router.add_get("/api/orders/history", handler.get_order_history)
     app.router.add_get("/api/equity-curve", handler.get_equity_curve)
+    app.router.add_get("/api/health-checks", handler.get_health_checks)
     app.router.add_post("/api/evolution/apply", handler.apply_evolution_parameter)
 
 
@@ -99,9 +99,6 @@ class APIHandler:
     async def get_evolution_history(self, request: web.Request) -> web.Response:
         return web.json_response(self.dc.get_evolution_history())
 
-    async def get_code_evolution(self, request: web.Request) -> web.Response:
-        return web.json_response(self.dc.get_code_evolution())
-
     async def get_system_health(self, request: web.Request) -> web.Response:
         return web.json_response(self.dc.get_system_health())
 
@@ -128,6 +125,9 @@ class APIHandler:
 
     async def get_order_history(self, request: web.Request) -> web.Response:
         return web.json_response(self.dc.get_order_history())
+
+    async def get_health_checks(self, request: web.Request) -> web.Response:
+        return web.json_response(self.dc.get_health_checks())
 
     async def apply_evolution_parameter(self, request: web.Request) -> web.Response:
         """
@@ -165,19 +165,12 @@ class APIHandler:
             from src.core.evolution.config_persistence import get_evolved_config_manager
 
             config_mgr = get_evolved_config_manager()
-            success = await config_mgr.apply_parameter_change(
-                strategy=strategy,
-                parameter=parameter,
-                new_value=new_value,
-                reason=reason,
+            config_mgr.save_override(
+                component=strategy,
+                param=parameter,
+                value=new_value,
                 source="dashboard",
             )
-
-            if not success:
-                return web.json_response(
-                    {"success": False, "message": "파라미터 적용 실패"},
-                    status=500,
-                )
 
             logger.info(
                 f"[대시보드] 파라미터 반영: {strategy}.{parameter} = {new_value} "

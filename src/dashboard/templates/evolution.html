@@ -198,29 +198,6 @@
             margin: 8px 0; padding-left: 12px; border-left: 2px solid rgba(52,211,153,0.2);
         }
 
-        /* Error pattern item */
-        .error-item {
-            padding: 10px 14px; border-left: 3px solid var(--accent-red);
-            background: rgba(248,113,113,0.04); border-radius: 0 8px 8px 0;
-            margin-bottom: 8px; font-size: 0.82rem; line-height: 1.6;
-            display: flex; justify-content: space-between; align-items: center;
-        }
-        .error-count {
-            font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;
-            color: var(--accent-red); font-weight: 700;
-            background: rgba(248,113,113,0.15); padding: 2px 8px; border-radius: 4px;
-        }
-
-        /* Code evolution item */
-        .code-evo-item {
-            padding: 12px 14px; border: 1px solid var(--border-subtle);
-            background: rgba(99,102,241,0.02); border-radius: 8px;
-            margin-bottom: 10px; transition: all 0.2s;
-        }
-        .code-evo-item:hover { background: rgba(99,102,241,0.04); border-color: rgba(99,102,241,0.2); }
-        .code-evo-status { font-size: 0.65rem; font-weight: 700; padding: 2px 8px; border-radius: 4px; text-transform: uppercase; }
-        .code-evo-status.success { background: rgba(52,211,153,0.15); color: var(--accent-green); }
-        .code-evo-status.failed { background: rgba(248,113,113,0.15); color: var(--accent-red); }
         .btn-apply {
             padding: 6px 16px; border-radius: 8px; font-size: 0.78rem; font-weight: 600;
             color: #fff; background: linear-gradient(135deg, var(--accent-green), #10b981);
@@ -339,56 +316,6 @@
             </div>
             <div id="evo-insights">
                 <div style="padding: 20px 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">데이터 없음</div>
-            </div>
-        </div>
-
-        <!-- Error Patterns + Code Evolution History -->
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
-
-            <!-- Error Patterns Card -->
-            <div class="card animate-in delay-3" style="padding: 24px;">
-                <div class="card-header">
-                    <span class="dot" style="background: var(--accent-red); box-shadow: 0 0 8px var(--accent-red);"></span>
-                    반복 발생 에러 (최근 3일)
-                </div>
-                <div id="error-patterns">
-                    <div style="padding: 20px 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">에러 없음</div>
-                </div>
-            </div>
-
-            <!-- Code Evolution Summary Card -->
-            <div class="card animate-in delay-3" style="padding: 24px;">
-                <div class="card-header">
-                    <span class="dot" style="background: var(--accent-purple); box-shadow: 0 0 8px var(--accent-purple);"></span>
-                    코드 자동 진화 요약
-                </div>
-                <div class="metric-row">
-                    <span class="metric-label">총 실행</span>
-                    <span id="code-evo-total" class="metric-value">0</span>
-                </div>
-                <div class="metric-row">
-                    <span class="metric-label">성공</span>
-                    <span id="code-evo-success" class="metric-value text-profit">0</span>
-                </div>
-                <div class="metric-row">
-                    <span class="metric-label">실패</span>
-                    <span id="code-evo-failed" class="metric-value text-loss">0</span>
-                </div>
-                <div class="metric-row">
-                    <span class="metric-label">자동 머지</span>
-                    <span id="code-evo-merged" class="metric-value">0</span>
-                </div>
-            </div>
-        </div>
-
-        <!-- Code Evolution History -->
-        <div class="card animate-in delay-4" style="padding: 24px; margin-bottom: 16px;">
-            <div class="card-header">
-                <span class="dot" style="background: var(--accent-purple); box-shadow: 0 0 8px var(--accent-purple);"></span>
-                코드 진화 실행 이력 (최근 5개)
-            </div>
-            <div id="code-evo-history">
-                <div style="padding: 20px 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">이력 없음</div>
             </div>
         </div>
 

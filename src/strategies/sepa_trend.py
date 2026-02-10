@@ -37,8 +37,8 @@ class SEPATrendStrategy(BaseStrategy):
             config = StrategyConfig(
                 name="SEPATrend",
                 strategy_type=StrategyType.SEPA_TREND,
-                stop_loss_pct=5.0,
-                take_profit_pct=15.0,
+                stop_loss_pct=3.5,      # 변경: 5%->3.5% (손절 축소, 손익비 개선)
+                take_profit_pct=8.0,     # 변경: 15%->8% (현실적 익절 목표)
                 min_score=70.0,
             )
         super().__init__(config)
@@ -77,11 +77,11 @@ class SEPATrendStrategy(BaseStrategy):
                 if score < self.config.min_score:
                     continue
 
-                # ATR 기반 동적 손절/익절 (R:R 1:2 보장)
+                # ATR 기반 동적 손절/익절 (변경: 손절 축소, 익절 현실화)
                 atr = candidate.indicators.get("atr_14")
                 if atr and atr > 0:
-                    stop_pct = max(3.0, min(7.0, atr * 2.0))
-                    target_pct = max(5.0, min(15.0, atr * 4.0))
+                    stop_pct = max(2.5, min(5.0, atr * 1.5))   # 변경: 3~7%->2.5~5%, x2->x1.5
+                    target_pct = max(3.0, min(8.0, atr * 3.0))  # 변경: 5~15%->3~8%, x4->x3
                     candidate.stop_price = candidate.entry_price * Decimal(str(1 - stop_pct / 100))
                     candidate.target_price = candidate.entry_price * Decimal(str(1 + target_pct / 100))
 
@@ -130,7 +130,7 @@ class SEPATrendStrategy(BaseStrategy):
         SEPA 트렌드 점수 계산 (0-100)
 
         - 기술적 (SEPA, MA정렬, 52w위치, MRS, MA5>MA20): 40점
-        - 수급 LCI z-score 기반: 30점
+        - 수급 LCI z-score 기반: 20점 (변경: 30->20, 기술적 조건과 균형)
         - 재무 (PER/PBR/ROE): 20점
         - 섹터 모멘텀: 10점
         """
@@ -179,26 +179,26 @@ class SEPATrendStrategy(BaseStrategy):
         if ind.get("ma5_above_ma20", False):
             score += 3
 
-        # 2. 수급 LCI z-score 기반 (30점)
+        # 2. 수급 LCI z-score 기반 (20점) - 변경: 30->20, 수급만으로 신호 생성 방지
         lci = ind.get("lci")
         if lci is not None:
             if lci > 1.5:
-                score += 30
+                score += 20  # 변경: 30->20 (기술적 조건과 균형)
             elif lci > 1.0:
-                score += 22
+                score += 15  # 변경: 22->15
             elif lci > 0.5:
-                score += 15
+                score += 10  # 변경: 15->10
             elif lci > 0:
-                score += 8
+                score += 5   # 변경: 8->5
             # lci <= 0: 0점
         else:
-            # LCI 미계산 시 기존 방식 폴백
+            # LCI 미계산 시 기존 방식 폴백 (변경: 축소)
             foreign_net = ind.get("foreign_net_buy", 0)
             inst_net = ind.get("inst_net_buy", 0)
             if foreign_net > 0:
-                score += 15
+                score += 10  # 변경: 15->10
             if inst_net > 0:
-                score += 15
+                score += 10  # 변경: 15->10
 
         # 3. 재무 (20점)
         per = ind.get("per", 0)

@@ -183,6 +183,9 @@ class TradingBot(SchedulerMixin):
         # 대시보드 서버
         self.dashboard: Optional[DashboardServer] = None
 
+        # 헬스 모니터
+        self.health_monitor = None
+
         # KIS 시장 데이터 조회 클라이언트
         self.kis_market_data: Optional[KISMarketData] = None
 
@@ -475,7 +478,17 @@ class TradingBot(SchedulerMixin):
             if self.engine.portfolio.positions:
                 for symbol, position in self.engine.portfolio.positions.items():
                     price_history = self._get_price_history_for_atr(symbol)
-                    self.exit_manager.register_position(position, price_history=price_history)
+                    # 전략별 청산 파라미터 조회 (재시작 시 기존 포지션에 전략 ExitConfig 반영)
+                    exit_params = self._strategy_exit_params.get(position.strategy, {}) if position.strategy else {}
+                    self.exit_manager.register_position(
+                        position,
+                        price_history=price_history,
+                        stop_loss_pct=exit_params.get("stop_loss_pct"),
+                        trailing_stop_pct=exit_params.get("trailing_stop_pct"),
+                        first_exit_pct=exit_params.get("first_exit_pct"),
+                        second_exit_pct=exit_params.get("second_exit_pct"),
+                        third_exit_pct=exit_params.get("third_exit_pct"),
+                    )
                 logger.info(
                     f"기존 포지션 {len(self.engine.portfolio.positions)}개 ExitManager 등록 완료"
                 )
@@ -576,6 +589,11 @@ class TradingBot(SchedulerMixin):
                 if self.exit_manager:
                     self.exit_manager._max_holding_days = batch_cfg.get("max_holding_days", 10)
                 logger.info("배치 분석기 초기화 완료 (스윙 모멘텀 모드)")
+
+            # 헬스 모니터 초기화
+            from src.monitoring.health_monitor import HealthMonitor
+            self.health_monitor = HealthMonitor(self)
+            logger.info("헬스 모니터 초기화 완료")
 
             # 이벤트 핸들러 등록
             self._register_event_handlers()
@@ -865,14 +883,17 @@ class TradingBot(SchedulerMixin):
             logger.info("[엔진] 자동 재개: 일시정지 타이머 만료")
 
         try:
-            # stale pending 클린업 (3분 이상 체결 미확인 시 해제)
+            # stale pending 클린업 (3분 이상 체결 미확인 시 양쪽 pending 모두 해제)
             if self._exit_pending_timestamps:
                 stale_cutoff = datetime.now() - timedelta(minutes=3)
                 stale = [s for s, t in self._exit_pending_timestamps.items() if t < stale_cutoff]
                 for s in stale:
                     self._exit_pending_symbols.discard(s)
                     self._exit_pending_timestamps.pop(s, None)
-                    logger.warning(f"[청산 pending] {s} 타임아웃 해제 (3분 초과)")
+                    # RiskManager pending도 동기화 해제 (매도 영구 차단 방지)
+                    if self.engine.risk_manager:
+                        await self.engine.risk_manager.clear_pending(s)
+                    logger.warning(f"[청산 pending] {s} 타임아웃 해제 (3분 초과, RiskManager 동기화)")
 
             # 이미 매도 주문이 진행 중이면 중복 방지 (ExitManager + 전략 SELL 양방향)
             if symbol in self._exit_pending_symbols:
@@ -940,6 +961,8 @@ class TradingBot(SchedulerMixin):
                 if self.engine.risk_manager:
                     self.engine.risk_manager._pending_orders.add(symbol)
                     self.engine.risk_manager._pending_timestamps[symbol] = datetime.now()
+                    self.engine.risk_manager._pending_sides[symbol] = OrderSide.SELL
+                    self.engine.risk_manager._pending_quantities[symbol] = quantity
 
                 # 브로커에 주문 제출 (실패 시 최대 2회 재시도)
                 success = False
@@ -1101,6 +1124,9 @@ class TradingBot(SchedulerMixin):
             raise
         except Exception as e:
             logger.exception(f"주문 제출 오류: {e}")
+            if self.engine.risk_manager and order:
+                order_amount = (order.price * order.quantity) if order.price and order.quantity else Decimal("0")
+                await self.engine.risk_manager.clear_pending(order.symbol, order_amount)
 
         return None
 
@@ -1189,6 +1215,27 @@ class TradingBot(SchedulerMixin):
             if self.risk_manager:
                 self.risk_manager.on_fill(event, self.engine.portfolio)
 
+            # 매도 체결 시 연속 손실 추적 (record_trade_result 호출)
+            if fill.side.value.upper() == "SELL" and self.risk_manager:
+                try:
+                    # 체결 시점 PnL 계산 (진입가 기준)
+                    entry_price = Decimal("0")
+                    if self.trade_journal:
+                        open_trades = self.trade_journal.get_open_trades()
+                        matching = [t for t in open_trades if t.symbol == fill.symbol]
+                        if matching:
+                            entry_price = Decimal(str(matching[0].entry_price))
+                    if entry_price <= 0:
+                        # 포지션에서 평균단가 가져오기 (update_position 전이라면 아직 있음)
+                        pos = self.engine.portfolio.positions.get(fill.symbol)
+                        if pos:
+                            entry_price = pos.avg_price
+                    if entry_price > 0:
+                        trade_pnl = (fill.price - entry_price) * fill.quantity
+                        self.risk_manager.record_trade_result(trade_pnl)
+                except Exception as e:
+                    logger.debug(f"거래 결과 기록 실패: {e}")
+
             # 매수 체결 시 종목명 보강 및 캐시
             if fill.side.value.upper() == "BUY":
                 position = self.engine.portfolio.positions.get(fill.symbol)
@@ -1213,10 +1260,18 @@ class TradingBot(SchedulerMixin):
 
             # ExitManager 매도 pending 해제 (체결 확인) + 엔진 RiskManager pending 해제
             if fill.side.value.upper() == "SELL":
-                self._exit_pending_symbols.discard(fill.symbol)
-                self._exit_pending_timestamps.pop(fill.symbol, None)
-                if self.engine.risk_manager:
-                    await self.engine.risk_manager.clear_pending(fill.symbol)
+                # 포지션 완전 종료 시에만 pending 해제 (부분 체결 시 중복 매도 방지)
+                if fill.symbol not in self.engine.portfolio.positions:
+                    self._exit_pending_symbols.discard(fill.symbol)
+                    self._exit_pending_timestamps.pop(fill.symbol, None)
+                    if self.engine.risk_manager:
+                        await self.engine.risk_manager.clear_pending(fill.symbol)
+                    # WebSocket 우선순위 구독 해제 (포지션 종료 종목)
+                    if self.ws_feed and hasattr(self.ws_feed, '_priority_symbols'):
+                        self.ws_feed._priority_symbols.discard(fill.symbol)
+                else:
+                    # 부분 체결: 타임스탬프만 갱신 (stale timeout 리셋)
+                    self._exit_pending_timestamps[fill.symbol] = datetime.now()
 
                 # EXIT 레코드 기록 (진입가/손익/사유)
                 # 포지션은 update_position에서 이미 갱신되었으므로 저널에서 조회
@@ -1296,22 +1351,6 @@ class TradingBot(SchedulerMixin):
                             second_exit_pct=exit_params.get("second_exit_pct"),
                             third_exit_pct=exit_params.get("third_exit_pct"),
                         )
-
-                        # TradeJournal 진입 기록 (진화 기능용)
-                        if self.trade_journal:
-                            try:
-                                self.trade_journal.record_entry(
-                                    symbol=fill.symbol,
-                                    entry_time=fill.timestamp,
-                                    entry_price=float(fill.price),
-                                    quantity=fill.quantity,
-                                    strategy=strategy_name or "unknown",
-                                    reason=getattr(fill, 'reason', '') or "매수체결",
-                                    signal_score=0  # TODO: Order에 score 필드 추가 필요
-                                )
-                                logger.debug(f"[TradeJournal] 진입 기록: {fill.symbol} {strategy_name}")
-                            except Exception as e:
-                                logger.warning(f"[TradeJournal] 진입 기록 실패: {e}")
 
             # 거래 저널 기록 (자가 진화용)
             if self.trade_journal:
@@ -1493,23 +1532,16 @@ class TradingBot(SchedulerMixin):
             if self.strategy_evolver:
                 tasks.append(asyncio.create_task(self._run_evolution_scheduler(), name="evolution_scheduler"))
 
-            # 8. 코드 자동 진화 스케줄러 실행
-            code_evo_cfg = self.config.get("code_evolution") or {}
-            if code_evo_cfg.get("enabled", False):
-                tasks.append(asyncio.create_task(
-                    self._run_code_evolution_scheduler(), name="code_evolution"
-                ))
-
-            # 9. 로그/캐시 정리 스케줄러
+            # 8. 로그/캐시 정리 스케줄러
             tasks.append(asyncio.create_task(self._run_log_cleanup(), name="log_cleanup"))
 
-            # 10-1. 종목 마스터 갱신 스케줄러
+            # 9. 종목 마스터 갱신 스케줄러
             if self.stock_master:
                 tasks.append(asyncio.create_task(
                     self._run_stock_master_refresh(), name="stock_master_refresh"
                 ))
 
-            # 10-2. 일봉 데이터 갱신 스케줄러
+            # 10. 일봉 데이터 갱신 스케줄러
             if self.broker:
                 tasks.append(asyncio.create_task(
                     self._run_daily_candle_refresh(), name="daily_candle_refresh"
@@ -1521,7 +1553,13 @@ class TradingBot(SchedulerMixin):
                     self._run_batch_scheduler(), name="batch_scheduler"
                 ))
 
-            # 10. 대시보드 서버 실행
+            # 11. 헬스 모니터
+            if self.health_monitor:
+                tasks.append(asyncio.create_task(
+                    self._run_health_monitor(), name="health_monitor"
+                ))
+
+            # 12. 대시보드 서버 실행
             dashboard_cfg = self.config.get("dashboard") or {}
             if dashboard_cfg.get("enabled", True):
                 self.dashboard = DashboardServer(
@@ -1743,6 +1781,8 @@ class TradingBot(SchedulerMixin):
         """봇 중지"""
         self.running = False
         self.engine.stop()
+        if hasattr(self, 'ws_feed') and self.ws_feed:
+            self.ws_feed._running = False
 
     async def shutdown(self):
         """종료 처리"""
@@ -1815,6 +1855,25 @@ class TradingBot(SchedulerMixin):
                 logger.info("배치 분석기 종료")
         except Exception as e:
             logger.error(f"배치 분석기 종료 실패: {e}")
+
+        # 미체결 주문 전량 취소 (RiskManager pending + ExitManager pending + 보유 종목 합집합)
+        try:
+            if self.broker and hasattr(self.broker, 'cancel_all_for_symbol'):
+                cancel_targets = set(self.engine.portfolio.positions.keys())
+                if self.engine.risk_manager:
+                    cancel_targets |= set(self.engine.risk_manager._pending_orders)
+                cancel_targets |= self._exit_pending_symbols
+                cancelled_total = 0
+                for sym in cancel_targets:
+                    try:
+                        cnt = await self.broker.cancel_all_for_symbol(sym)
+                        cancelled_total += cnt
+                    except Exception:
+                        pass
+                if cancelled_total > 0:
+                    logger.info(f"미체결 주문 {cancelled_total}건 취소 완료")
+        except Exception as e:
+            logger.error(f"미체결 주문 취소 실패: {e}")
 
         try:
             if self.broker:

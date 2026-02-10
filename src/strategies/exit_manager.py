@@ -3,20 +3,20 @@ AI Trading Bot v2 - 분할 익절/청산 관리자
 
 포지션별로 분할 익절을 관리합니다.
 
-분할 익절 전략 (3단계):
-1. +3.0% 도달 → 30% 익절 (빠른 수익 확보)
-2. +6.0% 도달 → 28% 추가 익절 (중간 목표)
-3. +10.0% 도달 → 21% 추가 익절
-4. 나머지 21% → 트레일링 스탑으로 수익 극대화
+분할 익절 전략 (3단계, 손익비 1:1 이상 확보):
+1. +2.0% 도달 → 40% 익절 (빠른 수익 확보)
+2. +4.0% 도달 → 30% 추가 익절 (중간 목표)
+3. +7.0% 도달 → 15% 추가 익절
+4. 나머지 15% → 트레일링 스탑으로 수익 극대화
 
 트레일링 스탑:
-- 활성화: +3.0% 이상 수익 시
-- 청산: 고점 대비 -2.5% 하락 시
+- 활성화: +2.0% 이상 수익 시
+- 청산: 고점 대비 -1.5% 하락 시
 
-ATR 기반 동적 손절:
-- 변동성 낮음(ATR 1%) → 3.0% 손절
-- 변동성 보통(ATR 2%) → 4.0% 손절
-- 변동성 높음(ATR 3%+) → 6.0% 손절 (상한)
+ATR 기반 동적 손절 (축소하여 손익비 개선):
+- 변동성 낮음(ATR 1%) → 2.0% 손절
+- 변동성 보통(ATR 2%) → 3.0% 손절
+- 변동성 높음(ATR 3%+) → 4.0% 손절 (상한)
 
 수수료 포함 계산으로 실제 순수익 기준 청산
 """
@@ -48,28 +48,28 @@ class ExitConfig:
     # 분할 익절 설정
     enable_partial_exit: bool = True
 
-    # 1차 익절 (30%) — 빠른 수익 확보
-    first_exit_pct: float = 3.0       # 목표 수익률 (%) — 빠른 수익 확정
-    first_exit_ratio: float = 0.30    # 청산 비율 (30%)
+    # 1차 익절 (40%) - 변경: 3%->2%, 30%->40%, 손익비 개선
+    first_exit_pct: float = 2.0       # 목표 수익률 (%) - 조기 수익 확정
+    first_exit_ratio: float = 0.40    # 청산 비율 (40%)
 
-    # 2차 익절 (28% 추가 = 전체 58%)
-    second_exit_pct: float = 6.0      # 목표 수익률 (%)
-    second_exit_ratio: float = 0.40   # 남은 70%의 40% = 전체의 28%
+    # 2차 익절 (30% 추가 = 전체 70%) - 변경: 6%->4%, 비율 조정
+    second_exit_pct: float = 4.0      # 목표 수익률 (%)
+    second_exit_ratio: float = 0.50   # 남은 60%의 50% = 전체의 30%
 
-    # 3차 익절 (21% 추가 = 전체 79%)
-    third_exit_pct: float = 10.0      # 목표 수익률 (%)
-    third_exit_ratio: float = 0.5     # 남은 42%의 50% = 전체의 21%
+    # 3차 익절 (15% 추가 = 전체 85%) - 변경: 10%->7%
+    third_exit_pct: float = 7.0       # 목표 수익률 (%)
+    third_exit_ratio: float = 0.5     # 남은 30%의 50% = 전체의 15%
 
-    # 손절 — ATR 기반 동적 손절
-    stop_loss_pct: float = 4.0        # 기본 손실률 (%) — 손실 크기 축소
+    # 손절 - ATR 기반 동적 손절 (변경: 손절폭 축소하여 손익비 1:1 이상 확보)
+    stop_loss_pct: float = 2.5        # 기본 손실률 (%) - 4%->2.5% 축소
     enable_dynamic_stop: bool = True  # ATR 기반 동적 손절 활성화
-    atr_multiplier: float = 2.0       # ATR 배수
-    min_stop_pct: float = 3.0         # 최소 손절폭 (%)
-    max_stop_pct: float = 6.0         # 최대 손절폭 (%)
+    atr_multiplier: float = 1.5       # ATR 배수 - 2.0->1.5 축소
+    min_stop_pct: float = 2.0         # 최소 손절폭 (%) - 3%->2%
+    max_stop_pct: float = 4.0         # 최대 손절폭 (%) - 6%->4%
 
-    # 트레일링 스탑
-    trailing_stop_pct: float = 2.5    # 고점 대비 하락률 (%)
-    trailing_activate_pct: float = 3.0  # 트레일링 활성화 수익률 (%) — 1차 익절과 동시 활성화
+    # 트레일링 스탑 (변경: 축소하여 수익 보호)
+    trailing_stop_pct: float = 1.5    # 고점 대비 하락률 (%) - 2.5%->1.5%
+    trailing_activate_pct: float = 2.0  # 트레일링 활성화 수익률 (%) - 3%->2%, 1차 익절과 동시
 
     # 수수료 포함 계산
     include_fees: bool = True
@@ -305,9 +305,12 @@ class ExitManager:
 
         # 4. 트레일링 스탑
         if state.breakeven_activated:
-            # ATR 기반 트레일링 폭: 1.5×ATR, 기존 트레일링과 비교하여 작은 값 사용
+            # ATR 기반 트레일링 폭: 1.5×ATR
             atr_trail = (state.atr_pct or 2.0) * 1.5
-            ts_pct_used = min(atr_trail, state.trailing_stop_pct or self.config.trailing_stop_pct)
+            base_trail = state.trailing_stop_pct or self.config.trailing_stop_pct
+            # 경로 A(ATR) 전환 시, 경로 B 트레일링 폭 이상을 보장하여
+            # 전환 시 트레일링이 좁아지지 않도록 함
+            ts_pct_used = max(atr_trail, base_trail)
             trail_from_high = float((current_price - state.highest_price) / state.highest_price * 100)
 
             if trail_from_high <= -ts_pct_used:

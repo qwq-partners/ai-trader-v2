@@ -146,14 +146,16 @@ class TelegramNotifier:
         text: str,
         parse_mode: str = "HTML",
         disable_notification: bool = False,
+        max_retries: int = 2,
     ) -> bool:
         """
-        에러/경고 알림 발송 (alert_chat_id로 전송)
+        에러/경고 알림 발송 (alert_chat_id로 전송, 실패 시 재시도)
 
         Args:
             text: 알림 내용
             parse_mode: 파싱 모드
             disable_notification: 알림 음소거 여부
+            max_retries: 최대 재시도 횟수 (기본 2회, 총 3회 시도)
 
         Returns:
             발송 성공 여부
@@ -174,21 +176,33 @@ class TelegramNotifier:
             "disable_notification": disable_notification,
         }
 
-        try:
-            if not self._session or self._session.closed:
-                self._session = aiohttp.ClientSession()
-            async with self._session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                if resp.status == 200:
-                    logger.debug("텔레그램 알림 발송 성공")
-                    return True
-                else:
-                    data = await resp.json()
-                    logger.error(f"텔레그램 알림 발송 실패: {data}")
-                    return False
+        last_error = None
+        for attempt in range(1 + max_retries):
+            try:
+                if not self._session or self._session.closed:
+                    self._session = aiohttp.ClientSession()
+                async with self._session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status == 200:
+                        if attempt > 0:
+                            logger.info(f"텔레그램 알림 발송 성공 (재시도 {attempt}회차)")
+                        else:
+                            logger.debug("텔레그램 알림 발송 성공")
+                        return True
+                    else:
+                        data = await resp.json()
+                        last_error = f"HTTP {resp.status}: {data}"
+                        logger.warning(f"텔레그램 알림 발송 실패 (시도 {attempt + 1}/{1 + max_retries}): {data}")
 
-        except Exception as e:
-            logger.error(f"텔레그램 알림 발송 오류: {e}")
-            return False
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"텔레그램 알림 발송 오류 (시도 {attempt + 1}/{1 + max_retries}): {e}")
+
+            # 마지막 시도가 아니면 1초 대기 후 재시도
+            if attempt < max_retries:
+                await asyncio.sleep(1)
+
+        logger.error(f"텔레그램 알림 발송 최종 실패 ({1 + max_retries}회 시도): {last_error}")
+        return False
 
     async def _send_long_alert(
         self,
