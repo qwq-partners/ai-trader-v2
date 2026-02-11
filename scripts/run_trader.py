@@ -153,6 +153,7 @@ class TradingBot(SchedulerMixin):
         # 종목 스크리너
         self.screener: Optional[StockScreener] = None
         self._screening_interval: int = 600  # 기본 10분
+        self._screening_signal_cooldown: dict = {}  # 장중 스크리닝 시그널 쿨다운
 
         # 일일 레포트 생성기
         self.report_generator = None

@@ -496,7 +496,7 @@ class TradingEngine:
         min_reserve = self.portfolio.total_equity * Decimal(str(self.config.risk.min_cash_reserve_pct / 100))
         return max(self.portfolio.cash - min_reserve, Decimal("0"))
 
-    def get_effective_max_positions(self) -> int:
+    def get_effective_max_positions(self, reserved_cash: Decimal = Decimal("0")) -> int:
         """자산 규모 + 여유자금 기반 실효 최대 포지션 수"""
         risk = self.config.risk
         max_pos = risk.max_positions
@@ -507,11 +507,13 @@ class TradingEngine:
                 per_pos = max(equity_f * risk.base_position_pct / 100, risk.min_position_value)
                 calculated = int(investable / per_pos) if per_pos > 0 else 0
                 max_pos = min(max(1, calculated), risk.max_positions)
-        # Flex: 가용현금 여유 시 추가 슬롯
+        # Flex: 여유자금 시 추가 슬롯
+        # 비율 판단은 현금 원본(cash) 기준 — get_available_cash()는 reserve를 이미 차감하므로
+        # reserve 차감 후 비율 재계산하면 이중 페널티 발생 (9.9% < 10% 문제)
         if risk.flex_extra_positions > 0 and float(self.portfolio.total_equity) > 0:
-            avail_cash = float(self.get_available_cash())
-            avail_ratio = avail_cash / float(self.portfolio.total_equity) * 100
-            if avail_ratio >= risk.flex_cash_threshold_pct and avail_cash >= risk.min_position_value:
+            cash_ratio = float(self.portfolio.cash - reserved_cash) / float(self.portfolio.total_equity) * 100
+            avail_cash = float(self.get_available_cash() - reserved_cash)
+            if cash_ratio >= risk.flex_cash_threshold_pct and avail_cash >= risk.min_position_value:
                 max_pos = min(max_pos + risk.flex_extra_positions,
                               risk.max_positions + risk.flex_extra_positions)
         return max_pos
@@ -536,18 +538,14 @@ class TradingEngine:
         if daily_loss_pct <= -risk.daily_max_loss_pct:
             return False, f"일일 손실 한도 도달 ({daily_loss_pct:.1f}%, 실현={float(self.portfolio.daily_pnl):+,.0f}, 미실현={float(self.portfolio.total_unrealized_pnl):+,.0f})"
 
-        # 2. 일일 거래 횟수 제한
-        if self.portfolio.daily_trades >= risk.daily_max_trades:
-            return False, f"일일 거래 횟수 한도 도달 ({self.portfolio.daily_trades}회)"
+        # 2. (일일 거래 횟수 제한 제거 — 가용 현금이 게이트)
 
-        # 3. 최대 포지션 수 제한 (pending 주문 포함, 동적 계산 + flex)
+        # 3. 포지션 수 로깅 (하드 제한 없음 — 가용 현금이 게이트)
         if symbol not in self.portfolio.positions:
             effective_positions = len(self.portfolio.positions) + len(
                 _pending - set(self.portfolio.positions.keys())
             )
-            max_pos = self.get_effective_max_positions()
-            if effective_positions >= max_pos:
-                return False, f"최대 포지션 수 도달 ({effective_positions}/{max_pos}개, pending 포함)"
+            logger.debug(f"[리스크] 포지션 현황: {effective_positions}개 (보유={len(self.portfolio.positions)})")
 
         # 4. 포지션 크기 제한
         position_value = price * quantity
@@ -1005,7 +1003,7 @@ class RiskManager:
                 can_trade, reason = self._risk_validator.can_open_position(
                     order.symbol, order.side, order.quantity,
                     order.price or Decimal("0"), self.engine.portfolio,
-                    strategy_type=order.strategy  # 차등 리스크 관리용
+                    strategy_type=order.strategy,
                 )
                 if not can_trade:
                     logger.warning(f"주문 거부 (리스크 검증): {order.symbol} - {reason}")
@@ -1200,22 +1198,21 @@ class RiskManager:
             )
             return 0
 
-        # 동적 max_positions 계산 (flex 포함)
-        max_pos = self.engine.get_effective_max_positions()
-
-        # 남은 슬롯 기반 균등 배분 (유휴 자본 방지)
-        # 기존 포지션 매도 주문(pending)은 이중 카운트 방지
-        new_pending = self._pending_orders - set(self.engine.portfolio.positions.keys())
-        current_count = len(self.engine.portfolio.positions) + len(new_pending)
-        remaining_slots = max_pos - current_count
-        if remaining_slots <= 0:
-            slot_value = Decimal("0")
-        else:
-            slot_value = available / Decimal(str(remaining_slots))
-
-        # 비율 기반 vs 슬롯 기반 중 큰 값 → 자본 활용률 향상
+        # 가용 현금 기반 포지션 사이징 (포지션 수 하드 제한 없음)
         max_value = equity * Decimal(str(self.config.max_position_pct / 100))
-        position_value = min(max(pct_value, slot_value), max_value, available)
+        position_value = min(pct_value, max_value, available)
+
+        # 하락장 포지션 축소 (일일 손실 한도 50% 도달 시 포지션 50% 축소)
+        effective_pnl = self.engine.portfolio.effective_daily_pnl
+        if equity > 0:
+            daily_pnl_pct = float(effective_pnl / equity * 100)
+            half_limit = -self.config.daily_max_loss_pct / 2
+            if daily_pnl_pct <= half_limit:
+                position_value *= Decimal("0.5")
+                logger.debug(
+                    f"[포지션축소] 일일손실 {daily_pnl_pct:.1f}% "
+                    f"(한도의 50% 초과) → 포지션 50% 축소"
+                )
 
         # 전략별 포지션 배율 (역추세 등은 축소) — 최종 금액에 적용
         position_multiplier = 1.0
@@ -1230,7 +1227,7 @@ class RiskManager:
             logger.warning(
                 f"[리스크] 포지션 금액 미달: {signal.symbol} "
                 f"(position_value={position_value:,.0f} < min_val={min_val:,.0f}, "
-                f"pct_value={pct_value:,.0f}, slot_value={slot_value:,.0f}, "
+                f"pct_value={pct_value:,.0f}, max_value={max_value:,.0f}, "
                 f"available={available:,.0f}, max_value={max_value:,.0f})"
             )
             return 0

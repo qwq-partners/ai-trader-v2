@@ -3,13 +3,13 @@ risk_config:
   daily_max_trades: 30
   default_stop_loss_pct: 4.0
   base_position_pct: 10.0
-  max_positions: 5
+  max_positions: 7
 exit_manager:
   max_stop_pct: 6.0
   min_stop_pct: 3.0
   first_exit_pct: 2.0
   first_exit_ratio: 0.3
-  stop_loss_pct: 4.0
+  stop_loss_pct: 2.0
   trailing_activate_pct: 2.0
   trailing_stop_pct: 2.5
 momentum_breakout:
@@ -26,3 +26,7 @@ theme_chasing:
 gap_and_go:
   stop_loss_pct: 2.0
   min_volume_ratio: 3.0
+_meta:
+  exit_manager.stop_loss_pct:
+    source: llm
+    timestamp: '2026-02-11T20:31:33.438158'

@@ -17,7 +17,8 @@ from typing import Optional
 from loguru import logger
 
 from src.core.engine import is_kr_market_holiday
-from src.core.event import ThemeEvent, NewsEvent, FillEvent
+from src.core.event import ThemeEvent, NewsEvent, FillEvent, SignalEvent
+from src.core.types import Signal, OrderSide, SignalStrength, StrategyType
 from src.data.feeds.kis_websocket import MarketSession
 from src.utils.logger import trading_logger, cleanup_old_logs, cleanup_old_cache
 from src.utils.telegram import send_alert
@@ -651,6 +652,127 @@ class SchedulerMixin:
                         )
 
                     logger.info(f"[스크리닝] 완료 - 총 {len(screened)}개 후보, 신규 {len(new_symbols)}개")
+
+                    # === 장중 자동 시그널 발행 ===
+                    if (current_session == MarketSession.REGULAR
+                            and self.engine and self.broker
+                            and "09:15" <= datetime.now().strftime("%H:%M") <= "15:00"):
+
+                        # 만료된 쿨다운 정리 (10분)
+                        now = datetime.now()
+                        expired = [s for s, t in self._screening_signal_cooldown.items()
+                                   if (now - t).total_seconds() > 600]
+                        for s in expired:
+                            del self._screening_signal_cooldown[s]
+
+                        # 기보유 + pending 종목
+                        held = set(self.engine.portfolio.positions.keys())
+                        sm = getattr(self.engine, '_strategy_manager', None)
+                        pending = set(sm._pending_orders) if sm else set()
+                        exclude = held | pending
+
+                        # 가용 현금 확인 (포지션 수 제한 없음)
+                        available_cash = float(self.engine.get_available_cash())
+                        min_pos_value = self.engine.config.risk.min_position_value
+
+                        logger.info(
+                            f"[스크리닝] 자동진입 체크: 가용현금={available_cash:,.0f} "
+                            f"(보유={len(held)}, pending={len(pending - held)}), "
+                            f"75+후보={sum(1 for s in screened if s.score >= 75)}, "
+                            f"제외={len(exclude)}, 쿨다운={len(self._screening_signal_cooldown)}"
+                        )
+
+                        if available_cash >= min_pos_value:
+                            # 오후 과열 방지: 13:30 이후 등락률 상한 8%
+                            hour_min = now.strftime("%H:%M")
+                            afternoon_overheating_cap = 8.0 if hour_min >= "13:30" else 15.0
+
+                            candidates = [
+                                s for s in screened
+                                if s.score >= 75
+                                and s.symbol not in exclude
+                                and s.symbol not in self._screening_signal_cooldown
+                            ]
+
+                            signals_emitted = 0
+                            for stock in candidates[:8]:  # 최대 8개 검증 (API 부하 제한)
+                                if signals_emitted >= 5:
+                                    break
+
+                                # 실시간 가격 검증
+                                try:
+                                    quote = await self.broker.get_quote(stock.symbol)
+                                except Exception:
+                                    continue
+                                if not quote or quote.get("price", 0) <= 0:
+                                    continue
+
+                                rt_price = quote["price"]
+                                rt_change = quote.get("change_pct", 0)
+                                rt_open = quote.get("open", 0)
+                                rt_volume = quote.get("volume", 0)
+
+                                # 검증 조건
+                                if rt_change < 1.0:
+                                    logger.debug(f"[스크리닝] {stock.symbol} 탈락: 등락률 {rt_change:+.1f}% < 1%")
+                                    continue
+                                if rt_change > afternoon_overheating_cap:
+                                    logger.debug(f"[스크리닝] {stock.symbol} 탈락: 과열 {rt_change:+.1f}% > {afternoon_overheating_cap}%")
+                                    continue
+                                if rt_open > 0 and rt_price < rt_open:
+                                    logger.debug(f"[스크리닝] {stock.symbol} 탈락: 현재가 {rt_price:,.0f} < 시가 {rt_open:,.0f}")
+                                    continue
+                                if rt_volume <= 0:
+                                    logger.debug(f"[스크리닝] {stock.symbol} 탈락: 거래량 0")
+                                    continue
+
+                                # ATR 기반 stop/target 계산
+                                atr_pct = 4.0  # 기본값
+                                for reason in stock.reasons:
+                                    if "ATR:" in reason:
+                                        try:
+                                            atr_pct = float(reason.split("ATR:")[1].replace("%)", "").strip())
+                                        except Exception:
+                                            pass
+
+                                stop_price = rt_price * (1 - min(atr_pct, 6.0) / 100)
+                                target_price = rt_price * (1 + min(atr_pct * 1.5, 9.0) / 100)
+
+                                signal = Signal(
+                                    symbol=stock.symbol,
+                                    side=OrderSide.BUY,
+                                    strength=SignalStrength.STRONG,
+                                    strategy=StrategyType.MOMENTUM_BREAKOUT,
+                                    price=Decimal(str(rt_price)),
+                                    target_price=Decimal(str(target_price)),
+                                    stop_price=Decimal(str(stop_price)),
+                                    score=stock.score,
+                                    confidence=stock.score / 100.0,
+                                    reason=f"스크리닝 자동진입: {stock.name} 점수={stock.score:.0f} 등락={rt_change:+.1f}%",
+                                    metadata={
+                                        "source": "live_screening",
+                                        "name": stock.name,
+                                        "screening_score": stock.score,
+                                        "rt_change_pct": rt_change,
+                                        "atr_pct": atr_pct,
+                                    },
+                                )
+
+                                event = SignalEvent.from_signal(signal, source="live_screening")
+                                await self.engine.emit(event)
+
+                                self._screening_signal_cooldown[stock.symbol] = now
+                                signals_emitted += 1
+
+                                logger.info(
+                                    f"[스크리닝] 시그널 발행: {stock.symbol} {stock.name} "
+                                    f"점수={stock.score:.0f} 현재가={rt_price:,.0f} 등락={rt_change:+.1f}%"
+                                )
+
+                                await asyncio.sleep(0.3)  # API rate limit
+
+                            if signals_emitted > 0:
+                                logger.info(f"[스크리닝] 장중 시그널 {signals_emitted}개 발행 완료")
 
                 except Exception as e:
                     logger.warning(f"스크리닝 오류: {e}")

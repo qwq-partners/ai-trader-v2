@@ -174,11 +174,8 @@ class DashboardDataCollector:
 
         config = engine.config.risk
 
-        # 동적 max_positions 계산 (flex 포함)
-        effective_max = config.max_positions
-        if risk_mgr and hasattr(risk_mgr, 'get_effective_max_positions'):
-            avail_cash = float(engine.get_available_cash()) if hasattr(engine, 'get_available_cash') else None
-            effective_max = risk_mgr.get_effective_max_positions(portfolio.total_equity, available_cash=avail_cash)
+        # 동적 max_positions 계산 (flex 포함) — 엔진의 단일 구현 사용
+        effective_max = engine.get_effective_max_positions() if hasattr(engine, 'get_effective_max_positions') else config.max_positions
 
         result = {
             "can_trade": True,

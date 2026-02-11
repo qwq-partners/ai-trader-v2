@@ -31,12 +31,12 @@ risk:
   # === 포지션 관리 (진짜 스윙 전략: 집중 투자) ===
   base_position_pct: 25.0        # 기본 포지션 비율 25% (18→25: 스윙 집중 투자)
   max_position_pct: 35.0         # 최대 포지션 비율 35%
-  max_positions: 4               # 최대 동시 포지션 4개 (6→4: 스윙 집중)
-  min_cash_reserve_pct: 20.0     # 최소 현금 보유 20% (10→20: 여유 자금 확보)
+  max_positions: 7               # 최대 동시 포지션 7개
+  min_cash_reserve_pct: 5.0      # 최소 현금 보유 5%
   min_position_value: 200000     # 최소 포지션 금액 (20만원)
   dynamic_max_positions: true    # 자산 규모에 따라 max_positions 동적 조정
   flex_extra_positions: 2        # 여유자금 시 추가 허용 슬롯 수 (0=비활성화)
-  flex_cash_threshold_pct: 10.0  # 가용현금이 총자산의 N% 이상이면 슬롯 추가
+  flex_cash_threshold_pct: 5.0   # 현금이 총자산의 N% 이상이면 슬롯 추가
 
   # === 손절/익절 (R:R 비율 2:1 목표) ===
   default_stop_loss_pct: 4.0     # 기본 손절 4.0% (8→4: 손실 크기 축소)
