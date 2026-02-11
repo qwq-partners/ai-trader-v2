@@ -178,6 +178,15 @@ class TradingBot(SchedulerMixin):
         self._watch_symbols_lock = asyncio.Lock()
         self._portfolio_lock = asyncio.Lock()
 
+        # 섹터 분산
+        self._sector_cache: dict = {}
+
+        # 외부 계좌 조회 (대시보드 전용)
+        self._external_accounts: list = []  # [(name, cano, acnt_prdt_cd), ...]
+
+        # REST 피드용 스크리닝 캐시
+        self._last_screened: list = []
+
         # 배치 분석기 (스윙 모멘텀)
         self.batch_analyzer = None
 
@@ -210,6 +219,22 @@ class TradingBot(SchedulerMixin):
 
         signal.signal(signal.SIGINT, handle_shutdown)
         signal.signal(signal.SIGTERM, handle_shutdown)
+
+    async def _get_sector(self, symbol: str) -> Optional[str]:
+        """종목 섹터 조회 (StockMaster DB corp_cls 기반, 캐시 적용)"""
+        if symbol in self._sector_cache:
+            return self._sector_cache[symbol]
+        if self.stock_master and hasattr(self.stock_master, 'pool') and self.stock_master.pool:
+            try:
+                async with self.stock_master.pool.acquire() as conn:
+                    row = await conn.fetchrow(
+                        "SELECT corp_cls FROM kr_stock_master WHERE ticker = $1", symbol)
+                    if row and row["corp_cls"]:
+                        self._sector_cache[symbol] = row["corp_cls"]
+                        return row["corp_cls"]
+            except Exception as e:
+                logger.debug(f"[섹터] {symbol} 조회 실패: {e}")
+        return None
 
     # CRITICAL 에러 유형 (즉시 텔레그램 발송 대상)
     _CRITICAL_ERROR_TYPES = {
@@ -554,6 +579,7 @@ class TradingBot(SchedulerMixin):
             engine_risk_manager = RiskManager(
                 self.engine, self.config.trading.risk,
                 risk_validator=self.risk_manager,
+                sector_lookup=self._get_sector,
             )
             self.engine.risk_manager = engine_risk_manager
             logger.info("엔진 리스크 매니저 (SIGNAL 핸들러 + 리스크 검증 위임) 등록 완료")
@@ -595,6 +621,26 @@ class TradingBot(SchedulerMixin):
             from src.monitoring.health_monitor import HealthMonitor
             self.health_monitor = HealthMonitor(self)
             logger.info("헬스 모니터 초기화 완료")
+
+            # 외부 계좌 설정 파싱 (대시보드 조회 전용)
+            ext_accounts_str = os.getenv("KIS_EXT_ACCOUNTS", "")
+            if ext_accounts_str:
+                for entry in ext_accounts_str.split(","):
+                    parts = entry.strip().split(":")
+                    if len(parts) != 3:
+                        logger.warning(f"외부 계좌 형식 오류 (무시): {entry.strip()} - '이름:CANO:ACNT_PRDT_CD' 형식")
+                        continue
+                    name, cano, acnt_prdt_cd = parts
+                    if len(cano) != 8 or not cano.isdigit():
+                        logger.warning(f"외부 계좌 CANO 오류 (무시): {name} - 8자리 숫자 필요 (입력: {cano})")
+                        continue
+                    if len(acnt_prdt_cd) != 2 or not acnt_prdt_cd.isdigit():
+                        logger.warning(f"외부 계좌 ACNT_PRDT_CD 오류 (무시): {name} - 2자리 숫자 필요 (입력: {acnt_prdt_cd})")
+                        continue
+                    self._external_accounts.append((name, cano, acnt_prdt_cd))
+                if self._external_accounts:
+                    masked = [f"{a[0]}({a[1][:2]}****{a[1][-2:]})" for a in self._external_accounts]
+                    logger.info(f"외부 계좌 {len(self._external_accounts)}개 설정: {', '.join(masked)}")
 
             # 이벤트 핸들러 등록
             self._register_event_handlers()
@@ -656,6 +702,9 @@ class TradingBot(SchedulerMixin):
                         if q_name:
                             position.name = q_name
                             self.stock_name_cache[symbol] = q_name
+
+                    # 섹터 세팅
+                    position.sector = await self._get_sector(symbol)
 
                     # 수익률 계산
                     if position.avg_price > 0:
@@ -1259,6 +1308,10 @@ class TradingBot(SchedulerMixin):
                     elif pos_name and pos_name != fill.symbol:
                         self.stock_name_cache[fill.symbol] = pos_name
 
+                    # 섹터 세팅
+                    if not position.sector:
+                        position.sector = await self._get_sector(fill.symbol)
+
             # ExitManager 매도 pending 해제 (체결 확인) + 엔진 RiskManager pending 해제
             if fill.side.value.upper() == "SELL":
                 # 포지션 완전 종료 시에만 pending 해제 (부분 체결 시 중복 매도 방지)
@@ -1504,6 +1557,10 @@ class TradingBot(SchedulerMixin):
                     self.ws_feed.set_priority_symbols(list(self.engine.portfolio.positions.keys()))
                     logger.info(f"[WS] 보유 종목 {len(self.engine.portfolio.positions)}개 우선 구독 설정")
                 tasks.append(asyncio.create_task(self._run_ws_feed(), name="ws_feed"))
+
+            # 2-1. REST 시세 피드 (WebSocket 미사용 시)
+            if not self.ws_feed and self.broker:
+                tasks.append(asyncio.create_task(self._run_rest_price_feed(), name="rest_price_feed"))
 
             # 3. 테마 탐지 루프 실행
             if self.theme_detector:

@@ -95,6 +95,7 @@ class SSEManager:
             "risk": 10,
             "events": 2,
             "pending_orders": 2,
+            "external_accounts": 30,
         }
 
         # 이벤트 로그 커서
@@ -137,6 +138,8 @@ class SSEManager:
                                         continue
                                 else:
                                     _had_pending = True
+                            elif event_type == "external_accounts":
+                                data = await dc.get_external_accounts()
                             else:
                                 continue
 

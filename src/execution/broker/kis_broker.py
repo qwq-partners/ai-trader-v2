@@ -916,6 +916,108 @@ class KISBroker(BaseBroker):
             logger.exception(f"포지션 조회 오류: {e}")
             return positions
 
+    async def get_positions_for_account(
+        self, cano: str, acnt_prdt_cd: str
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """외부 계좌 잔고 조회 (포지션 목록 + 계좌 요약)
+
+        기존 get_positions()/get_account_balance()의 로직을 재활용하되
+        CANO/ACNT_PRDT_CD만 파라미터로 받아 다른 계좌를 조회합니다.
+
+        Returns:
+            (positions_list, summary_dict)
+            - positions_list: [{symbol, name, qty, avg_price, current_price,
+                                eval_amt, pnl, pnl_pct, change_pct}, ...]
+            - summary_dict: {total_equity, stock_value, deposit,
+                             unrealized_pnl, purchase_amount}
+        """
+        if not self.is_connected:
+            if not await self.connect():
+                return [], {}
+
+        positions: List[Dict[str, Any]] = []
+        summary: Dict[str, Any] = {}
+
+        try:
+            tr_id = "TTTC8434R"
+            url = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/inquire-balance"
+
+            params = {
+                "CANO": cano,
+                "ACNT_PRDT_CD": acnt_prdt_cd,
+                "AFHR_FLPR_YN": "N",
+                "FUND_STTL_ICLD_YN": "N",
+                "FNCG_AMT_AUTO_RDPT_YN": "N",
+                "INQR_DVSN": "01",
+                "OFL_YN": "N",
+                "PRCS_DVSN": "00",
+                "UNPR_DVSN": "01",
+                "CTX_AREA_FK100": "",
+                "CTX_AREA_NK100": "",
+            }
+
+            data = await self._api_get(url, tr_id, params)
+
+            rt_cd = data.get("rt_cd", "")
+            if str(rt_cd) != "0":
+                msg = data.get("msg1", "")
+                logger.warning(f"외부 계좌 조회 실패 ({cano}): {msg}")
+                return positions, summary
+
+            # output1: 종목별 보유 내역
+            output1 = data.get("output1", []) or []
+            if not isinstance(output1, list):
+                logger.warning(f"외부 계좌 output1 형식 오류 ({cano}): {type(output1)}")
+                output1 = []
+            for item in output1:
+                if not isinstance(item, dict):
+                    continue
+                qty = int(item.get("hldg_qty", "0") or "0")
+                if qty <= 0:
+                    continue
+
+                symbol = str(item.get("pdno", "")).zfill(6)
+                name = str(item.get("prdt_name", "") or "").strip()
+                avg_price = float(item.get("pchs_avg_pric", "0") or "0")
+                current_price = float(item.get("prpr", "0") or "0")
+                eval_amt = float(item.get("evlu_amt", "0") or "0")
+                pnl = float(item.get("evlu_pfls_amt", "0") or "0")
+                pnl_pct = float(item.get("evlu_pfls_rt", "0") or "0")
+                change_pct = float(item.get("fltt_rt", "0") or "0")
+
+                positions.append({
+                    "symbol": symbol,
+                    "name": name,
+                    "qty": qty,
+                    "avg_price": avg_price,
+                    "current_price": current_price,
+                    "eval_amt": eval_amt,
+                    "pnl": pnl,
+                    "pnl_pct": pnl_pct,
+                    "change_pct": change_pct,
+                })
+
+            # output2: 계좌 요약
+            output2 = data.get("output2", [])
+            if output2:
+                acct = output2[0] if isinstance(output2, list) else output2
+                summary = {
+                    "total_equity": float(acct.get("tot_evlu_amt", "0") or "0"),
+                    "stock_value": float(acct.get("scts_evlu_amt", "0") or "0"),
+                    "deposit": float(acct.get("dnca_tot_amt", "0") or "0"),
+                    "unrealized_pnl": float(acct.get("evlu_pfls_smtl_amt", "0") or "0"),
+                    "purchase_amount": float(acct.get("pchs_amt_smtl_amt", "0") or "0"),
+                }
+
+            logger.debug(
+                f"외부 계좌 조회 완료: {cano} ({len(positions)}종목)"
+            )
+            return positions, summary
+
+        except Exception as e:
+            logger.error(f"외부 계좌 조회 오류 ({cano}): {e}")
+            return positions, summary
+
     async def get_account_balance(self) -> Dict[str, Any]:
         """
         계좌 잔고 조회

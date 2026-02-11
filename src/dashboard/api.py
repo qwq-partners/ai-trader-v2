@@ -34,6 +34,7 @@ def setup_api_routes(app: web.Application, data_collector):
     app.router.add_get("/api/orders/history", handler.get_order_history)
     app.router.add_get("/api/equity-curve", handler.get_equity_curve)
     app.router.add_get("/api/health-checks", handler.get_health_checks)
+    app.router.add_get("/api/accounts/positions", handler.get_external_accounts)
     app.router.add_post("/api/evolution/apply", handler.apply_evolution_parameter)
 
 
@@ -128,6 +129,9 @@ class APIHandler:
 
     async def get_health_checks(self, request: web.Request) -> web.Response:
         return web.json_response(self.dc.get_health_checks())
+
+    async def get_external_accounts(self, request: web.Request) -> web.Response:
+        return web.json_response(await self.dc.get_external_accounts())
 
     async def apply_evolution_parameter(self, request: web.Request) -> web.Response:
         """

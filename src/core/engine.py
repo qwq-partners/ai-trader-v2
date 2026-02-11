@@ -508,11 +508,11 @@ class TradingEngine:
                 calculated = int(investable / per_pos) if per_pos > 0 else 0
                 max_pos = min(max(1, calculated), risk.max_positions)
         # Flex: 여유자금 시 추가 슬롯
-        # 비율 판단은 현금 원본(cash) 기준 — get_available_cash()는 reserve를 이미 차감하므로
-        # reserve 차감 후 비율 재계산하면 이중 페널티 발생 (9.9% < 10% 문제)
+        # 가용 현금 = get_available_cash()(min_reserve 차감) - 예약금
+        # 비율과 금액 모두 동일 기준 사용
         if risk.flex_extra_positions > 0 and float(self.portfolio.total_equity) > 0:
-            cash_ratio = float(self.portfolio.cash - reserved_cash) / float(self.portfolio.total_equity) * 100
             avail_cash = float(self.get_available_cash() - reserved_cash)
+            cash_ratio = avail_cash / float(self.portfolio.total_equity) * 100
             if cash_ratio >= risk.flex_cash_threshold_pct and avail_cash >= risk.min_position_value:
                 max_pos = min(max_pos + risk.flex_extra_positions,
                               risk.max_positions + risk.flex_extra_positions)
@@ -526,6 +526,7 @@ class TradingEngine:
         self, symbol: str, side: OrderSide, quantity: int, price: Decimal,
         pending_symbols: Optional[Set[str]] = None,
         reserved_cash: Decimal = Decimal("0"),
+        sector: Optional[str] = None,
     ) -> tuple[bool, str]:
         """포지션 오픈 가능 여부 체크"""
         risk = self.config.risk
@@ -546,6 +547,13 @@ class TradingEngine:
                 _pending - set(self.portfolio.positions.keys())
             )
             logger.debug(f"[리스크] 포지션 현황: {effective_positions}개 (보유={len(self.portfolio.positions)})")
+
+        # 3-1. 섹터 분산 체크
+        max_per_sector = risk.max_positions_per_sector
+        if sector and max_per_sector > 0 and symbol not in self.portfolio.positions:
+            same_sector = sum(1 for p in self.portfolio.positions.values() if p.sector == sector)
+            if same_sector >= max_per_sector:
+                return False, f"섹터 포지션 한도 초과 ({sector}: {same_sector}/{max_per_sector})"
 
         # 4. 포지션 크기 제한
         position_value = price * quantity
@@ -700,12 +708,16 @@ class RiskManager:
     신호를 검증하고 포지션 크기를 계산합니다.
     """
 
-    def __init__(self, engine: TradingEngine, config: RiskConfig, risk_validator=None):
+    def __init__(self, engine: TradingEngine, config: RiskConfig, risk_validator=None,
+                 sector_lookup=None):
         self.engine = engine
         self.config = config
 
         # 외부 리스크 검증자 (RiskMgr 인스턴스) — daily_stats 공유용
         self._risk_validator = risk_validator
+
+        # 섹터 조회 콜러블 (async def(symbol) -> Optional[str])
+        self._sector_lookup = sector_lookup
 
         # 주문 실패 쿨다운 추적 (종목별)
         self._order_fail_cooldown: Dict[str, datetime] = {}
@@ -1014,10 +1026,19 @@ class RiskManager:
                     )
                     return None
 
+            # 섹터 조회 (sector_lookup 콜러블이 있으면 호출)
+            _sector = event.metadata.get("sector") if event.metadata else None
+            if not _sector and self._sector_lookup:
+                try:
+                    _sector = await self._sector_lookup(order.symbol)
+                except Exception:
+                    _sector = None
+
             can_trade, reason = self.engine.can_open_position(
                 order.symbol, order.side, order.quantity, order.price or Decimal("0"),
                 pending_symbols=self._pending_orders,
                 reserved_cash=self._reserved_cash,
+                sector=_sector,
             )
             if not can_trade:
                 logger.warning(f"주문 거부: {order.symbol} - {reason}")
@@ -1228,7 +1249,7 @@ class RiskManager:
                 f"[리스크] 포지션 금액 미달: {signal.symbol} "
                 f"(position_value={position_value:,.0f} < min_val={min_val:,.0f}, "
                 f"pct_value={pct_value:,.0f}, max_value={max_value:,.0f}, "
-                f"available={available:,.0f}, max_value={max_value:,.0f})"
+                f"available={available:,.0f})"
             )
             return 0
 

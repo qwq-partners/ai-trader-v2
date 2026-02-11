@@ -44,6 +44,11 @@ class DashboardDataCollector:
         self.bot = bot
         self._name_cache: Dict[str, str] = {}
         self._name_cache_updated: Optional[datetime] = None
+        # 외부 계좌 캐시
+        self._ext_accounts_cache: Optional[list] = None
+        self._ext_accounts_cache_ts: Optional[datetime] = None
+        import asyncio
+        self._ext_accounts_lock = asyncio.Lock()
 
     # ----------------------------------------------------------
     # 시스템 상태
@@ -879,6 +884,55 @@ class DashboardDataCollector:
              "timestamp": r.timestamp.isoformat()}
             for r in hm._results
         ]
+
+    # ----------------------------------------------------------
+    # 외부 계좌 (대시보드 전용)
+    # ----------------------------------------------------------
+
+    async def get_external_accounts(self) -> list:
+        """외부 계좌 보유 포지션 + 요약 (30초 TTL 캐시, Lock 보호)"""
+        async with self._ext_accounts_lock:
+            now = datetime.now()
+            if (
+                self._ext_accounts_cache is not None
+                and self._ext_accounts_cache_ts
+                and (now - self._ext_accounts_cache_ts).total_seconds() < 30
+            ):
+                return self._ext_accounts_cache
+
+            bot = self.bot
+            ext_accounts = getattr(bot, '_external_accounts', [])
+            broker = getattr(bot, 'broker', None)
+            if not ext_accounts or not broker:
+                self._ext_accounts_cache = []
+                self._ext_accounts_cache_ts = now
+                return []
+
+            result = []
+            for name, cano, acnt_prdt_cd in ext_accounts:
+                try:
+                    positions, summary = await broker.get_positions_for_account(
+                        cano, acnt_prdt_cd
+                    )
+                    result.append({
+                        "name": name,
+                        "cano": cano,
+                        "summary": summary,
+                        "positions": positions,
+                    })
+                except Exception as e:
+                    logger.warning(f"외부 계좌 {name}(****{cano[-4:]}) 조회 실패: {e}")
+                    result.append({
+                        "name": name,
+                        "cano": cano,
+                        "summary": {},
+                        "positions": [],
+                        "error": str(e),
+                    })
+
+            self._ext_accounts_cache = result
+            self._ext_accounts_cache_ts = now
+            return result
 
     # ----------------------------------------------------------
     # 시스템 건강 메트릭

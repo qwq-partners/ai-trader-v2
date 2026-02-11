@@ -17,7 +17,7 @@ from typing import Optional
 from loguru import logger
 
 from src.core.engine import is_kr_market_holiday
-from src.core.event import ThemeEvent, NewsEvent, FillEvent, SignalEvent
+from src.core.event import ThemeEvent, NewsEvent, FillEvent, SignalEvent, MarketDataEvent
 from src.core.types import Signal, OrderSide, SignalStrength, StrategyType
 from src.data.feeds.kis_websocket import MarketSession
 from src.utils.logger import trading_logger, cleanup_old_logs, cleanup_old_cache
@@ -653,11 +653,19 @@ class SchedulerMixin:
 
                     logger.info(f"[스크리닝] 완료 - 총 {len(screened)}개 후보, 신규 {len(new_symbols)}개")
 
-                    # === 장중 자동 시그널 발행 ===
-                    if (current_session == MarketSession.REGULAR
-                            and self.engine and self.broker
-                            and "09:15" <= datetime.now().strftime("%H:%M") <= "15:00"):
+                    # REST 피드용 캐시 (상위 종목)
+                    self._last_screened = screened
 
+                except Exception as e:
+                    logger.warning(f"스크리닝 오류: {e}", exc_info=True)
+                    screened = []
+
+                # === 장중 자동 시그널 발행 (스크리닝과 별도 예외 처리) ===
+                if (screened
+                        and current_session == MarketSession.REGULAR
+                        and self.engine and self.broker
+                        and "09:15" <= datetime.now().strftime("%H:%M") <= "15:00"):
+                    try:
                         # 만료된 쿨다운 정리 (10분)
                         now = datetime.now()
                         expired = [s for s, t in self._screening_signal_cooldown.items()
@@ -699,10 +707,30 @@ class SchedulerMixin:
                                 if signals_emitted >= 5:
                                     break
 
+                                # 섹터 사전 체크 (불필요한 호가 조회 방지)
+                                _sector = None
+                                if hasattr(self, '_get_sector'):
+                                    try:
+                                        _sector = await self._get_sector(stock.symbol)
+                                    except Exception:
+                                        pass
+                                if _sector:
+                                    max_per_sector = self.engine.config.risk.max_positions_per_sector
+                                    if max_per_sector > 0:
+                                        same_sector = sum(1 for p in self.engine.portfolio.positions.values()
+                                                         if p.sector == _sector)
+                                        if same_sector >= max_per_sector:
+                                            logger.debug(
+                                                f"[스크리닝] {stock.symbol} 탈락: 섹터 한도 "
+                                                f"({_sector}: {same_sector}/{max_per_sector})"
+                                            )
+                                            continue
+
                                 # 실시간 가격 검증
                                 try:
                                     quote = await self.broker.get_quote(stock.symbol)
-                                except Exception:
+                                except Exception as e:
+                                    logger.debug(f"[스크리닝] {stock.symbol} 호가 조회 실패: {e}")
                                     continue
                                 if not quote or quote.get("price", 0) <= 0:
                                     continue
@@ -755,11 +783,16 @@ class SchedulerMixin:
                                         "screening_score": stock.score,
                                         "rt_change_pct": rt_change,
                                         "atr_pct": atr_pct,
+                                        "sector": _sector,
                                     },
                                 )
 
-                                event = SignalEvent.from_signal(signal, source="live_screening")
-                                await self.engine.emit(event)
+                                try:
+                                    event = SignalEvent.from_signal(signal, source="live_screening")
+                                    await self.engine.emit(event)
+                                except Exception as e:
+                                    logger.error(f"[스크리닝] {stock.symbol} 시그널 발행 실패: {e}", exc_info=True)
+                                    break  # 엔진 에러 시 추가 발행 중단
 
                                 self._screening_signal_cooldown[stock.symbol] = now
                                 signals_emitted += 1
@@ -774,11 +807,85 @@ class SchedulerMixin:
                             if signals_emitted > 0:
                                 logger.info(f"[스크리닝] 장중 시그널 {signals_emitted}개 발행 완료")
 
-                except Exception as e:
-                    logger.warning(f"스크리닝 오류: {e}")
+                    except Exception as e:
+                        logger.error(f"[스크리닝] 자동진입 오류: {e}", exc_info=True)
 
                 # 다음 스캔까지 대기
                 await asyncio.sleep(self._screening_interval)
+
+        except asyncio.CancelledError:
+            pass
+
+    async def _run_rest_price_feed(self):
+        """REST 폴링 시세 피드 (WebSocket 미사용 시 전략/청산 활성화)
+
+        45초 주기로 보유 포지션 + 스크리닝 상위 종목의 시세를 REST API 조회 →
+        MarketDataEvent 생성 → 엔진 emit → 모든 전략(momentum, theme, gap, exit) 활성화.
+        """
+        try:
+            # 초기 대기 (스크리닝과 시간 분산)
+            await asyncio.sleep(90)
+
+            while self.running:
+                try:
+                    current_session = self._get_current_session()
+                    if current_session == MarketSession.CLOSED:
+                        await asyncio.sleep(45)
+                        continue
+
+                    # 대상 종목 수집: 보유 포지션 + 스크리닝 상위
+                    target_symbols = list(self.engine.portfolio.positions.keys())
+                    screened_symbols = [
+                        s.symbol for s in self._last_screened
+                        if s.symbol not in target_symbols
+                    ]
+                    target_symbols.extend(screened_symbols[:max(0, 20 - len(target_symbols))])
+
+                    if not target_symbols:
+                        await asyncio.sleep(45)
+                        continue
+
+                    success_count = 0
+                    for symbol in target_symbols:
+                        try:
+                            quote = await self.broker.get_quote(symbol)
+                            if not quote or quote.get("price", 0) <= 0:
+                                continue
+
+                            price = quote["price"]
+                            event = MarketDataEvent(
+                                symbol=symbol,
+                                open=Decimal(str(quote.get("open", price))),
+                                high=Decimal(str(quote.get("high", price))),
+                                low=Decimal(str(quote.get("low", price))),
+                                close=Decimal(str(price)),
+                                volume=quote.get("volume", 0),
+                                change_pct=quote.get("change_pct", 0.0),
+                                prev_close=Decimal(str(quote["prev_close"])) if quote.get("prev_close") else None,
+                                source="rest_polling",
+                            )
+                            await self.engine.emit(event)
+
+                            # 보유 종목 ExitManager 청산 체크
+                            if self.exit_manager and symbol in self.engine.portfolio.positions:
+                                await self._check_exit_signal(symbol, Decimal(str(price)))
+
+                            success_count += 1
+                        except Exception as e:
+                            logger.debug(f"[REST피드] {symbol} 시세 조회 실패: {e}")
+
+                        await asyncio.sleep(0.15)  # API rate limit (초당 ~6건)
+
+                    if success_count > 0:
+                        logger.info(
+                            f"[REST피드] {success_count}/{len(target_symbols)}개 종목 시세 갱신 "
+                            f"(보유={len(self.engine.portfolio.positions)}, 세션={current_session.value})"
+                        )
+
+                except Exception as e:
+                    logger.warning(f"[REST피드] 오류: {e}", exc_info=True)
+
+                await asyncio.sleep(45)
 
         except asyncio.CancelledError:
             pass

@@ -82,6 +82,7 @@ def create_trading_config(config: Optional[Dict[str, Any]] = None) -> TradingCon
         momentum_multiplier=float(risk_cfg.get("momentum_multiplier", 1.5)),
         flex_extra_positions=int(risk_cfg.get("flex_extra_positions", 2)),
         flex_cash_threshold_pct=float(risk_cfg.get("flex_cash_threshold_pct", 10.0)),
+        max_positions_per_sector=int(risk_cfg.get("max_positions_per_sector", 3)),
     )
 
     # TradingConfig 생성

@@ -232,6 +232,7 @@ class Position:
     # 메타데이터
     strategy: Optional[str] = None
     entry_time: Optional[datetime] = None
+    sector: Optional[str] = None
 
     @property
     def market_value(self) -> Decimal:
@@ -470,6 +471,7 @@ class RiskConfig:
     dynamic_max_positions: bool = True # 자산 규모에 따라 max_positions 동적 조정
     flex_extra_positions: int = 2            # 여유자금 시 추가 허용 슬롯 수 (0=비활성화)
     flex_cash_threshold_pct: float = 10.0    # 가용현금이 총자산의 N% 이상이면 슬롯 추가
+    max_positions_per_sector: int = 3        # 동일 섹터 최대 포지션 수 (0=제한없음)
 
     # 손절/익절
     default_stop_loss_pct: float = 2.5
