@@ -133,13 +133,14 @@ scripts/
 engine.run()               → 이벤트 메인 루프 (우선순위 힙 큐)
 _run_screening (5분)        → 종목 스크리닝 → 자동 시그널 발행 (09:15~15:00)
 _run_fill_check (2~5초)     → 적응형 체결 확인 (미체결 시 2초, 없으면 5초)
+_run_rest_price_feed (45초) → WS 비활성 시 보유+스크리닝 상위 20종목 시세 폴링
 _run_sync_portfolio (2분)   → KIS 잔고 동기화
 _run_health_monitor         → 운영 모니터링 (15초/60초/5분 주기)
 theme_detector (15분)       → 테마 탐지 (네이버 뉴스 + LLM)
 batch: 15:40 daily_scan     → 전략별 일일 스캔 → pending_signals.json 저장
 batch: 09:01 execute        → 전일 시그널 실행 (T+1)
 evolve (20:30)              → 자가 진화 (복기 → 파라미터 조정)
-dashboard (8080)            → 웹 대시보드
+dashboard (8080)            → 웹 대시보드 + 외부 계좌 뷰어
 ```
 
 ### 거래 흐름
@@ -199,6 +200,7 @@ dashboard (8080)            → 웹 대시보드
 | 일일 거래 횟수 | **제한 없음** | 2026-02-11 제거 |
 | 최대 포지션 수 | **제한 없음** | 가용 현금이 유일한 게이트 |
 | 연속 손실 중단 | **제한 없음** | 2026-02-11 제거 |
+| 동일 섹터 최대 | 3개 | max_positions_per_sector (0=제한없음) |
 | 기본 포지션 비율 | 25% (default) / 10% (override) | equity 대비 |
 | 최대 포지션 비율 | 35% | 개별 포지션 상한 |
 | 최소 현금 보유 | 5% | total_equity 대비 |
@@ -222,6 +224,13 @@ dashboard (8080)            → 웹 대시보드
 
 **네비게이션**: 실시간 | 주문 | 거래 | 성과 | 테마 | 진화 | 설정
 **차트**: `Plotly.react()` 사용 (메모리 릭 방지, `Plotly.newPlot` 금지)
+
+### 외부 계좌 뷰어
+- `.env`의 `KIS_EXT_ACCOUNTS` 환경변수로 계좌 설정 (형식: `이름:CANO:ACNT_PRDT_CD`)
+- `GET /api/accounts/positions` + SSE `external_accounts` (30초 주기)
+- 대시보드 실시간 탭에 계좌별 카드 표시 (요약 + 포지션 테이블)
+- 30초 TTL 캐시 + asyncio.Lock (동시 API 호출 방지)
+- **주의**: KIS API는 55번(DC 가입자계좌) 미지원, HTS ID 연결 실물계좌만 가능
 
 ---
 
@@ -259,6 +268,7 @@ dashboard (8080)            → 웹 대시보드
 ## 환경변수 (.env)
 ```
 KIS_APPKEY, KIS_APPSECRET, KIS_CANO, KIS_ENV (prod/dev)
+KIS_EXT_ACCOUNTS (외부 계좌 조회, 형식: 이름:CANO:ACNT_PRDT_CD 쉼표 구분)
 OPENAI_API_KEY, GEMINI_API_KEY
 TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 INITIAL_CAPITAL (기본 10000000)

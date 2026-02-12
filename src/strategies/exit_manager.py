@@ -151,7 +151,8 @@ class ExitManager:
                 state.remaining_quantity = position.quantity
                 # 추가매수 시 익절 단계 초기화 및 고가 재계산
                 state.current_stage = ExitStage.NONE
-                state.highest_price = position.current_price or position.avg_price
+                new_high = position.current_price or position.avg_price
+                state.highest_price = max(state.highest_price, new_high)
                 logger.debug(
                     f"[ExitManager] 포지션 업데이트(추가매수): {position.symbol} "
                     f"{old_qty}주 → {position.quantity}주, "
@@ -256,6 +257,9 @@ class ExitManager:
         if state.remaining_quantity <= 0:
             return None
 
+        if state.entry_price <= 0:
+            return None  # 진입가 미설정 → 청산 판단 불가
+
         # 고가 업데이트
         if current_price > state.highest_price:
             state.highest_price = current_price
@@ -305,6 +309,9 @@ class ExitManager:
             )
 
         # 4. 트레일링 스탑
+        if state.highest_price <= 0:
+            return None  # 고점 미초기화 시 트레일링 건너뜀 (ZeroDivisionError 방지)
+
         if state.breakeven_activated:
             # ATR 기반 트레일링 폭: 1.5×ATR
             atr_trail = (state.atr_pct or 2.0) * 1.5

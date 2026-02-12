@@ -69,6 +69,7 @@ def create_trading_config(config: Optional[Dict[str, Any]] = None) -> TradingCon
     risk = RiskConfig(
         daily_max_loss_pct=float(risk_cfg.get("daily_max_loss_pct", 3.0)),
         daily_max_trades=int(risk_cfg.get("daily_max_trades", 15)),
+        max_daily_new_buys=int(risk_cfg.get("max_daily_new_buys", 5)),
         base_position_pct=float(risk_cfg.get("base_position_pct", 15.0)),
         max_position_pct=float(risk_cfg.get("max_position_pct", 35.0)),
         max_positions=int(risk_cfg.get("max_positions", 5)),

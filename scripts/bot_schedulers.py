@@ -36,7 +36,7 @@ class SchedulerMixin:
         # 보유 종목은 제거하지 않음
         positions = set(self.engine.portfolio.positions.keys()) if self.engine else set()
         # 초기 config 종목도 보존
-        config_syms = set(self.config.get("watch_symbols", []))
+        config_syms = set(self.config.get("watch_symbols") or [])
         protected = positions | config_syms
         removable = [s for s in self._watch_symbols if s not in protected]
         excess = len(self._watch_symbols) - self._MAX_WATCH_SYMBOLS
@@ -160,6 +160,7 @@ class SchedulerMixin:
 
                         # ExitManager 매도 pending 및 엔진 RiskManager pending 정리
                         self._exit_pending_symbols.clear()
+                        self._exit_pending_timestamps.clear()
                         if self.engine.risk_manager:
                             self.engine.risk_manager._pending_orders.clear()
                             self.engine.risk_manager._pending_quantities.clear()
@@ -172,6 +173,18 @@ class SchedulerMixin:
 
                         # 종목별 당일 진입 횟수 초기화
                         self._daily_entry_count.clear()
+
+                        # 청산 상태 로그 타임스탬프 초기화 (메모리 누수 방지)
+                        if hasattr(self, '_last_exit_status_log'):
+                            self._last_exit_status_log.clear()
+
+                        # 주문 실패 알림 초기화 (재실패 시 알림 재발송 위해)
+                        if hasattr(self, '_order_fail_alerted'):
+                            self._order_fail_alerted.clear()
+
+                        # 매도 차단 종목 + 스크리닝 쿨다운 초기화
+                        self._sell_blocked_symbols.clear()
+                        self._screening_signal_cooldown.clear()
 
                         last_daily_reset = today
                         logger.info("[스케줄러] 일일 통계 + 전략 상태 + pending 주문 + 거래로그 초기화 완료")
@@ -678,8 +691,8 @@ class SchedulerMixin:
 
                         # 기보유 + pending 종목
                         held = set(self.engine.portfolio.positions.keys())
-                        sm = getattr(self.engine, '_strategy_manager', None)
-                        pending = set(sm._pending_orders) if sm else set()
+                        rm = self.engine.risk_manager
+                        pending = set(rm._pending_orders) if rm else set()
                         exclude = held | pending
 
                         # 가용 현금 확인 (포지션 수 제한 없음)
@@ -980,26 +993,28 @@ class SchedulerMixin:
                 logger.warning("포트폴리오 동기화: 잔고 조회 실패")
                 return
 
-            # 2. lock 내에서 포트폴리오 수정 (다른 태스크와 동시 접근 방지)
+            # 2. API 빈 결과 방어: lock 밖에서 재시도 (lock 내 sleep 방지)
+            bot_symbols = set(self.engine.portfolio.positions.keys())
+            kis_symbols = set(kis_positions.keys()) if kis_positions else set()
+            if bot_symbols and not kis_symbols:
+                logger.warning(
+                    "[동기화] KIS 포지션 조회 결과 0건 (봇 보유 "
+                    f"{len(bot_symbols)}건) → 5초 후 재시도"
+                )
+                await asyncio.sleep(5)
+                kis_positions = await self.broker.get_positions()
+                kis_symbols = set(kis_positions.keys()) if kis_positions else set()
+                if bot_symbols and not kis_symbols:
+                    logger.warning(
+                        "[동기화] 재시도에도 KIS 포지션 0건 → API 오류로 간주, 동기화 건너뜀"
+                    )
+                    return
+
+            # 3. lock 내에서 포트폴리오 수정 (다른 태스크와 동시 접근 방지)
             async with self._portfolio_lock:
                 portfolio = self.engine.portfolio
                 kis_symbols = set(kis_positions.keys()) if kis_positions else set()
                 bot_symbols = set(portfolio.positions.keys())
-
-                # API 빈 결과 방어: 봇에 포지션이 있는데 KIS가 0개 반환하면 1회 재시도
-                if bot_symbols and not kis_symbols:
-                    logger.warning(
-                        "[동기화] KIS 포지션 조회 결과 0건 (봇 보유 "
-                        f"{len(bot_symbols)}건) → 5초 후 재시도"
-                    )
-                    await asyncio.sleep(5)
-                    kis_positions = await self.broker.get_positions()
-                    kis_symbols = set(kis_positions.keys()) if kis_positions else set()
-                    if bot_symbols and not kis_symbols:
-                        logger.warning(
-                            "[동기화] 재시도에도 KIS 포지션 0건 → API 오류로 간주, 동기화 건너뜀"
-                        )
-                        return
 
                 # 유령 포지션 제거 (봇에만 있고 KIS에 없는 종목)
                 ghost_symbols = bot_symbols - kis_symbols
@@ -1057,23 +1072,30 @@ class SchedulerMixin:
                             f"[동기화] 현금 수정: {old_cash:,.0f}원 → {available_cash:,.0f}원"
                         )
 
-            changes = len(ghost_symbols) + len(new_symbols)
+                # lock 안에서 로깅 값 캡처 (lock 해제 후 데이터 불일치 방지)
+                _log_ghost = len(ghost_symbols)
+                _log_new = len(new_symbols)
+                _log_total = len(portfolio.positions)
+                _log_cash = float(portfolio.cash)
+                _log_equity = float(portfolio.total_equity)
+
+            changes = _log_ghost + _log_new
             if changes > 0:
                 logger.info(
-                    f"[동기화] 완료: 제거={len(ghost_symbols)}, "
-                    f"추가={len(new_symbols)}, "
-                    f"보유={len(portfolio.positions)}종목"
+                    f"[동기화] 완료: 제거={_log_ghost}, "
+                    f"추가={_log_new}, "
+                    f"보유={_log_total}종목"
                 )
                 trading_logger.log_portfolio_sync(
-                    ghost_removed=len(ghost_symbols),
-                    new_added=len(new_symbols),
-                    total_positions=len(portfolio.positions),
-                    cash=float(portfolio.cash),
-                    total_equity=float(portfolio.total_equity),
+                    ghost_removed=_log_ghost,
+                    new_added=_log_new,
+                    total_positions=_log_total,
+                    cash=_log_cash,
+                    total_equity=_log_equity,
                 )
             else:
                 logger.debug(
-                    f"[동기화] 확인 완료: 보유={len(portfolio.positions)}종목, 변경 없음"
+                    f"[동기화] 확인 완료: 보유={_log_total}종목, 변경 없음"
                 )
 
         except Exception as e:

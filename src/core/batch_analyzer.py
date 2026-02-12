@@ -108,6 +108,16 @@ class BatchAnalyzer:
             "max_holding_days", 10
         )
 
+    @staticmethod
+    def _safe_strategy_type(strategy_str: Optional[str]) -> StrategyType:
+        """문자열을 StrategyType으로 안전하게 변환 (ValueError 방지)"""
+        if not strategy_str:
+            return StrategyType.MOMENTUM_BREAKOUT
+        try:
+            return StrategyType(strategy_str)
+        except (ValueError, KeyError):
+            return StrategyType.MOMENTUM_BREAKOUT
+
     async def run_daily_scan(self):
         """[15:40] 일일 배치 스캔"""
         logger.info("[배치분석] ===== 일일 스캔 시작 =====")
@@ -226,7 +236,10 @@ class BatchAnalyzer:
                     continue
 
                 # 기존 이벤트 시스템으로 Signal 발행
-                strategy_type = StrategyType(sig.strategy)
+                try:
+                    strategy_type = StrategyType(sig.strategy)
+                except (ValueError, KeyError):
+                    strategy_type = StrategyType.MOMENTUM_BREAKOUT
                 signal = Signal(
                     symbol=sig.symbol,
                     side=OrderSide.BUY,
@@ -299,7 +312,7 @@ class BatchAnalyzer:
                             symbol=symbol,
                             side=OrderSide.SELL,
                             strength=SignalStrength.STRONG,
-                            strategy=StrategyType(pos.strategy) if pos.strategy else StrategyType.RSI2_REVERSAL,
+                            strategy=self._safe_strategy_type(pos.strategy),
                             price=current_price,
                             score=100,
                             confidence=1.0,
@@ -320,7 +333,7 @@ class BatchAnalyzer:
                             symbol=symbol,
                             side=OrderSide.SELL,
                             strength=SignalStrength.NORMAL,
-                            strategy=StrategyType(pos.strategy) if pos.strategy else StrategyType.RSI2_REVERSAL,
+                            strategy=self._safe_strategy_type(pos.strategy),
                             price=current_price,
                             score=80,
                             confidence=0.8,

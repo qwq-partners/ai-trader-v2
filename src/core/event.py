@@ -191,7 +191,8 @@ class SignalEvent(Event):
             stop_price=signal.stop_price,
             score=signal.score,
             confidence=signal.confidence,
-            reason=signal.reason
+            reason=signal.reason,
+            metadata=dict(signal.metadata) if signal.metadata else {}
         )
 
 

@@ -297,16 +297,16 @@ class TradingEngine:
         if event.type == EventType.SIGNAL:
             symbol = getattr(event, 'symbol', '?')
             side = getattr(event, 'side', '?')
-            score = getattr(event, 'score', 0)
+            score = getattr(event, 'score', 0) or 0
             logger.info(f"[엔진] SignalEvent 처리 시작: {symbol} {side}")
-            side_label = '매수' if str(side) == 'OrderSide.BUY' or str(side) == 'buy' else '매도'
+            side_label = '매수' if side == OrderSide.BUY else '매도'
             self.push_dashboard_event("신호", f"{symbol} {side_label} 신호 (점수:{score:.0f})")
         elif event.type == EventType.FILL:
             symbol = getattr(event, 'symbol', '?')
             side = getattr(event, 'side', '?')
             price = getattr(event, 'price', 0)
             qty = getattr(event, 'quantity', 0)
-            side_label = '매수' if str(side) == 'OrderSide.BUY' or str(side) == 'buy' else '매도'
+            side_label = '매수' if side == OrderSide.BUY else '매도'
             self.push_dashboard_event("체결", f"{symbol} {side_label} {qty}주 @ {float(price):,.0f}원")
         elif event.type == EventType.ERROR:
             msg = getattr(event, 'message', str(event))
@@ -1219,9 +1219,21 @@ class RiskManager:
             )
             return 0
 
-        # 가용 현금 기반 포지션 사이징 (포지션 수 하드 제한 없음)
+        # 일일 매수 횟수 제한 + 적응형 포지션 사이징
+        max_daily_buys = self.config.max_daily_new_buys
+        daily_buy_count = self.engine.portfolio.daily_trades
+
+        if daily_buy_count >= max_daily_buys:
+            logger.info(f"[리스크] 일일 매수 한도 도달: {daily_buy_count}/{max_daily_buys}")
+            return 0
+
+        # 적응형 사이징: 남은 슬롯에 가용현금을 고르게 배분
+        remaining_slots = max(max_daily_buys - daily_buy_count, 1)
+        adaptive_value = available * Decimal("0.9") / Decimal(str(remaining_slots))
+
+        # 기존 계산과 적응형 중 큰 값 사용 (자본 유휴 방지)
         max_value = equity * Decimal(str(self.config.max_position_pct / 100))
-        position_value = min(pct_value, max_value, available)
+        position_value = min(max(pct_value, adaptive_value), max_value, available)
 
         # 하락장 포지션 축소 (일일 손실 한도 50% 도달 시 포지션 50% 축소)
         effective_pnl = self.engine.portfolio.effective_daily_pnl

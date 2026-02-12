@@ -16,7 +16,7 @@ import aiohttp
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, Optional, Set, List
+from typing import Any, Dict, Optional, Set, List
 
 # 프로젝트 루트를 path에 추가
 project_root = Path(__file__).parent.parent
@@ -1050,7 +1050,7 @@ class TradingBot(SchedulerMixin):
                     if is_loss_exit and self.engine.risk_manager:
                         if hasattr(self.engine.risk_manager, '_stop_loss_today'):
                             self.engine.risk_manager._stop_loss_today[symbol] = datetime.now()
-                            logger.info(f"[재진입금지] {symbol} 청산 기록 (60분간 재진입 차단, 사유: {reason})")
+                            logger.info(f"[재진입금지] {symbol} 청산 기록 (30분간 재진입 차단, 사유: {reason})")
 
                     trading_logger.log_order(
                         symbol=symbol,
@@ -1122,7 +1122,12 @@ class TradingBot(SchedulerMixin):
                     )
 
         except Exception as e:
-            logger.error(f"청산 신호 처리 오류: {e}")
+            logger.error(f"청산 신호 처리 오류: {e}", exc_info=True)
+            # pending 누수 방지
+            self._exit_pending_symbols.discard(symbol)
+            self._exit_pending_timestamps.pop(symbol, None)
+            if self.engine.risk_manager:
+                await self.engine.risk_manager.clear_pending(symbol)
 
     def _register_event_handlers(self):
         """이벤트 핸들러 등록"""
@@ -1294,6 +1299,13 @@ class TradingBot(SchedulerMixin):
                 commission=float(fill.commission)
             )
 
+            # 매도 시 update_position 전에 entry_price 캡처 (전량 매도 시 포지션 삭제 대비)
+            _pre_sell_entry_price = Decimal("0")
+            if fill.side.value.upper() == "SELL":
+                pos = self.engine.portfolio.positions.get(fill.symbol)
+                if pos:
+                    _pre_sell_entry_price = pos.avg_price
+
             # 포트폴리오 업데이트 (동기화 lock으로 보호)
             async with self._portfolio_lock:
                 self.engine.update_position(fill)
@@ -1313,10 +1325,8 @@ class TradingBot(SchedulerMixin):
                         if matching:
                             entry_price = Decimal(str(matching[0].entry_price))
                     if entry_price <= 0:
-                        # 포지션에서 평균단가 가져오기 (update_position 전이라면 아직 있음)
-                        pos = self.engine.portfolio.positions.get(fill.symbol)
-                        if pos:
-                            entry_price = pos.avg_price
+                        # update_position 전에 캡처한 평균단가 사용
+                        entry_price = _pre_sell_entry_price
                     if entry_price > 0:
                         trade_pnl = (fill.price - entry_price) * fill.quantity
                         self.risk_manager.record_trade_result(trade_pnl)
@@ -1727,7 +1737,7 @@ class TradingBot(SchedulerMixin):
 
             # 없으면 설정 파일의 기본 목록 사용
             if not nxt_symbols:
-                nxt_symbols = self.config.get("nxt_default_symbols", [])
+                nxt_symbols = self.config.get("nxt_default_symbols") or []
                 if nxt_symbols:
                     logger.info(f"NXT 기본 종목 목록 사용 (설정 파일): {len(nxt_symbols)}개")
                 else:
@@ -1741,28 +1751,29 @@ class TradingBot(SchedulerMixin):
 
     def _get_price_history_for_atr(self, symbol: str) -> Optional[Dict[str, List[Decimal]]]:
         """
-        ATR 계산용 히스토리 데이터 가져오기
+        ATR 계산용 히스토리 데이터 가져오기 (전략에 로드된 일봉 활용)
 
         Returns:
             {"high": [...], "low": [...], "close": [...]} 또는 None
         """
-        if not hasattr(self, 'market_data') or not self.market_data:
-            return None
-
         try:
-            # 일봉 데이터 가져오기 (최근 20일, ATR 14일 + 여유)
-            bars = self.market_data.get_daily_bars(symbol, lookback=20)
-            if not bars or len(bars) < 15:
+            sm = self.strategy_manager or getattr(self.engine, 'strategy_manager', None)
+            if not sm:
                 return None
 
-            # 최신 → 과거 순서로 정렬 (ATR 계산 함수 요구사항)
-            bars_sorted = sorted(bars, key=lambda x: x.timestamp, reverse=True)
+            # 첫 번째 전략의 히스토리에서 데이터 조회
+            for strategy in sm.strategies.values():
+                history = strategy._price_history.get(symbol)
+                if history and len(history) >= 15:
+                    # 최신 → 과거 순서 (ATR 계산 함수 요구사항)
+                    bars_sorted = sorted(history[-20:], key=lambda x: x.timestamp, reverse=True)
+                    return {
+                        "high": [bar.high for bar in bars_sorted],
+                        "low": [bar.low for bar in bars_sorted],
+                        "close": [bar.close for bar in bars_sorted],
+                    }
 
-            return {
-                "high": [bar.high for bar in bars_sorted],
-                "low": [bar.low for bar in bars_sorted],
-                "close": [bar.close for bar in bars_sorted],
-            }
+            return None
         except Exception as e:
             logger.debug(f"[ATR] {symbol} 히스토리 데이터 로드 실패: {e}")
             return None

@@ -242,61 +242,13 @@ class Backtester:
             price = row['close']
             quantity = int(position_value / price)
             if quantity == 0:
+                continue
             # 포지션 생성 (딕셔너리)
             self.positions[symbol] = {
                 "quantity": quantity,
                 "entry_price": price,
                 "entry_time": date,
             }
-            # 포지션 생성 (딕셔너리)
-            self.positions[symbol] = {
-                "quantity": quantity,
-                "entry_price": price,
-                "entry_time": date,
-            }
-            # 포지션 생성 (딕셔너리)
-            self.positions[symbol] = {
-                "quantity": quantity,
-                "entry_price": price,
-                "entry_time": date,
-            }
-            # 포지션 생성 (딕셔너리)
-            self.positions[symbol] = {
-                "quantity": quantity,
-                "entry_price": price,
-                "entry_time": date,
-            }
-            # 포지션 생성 (딕셔너리)
-            self.positions[symbol] = {
-                "quantity": quantity,
-                "entry_price": price,
-                "entry_time": date,
-            }
-            # 포지션 생성 (딕셔너리)
-            self.positions[symbol] = {
-                "quantity": quantity,
-                "entry_price": price,
-                "entry_time": date,
-            }
-            # 포지션 생성 (딕셔너리)
-            self.positions[symbol] = {
-                "quantity": quantity,
-                "entry_price": price,
-                "entry_time": date,
-            }
-            # 포지션 생성 (딕셔너리)
-            self.positions[symbol] = {
-                "quantity": quantity,
-                "entry_price": price,
-                "entry_time": date,
-            }
-            # 포지션 생성 (딕셔너리)
-            self.positions[symbol] = {
-                "quantity": quantity,
-                "entry_price": price,
-                "entry_time": date,
-            }
-            )
             
             self.cash -= price * quantity
             

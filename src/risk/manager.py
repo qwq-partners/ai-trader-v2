@@ -232,7 +232,8 @@ class RiskManager:
         # 2. 일일 손실 한도 체크 (차등 리스크 관리)
         if self._is_daily_loss_limit_hit(portfolio, strategy_type):
             equity = portfolio.total_equity
-            daily_pnl_pct = float(portfolio.daily_pnl / equity * 100) if equity > 0 else 0.0
+            effective_pnl = getattr(portfolio, 'effective_daily_pnl', portfolio.daily_pnl)
+            daily_pnl_pct = float(effective_pnl / equity * 100) if equity > 0 else 0.0
             if daily_pnl_pct <= -5.0:
                 return False, f"일일 손실 한도 초과 ({daily_pnl_pct:.1f}%) - 전면 차단"
             else:

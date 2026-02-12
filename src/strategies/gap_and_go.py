@@ -15,7 +15,7 @@ AI Trading Bot v2 - 갭상승 추종 전략 (Gap & Go)
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, time
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Dict, List, Optional, Set, Any
 from loguru import logger
@@ -89,6 +89,12 @@ class GapAndGoStrategy(BaseStrategy):
         position: Optional[Position] = None
     ) -> Optional[Signal]:
         """매매 신호 생성"""
+        # 일일 자동 리셋 (전일 갭 데이터 잔존 방지)
+        today = date.today()
+        if not hasattr(self, '_gap_date') or self._gap_date != today:
+            self._gap_stocks.clear()
+            self._gap_date = today
+
         indicators = self.get_indicators(symbol)
 
         if not indicators:

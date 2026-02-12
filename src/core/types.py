@@ -461,6 +461,7 @@ class RiskConfig:
     # 일일 한도
     daily_max_loss_pct: float = 3.0
     daily_max_trades: int = 15
+    max_daily_new_buys: int = 5        # 일일 신규 매수 한도 (적응형 사이징 슬롯)
 
     # 포지션 관리
     base_position_pct: float = 15.0    # 기본 포지션 비율 (15% - 집중 투자)
