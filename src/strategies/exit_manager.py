@@ -279,8 +279,9 @@ class ExitManager:
         else:
             net_pnl_pct = float((current_price - state.entry_price) / state.entry_price * 100)
 
-        # 1. 손절 체크 (최우선, 동적 손절 → 전략별 → 글로벌 순서)
+        # 1. 손절 체크 (동적 손절 → 전략별 → 글로벌, min_stop_pct 보장)
         sl_pct = state.dynamic_stop_pct or state.stop_loss_pct or self.config.stop_loss_pct
+        sl_pct = max(sl_pct, self.config.min_stop_pct)
         if net_pnl_pct <= -sl_pct:
             atr_info = f", ATR={state.atr_pct:.2f}%" if state.atr_pct else ""
             return self._create_exit(

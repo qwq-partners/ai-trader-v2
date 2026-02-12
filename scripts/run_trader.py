@@ -174,6 +174,7 @@ class TradingBot(SchedulerMixin):
         self._symbol_signals: Dict[str, Any] = {}
         self._exit_pending_symbols: Set[str] = set()  # ExitManager 매도 중복 방지
         self._exit_pending_timestamps: Dict[str, datetime] = {}  # 매도 pending 타임스탬프
+        self._sell_blocked_symbols: Dict[str, datetime] = {}  # 청산 실패 종목 일시 차단 (NXT 불가 등)
         self._pause_resume_at: Optional[datetime] = None  # 자동 재개 타이머
         self._watch_symbols_lock = asyncio.Lock()
         self._portfolio_lock = asyncio.Lock()
@@ -951,16 +952,30 @@ class TradingBot(SchedulerMixin):
             if self.engine.risk_manager and symbol in self.engine.risk_manager._pending_orders:
                 return
 
+            # 청산 실패 블랙리스트 체크 (NXT 거래불가/장운영시간 에러 → 정규장 시작 시 자동 해제)
+            if symbol in self._sell_blocked_symbols:
+                blocked_at = self._sell_blocked_symbols[symbol]
+                now_bl = datetime.now()
+                # 정규장(09:00~16:00)이고 블랙리스트 등록이 장 전이면 해제 (정규장에서 재시도)
+                if 9 <= now_bl.hour < 16 and blocked_at.hour < 9:
+                    del self._sell_blocked_symbols[symbol]
+                    logger.info(f"[청산 차단 해제] {symbol} 정규장 시작으로 블랙리스트 해제")
+                # 다음 날이면 해제 (날짜가 바뀜)
+                elif now_bl.date() > blocked_at.date():
+                    del self._sell_blocked_symbols[symbol]
+                    logger.info(f"[청산 차단 해제] {symbol} 일자 변경으로 블랙리스트 해제")
+                else:
+                    return  # 블랙리스트 유지, 청산 시도 차단
+
             # 동시호가 시간대 체크 (15:20~15:30)
             now = datetime.now()
             time_val = now.hour * 100 + now.minute
             is_auction = 1520 <= time_val < 1530
 
-            # 정규장 종료 ~ 넥스트장 시작 사이 (15:31~15:39): 청산 차단
-            if 1531 <= time_val < 1540:
-                return
-            # 넥스트장 비활성화 또는 넥스트장 종료 후 (20:00+): 청산 차단
-            if time_val >= 1540 and (not self.config.trading.enable_next_market or time_val >= 2000):
+            # 정규장 종료(15:20) 이후 모든 청산 차단
+            # 넥스트장 개별 종목 거래가능 여부 판별이 불완전하므로, 안전하게 정규장만 허용
+            # 동시호가(15:20~15:30)는 is_auction=True로 LIMIT 주문 허용
+            if time_val >= 1520 and not is_auction:
                 return
 
             # 청산 신호 확인
@@ -1044,11 +1059,31 @@ class TradingBot(SchedulerMixin):
                         status=f"submitted ({reason})"
                     )
                 else:
-                    # 주문 실패 시 양쪽 pending 해제 (다음 시세에서 재시도 가능)
+                    # 주문 실패 시 양쪽 pending 해제
                     self._exit_pending_symbols.discard(symbol)
                     self._exit_pending_timestamps.pop(symbol, None)
                     if self.engine.risk_manager:
                         await self.engine.risk_manager.clear_pending(symbol)
+
+                    # 비재시도 에러 판별: NXT 거래불가 / 장운영시간 아님
+                    result_str = str(result)
+                    non_retryable = (
+                        "NXT" in result_str
+                        or "거래 불가" in result_str
+                        or "장운영시간" in result_str
+                        or "운영시간" in result_str
+                    )
+
+                    if non_retryable:
+                        # 블랙리스트 등록 (정규장까지 재시도 차단)
+                        self._sell_blocked_symbols[symbol] = datetime.now()
+                        logger.warning(
+                            f"[청산 차단] {symbol} 블랙리스트 등록: {result} "
+                            f"(정규장 시작 시 자동 해제)"
+                        )
+                        return  # 엔진 일시정지 하지 않음
+
+                    # ---- 기존 로직: 재시도 가능한 에러 → 유령 포지션 확인 + 엔진 일시정지 ----
                     logger.error(f"[청산 주문 실패] {symbol} - {result} (3회 시도 후)")
 
                     # 청산 실패 시 실제 보유 수량 재확인 (유령 포지션 제거)
@@ -1359,28 +1394,7 @@ class TradingBot(SchedulerMixin):
                         reason=reason,
                     )
 
-                    # TradeJournal 청산 기록 (진화 기능용)
-                    if self.trade_journal:
-                        try:
-                            # 청산 타입 결정
-                            exit_type = "unknown"
-                            if "손절" in reason:
-                                exit_type = "stop_loss"
-                            elif "익절" in reason or "트레일링" in reason:
-                                exit_type = "take_profit"
-                            elif "시간" in reason or "종료" in reason:
-                                exit_type = "time_exit"
-
-                            self.trade_journal.record_exit(
-                                trade_id=fill.symbol,
-                                exit_price=float(fill.price),
-                                exit_quantity=fill.quantity,
-                                exit_reason=reason,
-                                exit_type=exit_type,
-                            )
-                            logger.debug(f"[TradeJournal] 청산 기록: {fill.symbol} {exit_type} {pnl:+,.0f}원")
-                        except Exception as je:
-                            logger.warning(f"[TradeJournal] 청산 기록 실패: {je}")
+                    # TradeJournal 청산 기록은 _record_trade_to_journal()에서 처리
                 except Exception as e:
                     logger.warning(f"EXIT 로그 기록 실패: {e}")
 
@@ -1465,7 +1479,7 @@ class TradingBot(SchedulerMixin):
                         indicators = self.strategy_manager._indicators.get(fill.symbol, {})
 
                     # 청산 타입 결정 (reason 문자열 기반 추론)
-                    reason = getattr(fill, 'reason', '')
+                    reason = getattr(fill, 'reason', '') or ''
                     exit_type = "unknown"
                     if "손절" in reason:
                         exit_type = "stop_loss"
