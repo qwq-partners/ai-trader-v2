@@ -154,6 +154,7 @@ class TradingBot(SchedulerMixin):
         self.screener: Optional[StockScreener] = None
         self._screening_interval: int = 600  # 기본 10분
         self._screening_signal_cooldown: dict = {}  # 장중 스크리닝 시그널 쿨다운
+        self._daily_entry_count: Dict[str, int] = {}  # 종목별 당일 진입 횟수
 
         # 일일 레포트 생성기
         self.report_generator = None
@@ -1044,11 +1045,12 @@ class TradingBot(SchedulerMixin):
                     order_type_str = "LIMIT" if is_auction else "MARKET"
                     logger.info(f"[청산 주문 성공] {symbol} {quantity}주 ({order_type_str}) -> 주문번호: {result}")
 
-                    # 손절인 경우 RiskManager에 기록 (재진입 방지)
-                    if "손절" in reason and self.engine.risk_manager:
+                    # 청산(손절/본전이탈/트레일링) 시 RiskManager에 기록 (재진입 방지)
+                    is_loss_exit = ("손절" in reason or "본전 이탈" in reason or "트레일링" in reason)
+                    if is_loss_exit and self.engine.risk_manager:
                         if hasattr(self.engine.risk_manager, '_stop_loss_today'):
                             self.engine.risk_manager._stop_loss_today[symbol] = datetime.now()
-                            logger.info(f"[재진입금지] {symbol} 손절 기록 (60분간 재진입 차단)")
+                            logger.info(f"[재진입금지] {symbol} 청산 기록 (60분간 재진입 차단, 사유: {reason})")
 
                     trading_logger.log_order(
                         symbol=symbol,

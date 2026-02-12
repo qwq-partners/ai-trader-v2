@@ -170,6 +170,9 @@ class SchedulerMixin:
                         trading_logger.flush()
                         trading_logger._daily_records.clear()
 
+                        # 종목별 당일 진입 횟수 초기화
+                        self._daily_entry_count.clear()
+
                         last_daily_reset = today
                         logger.info("[스케줄러] 일일 통계 + 전략 상태 + pending 주문 + 거래로그 초기화 완료")
                     except Exception as e:
@@ -666,10 +669,10 @@ class SchedulerMixin:
                         and self.engine and self.broker
                         and "09:15" <= datetime.now().strftime("%H:%M") <= "15:00"):
                     try:
-                        # 만료된 쿨다운 정리 (10분)
+                        # 만료된 쿨다운 정리 (30분)
                         now = datetime.now()
                         expired = [s for s, t in self._screening_signal_cooldown.items()
-                                   if (now - t).total_seconds() > 600]
+                                   if (now - t).total_seconds() > 1800]
                         for s in expired:
                             del self._screening_signal_cooldown[s]
 
@@ -691,15 +694,22 @@ class SchedulerMixin:
                         )
 
                         if available_cash >= min_pos_value:
-                            # 오후 과열 방지: 13:30 이후 등락률 상한 8%
+                            # 시간대별 등락률 상한 (과열 방지)
                             hour_min = now.strftime("%H:%M")
-                            afternoon_overheating_cap = 8.0 if hour_min >= "13:30" else 15.0
+                            if hour_min < "10:00":
+                                overheating_cap = 8.0    # 장초반: 갭상승 되돌림 빈번 → 보수적
+                            elif hour_min >= "13:30":
+                                overheating_cap = 8.0    # 오후: 종가베팅 과열 방지
+                            else:
+                                overheating_cap = 10.0   # 10:00~13:30: 안정적 추세 형성 후
 
+                            max_daily_entries = 2  # 동일 종목 당일 최대 진입 횟수
                             candidates = [
                                 s for s in screened
                                 if s.score >= 75
                                 and s.symbol not in exclude
                                 and s.symbol not in self._screening_signal_cooldown
+                                and self._daily_entry_count.get(s.symbol, 0) < max_daily_entries
                             ]
 
                             signals_emitted = 0
@@ -744,8 +754,8 @@ class SchedulerMixin:
                                 if rt_change < 1.0:
                                     logger.debug(f"[스크리닝] {stock.symbol} 탈락: 등락률 {rt_change:+.1f}% < 1%")
                                     continue
-                                if rt_change > afternoon_overheating_cap:
-                                    logger.debug(f"[스크리닝] {stock.symbol} 탈락: 과열 {rt_change:+.1f}% > {afternoon_overheating_cap}%")
+                                if rt_change > overheating_cap:
+                                    logger.debug(f"[스크리닝] {stock.symbol} 탈락: 과열 {rt_change:+.1f}% > {overheating_cap}%")
                                     continue
                                 if rt_open > 0 and rt_price < rt_open:
                                     logger.debug(f"[스크리닝] {stock.symbol} 탈락: 현재가 {rt_price:,.0f} < 시가 {rt_open:,.0f}")
@@ -795,6 +805,7 @@ class SchedulerMixin:
                                     break  # 엔진 에러 시 추가 발행 중단
 
                                 self._screening_signal_cooldown[stock.symbol] = now
+                                self._daily_entry_count[stock.symbol] = self._daily_entry_count.get(stock.symbol, 0) + 1
                                 signals_emitted += 1
 
                                 logger.info(
