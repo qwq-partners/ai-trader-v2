@@ -181,9 +181,9 @@ class OpenAIClient(BaseLLMClient):
             session = await self._get_session()
 
             # GPT-5 시리즈 모두 max_completion_tokens 사용 (OpenAI API v2 정책)
-            # Thinking 모델(gpt-5.2 등)만 temperature 미지원
+            # GPT-5 전체(gpt-5-mini 포함)가 temperature 커스텀 미지원 (기본값 1만 허용)
             is_gpt5 = model.startswith("gpt-5")
-            is_thinking_no_temp = is_gpt5 and "mini" not in model
+            is_thinking_no_temp = is_gpt5
 
             body = {"model": model, "messages": messages}
             # OpenAI API 최신 권장: 모든 모델에서 max_completion_tokens 사용

@@ -151,7 +151,7 @@ class DartChecker:
             self._clean_cache()
 
         # symbol에서 6자리 종목코드 추출 (예: "005930" 또는 "A005930")
-        stock_code = symbol.replace("A", "").strip()
+        stock_code = symbol.lstrip("A").strip()
         corp_code = self._corp_code_map.get(stock_code)
         if not corp_code:
             # 매핑 없음 → 통과
@@ -206,16 +206,19 @@ class DartChecker:
         for disc in disclosures:
             report_nm = disc.get("report_nm", "")
 
+            matched_risk = False
             for kw in BLOCK_KEYWORDS:
                 if kw in report_nm:
                     risk_list.append(report_nm)
                     has_block = True
+                    matched_risk = True
                     break
 
-            for kw in WARNING_KEYWORDS:
-                if kw in report_nm:
-                    risk_list.append(report_nm)
-                    break
+            if not matched_risk:
+                for kw in WARNING_KEYWORDS:
+                    if kw in report_nm:
+                        risk_list.append(report_nm)
+                        break
 
             for kw in POSITIVE_KEYWORDS:
                 if kw in report_nm:

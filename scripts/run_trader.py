@@ -1186,8 +1186,14 @@ class TradingBot(SchedulerMixin):
                                 # actual_qty >= quantity인데 수량 초과 → 미체결 주문 존재 가능
                                 logger.warning(
                                     f"[미체결 주문 의심] {symbol} 실제={actual_qty}주, "
-                                    f"주문시도={quantity}주 → 기존 미체결 매도 주문 존재 가능"
+                                    f"주문시도={quantity}주 → 기존 미체결 매도 주문 취소 시도"
                                 )
+                                try:
+                                    cancelled = await self.broker.cancel_all_for_symbol(symbol)
+                                    if cancelled > 0:
+                                        logger.info(f"[미체결 취소] {symbol} {cancelled}건 취소 완료")
+                                except Exception as ce:
+                                    logger.debug(f"[미체결 취소 실패] {symbol}: {ce}")
 
                         except Exception as e:
                             logger.error(f"[수량 보정 실패] {symbol} 실제 수량 조회 오류: {e}")
@@ -1489,20 +1495,23 @@ class TradingBot(SchedulerMixin):
                     self._exit_pending_timestamps[fill.symbol] = datetime.now()
 
                 # EXIT 레코드 기록 (진입가/손익/사유)
-                # 포지션은 update_position에서 이미 갱신되었으므로 저널에서 조회
+                # _pre_sell_entry_price: update_position 전에 캡처한 원래 매수 평균가
                 try:
-                    if self.trade_journal:
+                    entry_price = float(_pre_sell_entry_price) if _pre_sell_entry_price else None
+
+                    # 폴백: 저널에서 진입가 조회
+                    if not entry_price and self.trade_journal:
                         open_trades = self.trade_journal.get_open_trades()
                         matching = [t for t in open_trades if t.symbol == fill.symbol]
                         if matching:
-                            trade = matching[0]
-                            entry_price = trade.entry_price
+                            entry_price = matching[0].entry_price
                         else:
-                            # 이미 청산된 직전 거래에서 진입가 추출
                             closed = self.trade_journal.get_closed_trades(days=1)
                             sym_trades = [t for t in closed if t.symbol == fill.symbol]
-                            entry_price = sym_trades[-1].entry_price if sym_trades else float(fill.price)
-                    else:
+                            entry_price = sym_trades[-1].entry_price if sym_trades else None
+
+                    # 최종 폴백
+                    if not entry_price:
                         entry_price = float(fill.price)
 
                     exit_price = float(fill.price)

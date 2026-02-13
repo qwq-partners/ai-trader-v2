@@ -104,9 +104,12 @@ class MCPServerConnection:
             self._connected = True
             self._reconnect_count = 0
 
+            tools_preview = ', '.join(self._tools[:5])
+            if len(self._tools) > 5:
+                tools_preview += "..."
             logger.info(
                 f"[MCP] {self.config.name} 서버 연결 성공 "
-                f"(도구 {len(self._tools)}개: {', '.join(self._tools[:5])}...)"
+                f"(도구 {len(self._tools)}개: {tools_preview})"
             )
             return True
 
@@ -155,9 +158,14 @@ class MCPServerConnection:
         except asyncio.TimeoutError:
             logger.warning(f"[MCP] {self.config.name}.{tool_name} 호출 타임아웃 ({self.config.call_timeout}초)")
             return None
-        except Exception as e:
-            logger.warning(f"[MCP] {self.config.name}.{tool_name} 호출 실패: {e}")
+        except (ConnectionError, BrokenPipeError, OSError) as e:
+            # 연결 에러 → 재연결 필요
+            logger.warning(f"[MCP] {self.config.name}.{tool_name} 연결 끊김: {e}")
             self._connected = False
+            return None
+        except Exception as e:
+            # 일반 에러 (JSON 파싱 등) → 연결은 유지
+            logger.warning(f"[MCP] {self.config.name}.{tool_name} 호출 실패: {e}")
             return None
 
     async def _try_reconnect(self) -> bool:
@@ -209,7 +217,13 @@ class MCPClientManager:
                 name="naver_search",
                 command="npx",
                 args=["-y", "@isnow890/naver-search-mcp"],
-                env=dict(os.environ),  # dotenv 로드된 환경 명시적 전달 (env=None은 MCP SDK에서 미전달)
+                env={  # 필요한 환경변수만 선별 전달 (API키 유출 방지)
+                    "PATH": os.environ.get("PATH", ""),
+                    "HOME": os.environ.get("HOME", ""),
+                    "NODE_PATH": os.environ.get("NODE_PATH", ""),
+                    "NAVER_CLIENT_ID": os.environ.get("NAVER_CLIENT_ID", ""),
+                    "NAVER_CLIENT_SECRET": os.environ.get("NAVER_CLIENT_SECRET", ""),
+                },
                 startup_timeout=30.0,
                 call_timeout=15.0,
                 max_retries=3,

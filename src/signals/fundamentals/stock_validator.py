@@ -55,10 +55,6 @@ class ValidationResult:
     trend_buzz_result: Optional[TrendBuzzResult] = None
 
 
-# 전역 싱글톤
-_stock_validator: Optional[StockValidator] = None
-
-
 class StockValidator:
     """뉴스/공시/수급/공매도/트렌드 기반 종목 검증 통합 관리자"""
 
@@ -355,7 +351,7 @@ class StockValidator:
                 return TrendBuzzResult()
 
             items = results[0].get("data", [])
-            if len(items) < 7:
+            if len(items) < 14:
                 return TrendBuzzResult()
 
             # 최근 7일 vs 이전 7일 비교
@@ -400,6 +396,10 @@ class StockValidator:
             oldest_key = min(cache, key=lambda k: cache[k][0])
             del cache[oldest_key]
         cache[key] = (time.monotonic(), value)
+
+
+# 전역 싱글톤 (클래스 정의 이후 배치)
+_stock_validator: Optional[StockValidator] = None
 
 
 def get_stock_validator() -> StockValidator:
