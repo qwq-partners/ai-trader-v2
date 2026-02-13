@@ -692,11 +692,44 @@ class SchedulerMixin:
                     screened = []
 
                 # === 장중 자동 시그널 발행 (스크리닝과 별도 예외 처리) ===
+                # 활성화된 전략만 자동진입 허용 (비활성 전략 우회 방지)
+                _enabled = set()
+                if hasattr(self, 'strategy_manager') and self.strategy_manager:
+                    _enabled = set(self.strategy_manager.enabled_strategies)
+                elif hasattr(self, 'engine') and self.engine and hasattr(self.engine, 'strategy_manager'):
+                    _enabled = set(self.engine.strategy_manager.enabled_strategies)
+                _screening_allowed = bool(_enabled)  # 활성 전략 없으면 스크리닝 진입 차단
+                _idx_change = None  # 마켓 레짐 변수 (KOSDAQ 등락률)
+
                 if (screened
+                        and _screening_allowed
                         and current_session == MarketSession.REGULAR
                         and self.engine and self.broker
                         and "09:15" <= datetime.now().strftime("%H:%M") <= "15:00"):
                     try:
+                        # === 마켓 레짐 필터 (약세장 진입 차단) ===
+                        _market_regime_ok = True
+                        try:
+                            # KODEX 코스닥150(229200)으로 KOSDAQ 레짐 판단
+                            _idx_quote = await self.broker.get_quote("229200")
+                            _idx_change = _idx_quote.get("change_pct", 0) if _idx_quote else 0
+                            if _idx_change <= -1.0:
+                                _market_regime_ok = False
+                                logger.info(
+                                    f"[스크리닝] 마켓 레짐 필터: KOSDAQ {_idx_change:+.1f}% → "
+                                    f"약세장 진입 차단"
+                                )
+                            elif _idx_change <= -0.5:
+                                logger.info(
+                                    f"[스크리닝] 마켓 레짐 주의: KOSDAQ {_idx_change:+.1f}% → "
+                                    f"보수적 진입 (점수 85+ 만)"
+                                )
+                        except Exception as _mre:
+                            logger.debug(f"[스크리닝] 마켓 레짐 조회 실패 (무시): {_mre}")
+
+                        if not _market_regime_ok:
+                            raise Exception("마켓 레짐 필터 차단")  # try 블록 전체 스킵
+
                         # 만료된 쿨다운 정리 (30분)
                         now = datetime.now()
                         expired = [s for s, t in self._screening_signal_cooldown.items()
@@ -732,13 +765,27 @@ class SchedulerMixin:
                                 overheating_cap = 10.0   # 10:00~13:30: 안정적 추세 형성 후
 
                             max_daily_entries = 2  # 동일 종목 당일 최대 진입 횟수
+                            # 마켓 레짐 보수적 모드: KOSDAQ -0.5~-1.0% → 점수 85 이상만
+                            _min_score = 85 if (_idx_change is not None and -1.0 < _idx_change <= -0.5) else 75
                             candidates = [
                                 s for s in screened
-                                if s.score >= 75
+                                if s.score >= _min_score
                                 and s.symbol not in exclude
                                 and s.symbol not in self._screening_signal_cooldown
                                 and self._daily_entry_count.get(s.symbol, 0) < max_daily_entries
                             ]
+
+                            # 장중 전략 사전 체크 (불필요한 API 호출 방지)
+                            _strategy_type = StrategyType.MOMENTUM_BREAKOUT
+                            if "momentum_breakout" in _enabled:
+                                _strategy_type = StrategyType.MOMENTUM_BREAKOUT
+                            elif "theme_chasing" in _enabled:
+                                _strategy_type = StrategyType.THEME_CHASING
+                            elif "gap_and_go" in _enabled:
+                                _strategy_type = StrategyType.GAP_AND_GO
+                            else:
+                                logger.debug("[스크리닝] 장중 전략 미활성 → 자동진입 스킵")
+                                candidates = []
 
                             signals_emitted = 0
                             for stock in candidates[:8]:  # 최대 8개 검증 (API 부하 제한)
@@ -826,7 +873,7 @@ class SchedulerMixin:
                                     symbol=stock.symbol,
                                     side=OrderSide.BUY,
                                     strength=SignalStrength.STRONG,
-                                    strategy=StrategyType.MOMENTUM_BREAKOUT,
+                                    strategy=_strategy_type,
                                     price=Decimal(str(rt_price)),
                                     target_price=Decimal(str(target_price)),
                                     stop_price=Decimal(str(stop_price)),
@@ -866,7 +913,9 @@ class SchedulerMixin:
                                 logger.info(f"[스크리닝] 장중 시그널 {signals_emitted}개 발행 완료")
 
                     except Exception as e:
-                        logger.error(f"[스크리닝] 자동진입 오류: {e}", exc_info=True)
+                        # 마켓 레짐 필터 차단은 정상 흐름 (에러 아님)
+                        if "마켓 레짐 필터" not in str(e):
+                            logger.error(f"[스크리닝] 자동진입 오류: {e}", exc_info=True)
 
                 # 다음 스캔까지 대기
                 await asyncio.sleep(self._screening_interval)

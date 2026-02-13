@@ -7,25 +7,28 @@ risk_config:
 exit_manager:
   max_stop_pct: 6.0
   min_stop_pct: 3.0
-  first_exit_pct: 2.0
+  first_exit_pct: 2.5
   first_exit_ratio: 0.3
-  stop_loss_pct: 2.0
-  trailing_activate_pct: 2.0
+  stop_loss_pct: 2.5
+  trailing_activate_pct: 3.0
   trailing_stop_pct: 2.5
 momentum_breakout:
-  stop_loss_pct: 2.0
-  min_volume_ratio: 2.2
+  stop_loss_pct: 3.5
+  min_volume_ratio: 2.5
   trading_start_time: 09:15
   min_score: 65.0
   min_breakout_pct: 0.8
 theme_chasing:
-  stop_loss_pct: 1.8
+  stop_loss_pct: 2.5
   min_volume_ratio: 2.3
   trading_start_time: 09:10
   entry_window_minutes: 20
 gap_and_go:
-  stop_loss_pct: 2.0
+  stop_loss_pct: 2.5
   min_volume_ratio: 3.0
+sepa_trend:
+  weight: 60
+  min_score: 60
 _meta:
   exit_manager.stop_loss_pct:
     source: llm

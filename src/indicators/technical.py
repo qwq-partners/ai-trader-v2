@@ -254,8 +254,8 @@ class TechnicalIndicators:
         1. MA50 > MA150 > MA200
         2. 가격 > MA50
         3. MA200 상승 추세 (close > ma200이면 간접 확인)
-        4. 52주 저점 대비 +30% 이상
-        5. 52주 고점 대비 -25% 이내
+        4. 52주 저점 대비 +20% 이상 (KRX 완화)
+        5. 52주 고점 대비 -30% 이내 (KRX 완화)
 
         Returns:
             (pass: bool, reasons: List[str])
@@ -288,21 +288,21 @@ class TechnicalIndicators:
         if change_60d and change_60d > 0:
             reasons.append(f"60일 상승 +{change_60d:.1f}%")
 
-        # 4. 52주 저점 대비 +30% 이상
+        # 4. 52주 저점 대비 +20% 이상 (KRX 시장 규모 고려, 30%→20% 완화)
         if low_52w > 0:
             from_low = (close - low_52w) / low_52w * 100
-            if from_low >= 30:
+            if from_low >= 20:
                 reasons.append(f"52w저점 대비 +{from_low:.0f}%")
             else:
-                return False, [f"52w저점 대비 +{from_low:.0f}% (<30%)"]
+                return False, [f"52w저점 대비 +{from_low:.0f}% (<20%)"]
 
-        # 5. 52주 고점 대비 -25% 이내
+        # 5. 52주 고점 대비 -30% 이내 (KRX 시장 규모 고려, -25%→-30% 완화)
         if high_52w > 0:
             from_high = (close - high_52w) / high_52w * 100
-            if from_high >= -25:
+            if from_high >= -30:
                 reasons.append(f"52w고점 대비 {from_high:.0f}%")
             else:
-                return False, [f"52w고점 대비 {from_high:.0f}% (<-25%)"]
+                return False, [f"52w고점 대비 {from_high:.0f}% (<-30%)"]
 
         return True, reasons
 

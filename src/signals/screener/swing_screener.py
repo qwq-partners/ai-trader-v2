@@ -90,10 +90,10 @@ class SwingScreener:
 
     async def _build_universe(self) -> List[Dict[str, str]]:
         """
-        1단계: 유니버스 선정 (80-100종목)
+        1단계: 유니버스 선정 (150-250종목)
 
         소스:
-        - KOSPI200 + KOSDAQ150
+        - KOSPI200 + KOSDAQ150 (거래대금 상위 200개)
         - 등락률 상위
         - 외국인/기관 순매수
 
@@ -102,10 +102,10 @@ class SwingScreener:
         """
         universe = {}  # symbol → {"symbol", "name"}
 
-        # KOSPI200 + KOSDAQ150 (StockMaster)
+        # KOSPI200 + KOSDAQ150 (StockMaster) — 200종목으로 확대
         if self._stock_master:
             try:
-                top_stocks = await self._stock_master.get_top_stocks(limit=100)
+                top_stocks = await self._stock_master.get_top_stocks(limit=200)
                 for symbol in top_stocks:
                     name = await self._stock_master.get_name(symbol) or symbol
                     universe[symbol] = {"symbol": symbol, "name": name}
@@ -115,7 +115,7 @@ class SwingScreener:
         # 등락률 순위
         if self._kis_market_data:
             try:
-                ranked = await self._kis_market_data.fetch_fluctuation_rank(limit=30)
+                ranked = await self._kis_market_data.fetch_fluctuation_rank(limit=50)
                 for item in ranked:
                     symbol = item.get("symbol", item.get("stck_shrn_iscd", ""))
                     if not symbol:
@@ -134,7 +134,7 @@ class SwingScreener:
             # 외국인 순매수
             try:
                 foreign = await self._kis_market_data.fetch_foreign_institution(investor="1")
-                for item in foreign[:20]:
+                for item in foreign[:30]:
                     symbol = item.get("symbol", item.get("stck_shrn_iscd", ""))
                     name = item.get("name", item.get("hts_kor_isnm", symbol))
                     if symbol and not self._should_exclude(name):
@@ -145,7 +145,7 @@ class SwingScreener:
             # 기관 순매수
             try:
                 inst = await self._kis_market_data.fetch_foreign_institution(investor="2")
-                for item in inst[:20]:
+                for item in inst[:30]:
                     symbol = item.get("symbol", item.get("stck_shrn_iscd", ""))
                     name = item.get("name", item.get("hts_kor_isnm", symbol))
                     if symbol and not self._should_exclude(name):
@@ -297,9 +297,8 @@ class SwingScreener:
             if not sepa_pass:
                 continue
 
-            # MA5 > MA20 정렬 필터 (단기 추세도 상승)
-            if not ind.get("ma5_above_ma20", False):
-                continue
+            # MA5 > MA20: 필수 아닌 보너스 (단기 눌림목에서도 진입 기회 확보)
+            # → sepa_trend.py 점수 계산에서 가점으로 반영
 
             close = Decimal(str(ind.get("close", 0)))
             if close <= 0:

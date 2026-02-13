@@ -527,6 +527,9 @@ class TradingBot(SchedulerMixin):
                 stop_loss_pct=exit_cfg.get("stop_loss_pct", 2.5),
                 trailing_stop_pct=exit_cfg.get("trailing_stop_pct", 1.5),
                 trailing_activate_pct=exit_cfg.get("trailing_activate_pct", 3.0),
+                min_stop_pct=exit_cfg.get("min_stop_pct", 2.0),
+                max_stop_pct=exit_cfg.get("max_stop_pct", 4.0),
+                atr_multiplier=exit_cfg.get("atr_multiplier", 1.5),
                 include_fees=exit_cfg.get("include_fees", True),
             ))
             logger.info("분할 익절 관리자 초기화 완료")
