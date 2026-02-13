@@ -159,6 +159,12 @@ class TradingBot(SchedulerMixin):
         # 일일 레포트 생성기
         self.report_generator = None
 
+        # MCP 서버 클라이언트 (pykrx, naver-search)
+        self._mcp_manager = None
+
+        # 종목 뉴스/공시 검증기
+        self._stock_validator: Optional['StockValidator'] = None
+
         # 자가 진화 엔진
         self.trade_journal = None
         self.strategy_evolver = None
@@ -367,6 +373,26 @@ class TradingBot(SchedulerMixin):
             import src.signals.sentiment.theme_detector as _td_mod
             _td_mod._theme_detector = self.theme_detector
             logger.info("테마 탐지기 초기화 완료")
+
+            # MCP 서버 클라이언트 초기화 (pykrx, naver-search)
+            try:
+                from src.utils.mcp_client import get_mcp_manager
+                self._mcp_manager = get_mcp_manager()
+                await self._mcp_manager.initialize()
+                logger.info("MCP 서버 클라이언트 초기화 완료")
+            except Exception as e:
+                logger.warning(f"MCP 클라이언트 초기화 실패 (무시): {e}")
+                self._mcp_manager = None
+
+            # 종목 뉴스/공시 검증기 초기화
+            try:
+                from src.signals.fundamentals import get_stock_validator
+                self._stock_validator = get_stock_validator()
+                await self._stock_validator.initialize()
+                logger.info("종목 뉴스/공시 검증기 초기화 완료")
+            except Exception as e:
+                logger.warning(f"종목 검증기 초기화 실패 (무시): {e}")
+                self._stock_validator = None
 
             # 전략 매니저 초기화
             self.strategy_manager = StrategyManager(self.engine)
@@ -965,6 +991,10 @@ class TradingBot(SchedulerMixin):
                 elif now_bl.date() > blocked_at.date():
                     del self._sell_blocked_symbols[symbol]
                     logger.info(f"[청산 차단 해제] {symbol} 일자 변경으로 블랙리스트 해제")
+                # 장중 5분 경과 시 자동 해제 (수량 초과 등 일시적 차단)
+                elif (now_bl - blocked_at).total_seconds() >= 300:
+                    del self._sell_blocked_symbols[symbol]
+                    logger.info(f"[청산 차단 해제] {symbol} 5분 경과로 블랙리스트 해제")
                 else:
                     return  # 블랙리스트 유지, 청산 시도 차단
 
@@ -1085,6 +1115,91 @@ class TradingBot(SchedulerMixin):
                         )
                         return  # 엔진 일시정지 하지 않음
 
+                    # ---- 수량 초과 에러: 실제 보유수량 보정 후 재시도 ----
+                    if "수량을 초과" in result_str or "APBK0400" in result_str:
+                        logger.warning(
+                            f"[수량 보정] {symbol} 주문수량({quantity}주) 초과 → 실제 보유수량 확인 중..."
+                        )
+                        try:
+                            actual_positions = await self.broker.get_positions()
+                            actual_pos = actual_positions.get(symbol)
+                            actual_qty = actual_pos.quantity if actual_pos else 0
+
+                            if actual_qty == 0:
+                                # 유령 포지션 제거
+                                logger.warning(
+                                    f"[유령 포지션 제거] {symbol} - 실제 보유 0주 (수량 초과 후 확인)"
+                                )
+                                if symbol in self.engine.portfolio.positions:
+                                    del self.engine.portfolio.positions[symbol]
+                                if self.exit_manager:
+                                    self.exit_manager.remove_position(symbol)
+                                logger.info(f"[포지션 정리 완료] {symbol} 유령 포지션 제거됨")
+                                return
+
+                            elif actual_qty < quantity:
+                                # 수량 보정: 포트폴리오 + ExitManager 동기화
+                                logger.warning(
+                                    f"[수량 보정] {symbol} 봇={quantity}주 → 실제={actual_qty}주, "
+                                    f"포트폴리오/ExitManager 동기화"
+                                )
+                                if symbol in self.engine.portfolio.positions:
+                                    self.engine.portfolio.positions[symbol].quantity = actual_qty
+                                if self.exit_manager:
+                                    em_state = self.exit_manager.get_state(symbol)
+                                    if em_state:
+                                        em_state.remaining_quantity = actual_qty
+
+                                # 보정된 수량으로 매도 재시도
+                                corrected_order = Order(
+                                    symbol=symbol,
+                                    side=OrderSide.SELL,
+                                    order_type=OrderType.LIMIT if is_auction else OrderType.MARKET,
+                                    quantity=actual_qty,
+                                    price=current_price if is_auction else None,
+                                )
+                                self._exit_pending_symbols.add(symbol)
+                                self._exit_pending_timestamps[symbol] = datetime.now()
+                                if self.engine.risk_manager:
+                                    self.engine.risk_manager._pending_orders.add(symbol)
+                                    self.engine.risk_manager._pending_timestamps[symbol] = datetime.now()
+                                    self.engine.risk_manager._pending_sides[symbol] = OrderSide.SELL
+                                    self.engine.risk_manager._pending_quantities[symbol] = actual_qty
+
+                                retry_ok, retry_result = await self.broker.submit_order(corrected_order)
+                                if retry_ok:
+                                    logger.info(
+                                        f"[수량 보정 성공] {symbol} {actual_qty}주 매도 주문 제출 "
+                                        f"(원래 {quantity}주 → {actual_qty}주)"
+                                    )
+                                    return
+                                else:
+                                    logger.error(
+                                        f"[수량 보정 후 재시도 실패] {symbol} {actual_qty}주: {retry_result}"
+                                    )
+                                    self._exit_pending_symbols.discard(symbol)
+                                    self._exit_pending_timestamps.pop(symbol, None)
+                                    if self.engine.risk_manager:
+                                        await self.engine.risk_manager.clear_pending(symbol)
+
+                            else:
+                                # actual_qty >= quantity인데 수량 초과 → 미체결 주문 존재 가능
+                                logger.warning(
+                                    f"[미체결 주문 의심] {symbol} 실제={actual_qty}주, "
+                                    f"주문시도={quantity}주 → 기존 미체결 매도 주문 존재 가능"
+                                )
+
+                        except Exception as e:
+                            logger.error(f"[수량 보정 실패] {symbol} 실제 수량 조회 오류: {e}")
+
+                        # 수량 보정 후에도 실패하면 블랙리스트 등록 (무한 루프 방지)
+                        self._sell_blocked_symbols[symbol] = datetime.now()
+                        logger.warning(
+                            f"[청산 차단] {symbol} 수량 초과 반복 → 블랙리스트 등록 "
+                            f"(다음 포트폴리오 동기화 시 재시도)"
+                        )
+                        return  # 엔진 일시정지 하지 않음 (무한 루프 방지)
+
                     # ---- 기존 로직: 재시도 가능한 에러 → 유령 포지션 확인 + 엔진 일시정지 ----
                     logger.error(f"[청산 주문 실패] {symbol} - {result} (3회 시도 후)")
 
@@ -1100,7 +1215,6 @@ class TradingBot(SchedulerMixin):
                                 del self.engine.portfolio.positions[symbol]
                             if self.exit_manager:
                                 self.exit_manager.remove_position(symbol)
-                            # 유령 포지션이었으므로 엔진 일시정지 불필요
                             logger.info(f"[포지션 정리 완료] {symbol} 유령 포지션 제거됨, 엔진 계속 동작")
                             return  # 유령 포지션이므로 엔진 일시정지 스킵
                     except Exception as e:
@@ -1940,6 +2054,13 @@ class TradingBot(SchedulerMixin):
                 logger.info("배치 분석기 종료")
         except Exception as e:
             logger.error(f"배치 분석기 종료 실패: {e}")
+
+        try:
+            if self._mcp_manager:
+                await self._mcp_manager.shutdown()
+                logger.info("MCP 서버 클라이언트 종료")
+        except Exception as e:
+            logger.error(f"MCP 클라이언트 종료 실패: {e}")
 
         # 미체결 주문 전량 취소 (RiskManager pending + ExitManager pending + 보유 종목 합집합)
         try:

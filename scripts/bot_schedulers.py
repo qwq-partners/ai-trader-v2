@@ -777,6 +777,24 @@ class SchedulerMixin:
                                     logger.debug(f"[스크리닝] {stock.symbol} 탈락: 거래량 0")
                                     continue
 
+                                # === 뉴스/공시 검증 ===
+                                _confidence_adj = 0.0
+                                if self._stock_validator:
+                                    try:
+                                        validation = await self._stock_validator.validate(
+                                            symbol=stock.symbol,
+                                            stock_name=stock.name,
+                                        )
+                                        if not validation.approved:
+                                            logger.info(
+                                                f"[스크리닝] {stock.symbol} {stock.name} 탈락: "
+                                                f"{validation.block_reason}"
+                                            )
+                                            continue
+                                        _confidence_adj = validation.confidence_adjustment
+                                    except Exception as e:
+                                        logger.debug(f"[스크리닝] {stock.symbol} 검증 오류 (무시): {e}")
+
                                 # ATR 기반 stop/target 계산
                                 atr_pct = 4.0  # 기본값
                                 for reason in stock.reasons:
@@ -798,7 +816,7 @@ class SchedulerMixin:
                                     target_price=Decimal(str(target_price)),
                                     stop_price=Decimal(str(stop_price)),
                                     score=stock.score,
-                                    confidence=stock.score / 100.0,
+                                    confidence=(stock.score / 100.0) + _confidence_adj,
                                     reason=f"스크리닝 자동진입: {stock.name} 점수={stock.score:.0f} 등락={rt_change:+.1f}%",
                                     metadata={
                                         "source": "live_screening",
@@ -807,6 +825,7 @@ class SchedulerMixin:
                                         "rt_change_pct": rt_change,
                                         "atr_pct": atr_pct,
                                         "sector": _sector,
+                                        "news_validation": _confidence_adj,
                                     },
                                 )
 
