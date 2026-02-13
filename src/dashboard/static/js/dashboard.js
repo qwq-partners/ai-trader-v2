@@ -532,6 +532,57 @@ function renderExternalAccounts(accounts) {
 }
 
 // ============================================================
+// 주문 이벤트 히스토리
+// ============================================================
+
+function renderOrderHistory(events) {
+    const card = document.getElementById('order-history-card');
+    const tbody = document.getElementById('order-history-body');
+    const countEl = document.getElementById('order-history-count');
+
+    if (!events || events.length === 0) {
+        card.style.display = 'none';
+        return;
+    }
+
+    card.style.display = 'block';
+    countEl.textContent = events.length + '건';
+
+    const typeColors = {
+        '체결': 'badge-green',
+        '주문': 'badge-blue',
+        '취소': 'badge-red',
+        '폴백': 'badge-yellow',
+        '신호': 'badge-purple',
+    };
+
+    // 최신순 정렬, 최대 20건
+    const sorted = [...events].reverse().slice(0, 20);
+
+    const rows = sorted.map(evt => {
+        const time = evt.time ? formatTime(evt.time) : '--';
+        const evtType = evt.type || '--';
+        const message = evt.message || '';
+
+        let badgeCls = 'badge-blue';
+        for (const [key, cls] of Object.entries(typeColors)) {
+            if (evtType.includes(key) || message.includes(key)) {
+                badgeCls = cls;
+                break;
+            }
+        }
+
+        return `<tr class="border-b" style="border-color: rgba(99,102,241,0.08);">
+            <td class="py-2 pr-3 mono" style="font-size: 0.78rem; color: var(--text-secondary); white-space: nowrap;">${time}</td>
+            <td class="py-2 pr-3"><span class="badge ${badgeCls}">${evtType}</span></td>
+            <td class="py-2" style="font-size: 0.82rem; color: var(--text-primary);">${message}</td>
+        </tr>`;
+    }).join('');
+
+    tbody.innerHTML = rows;
+}
+
+// ============================================================
 // 프리마켓 (NXT) 표시
 // ============================================================
 
@@ -637,6 +688,17 @@ document.addEventListener('DOMContentLoaded', () => {
     loadPremarket();
     // 30초마다 프리마켓 갱신
     setInterval(loadPremarket, 30000);
+
+    // 주문 히스토리 로드
+    api('/api/orders/history').then(data => {
+        renderOrderHistory(data);
+    }).catch(() => {});
+    // 30초마다 주문 히스토리 갱신
+    setInterval(() => {
+        api('/api/orders/history').then(data => {
+            renderOrderHistory(data);
+        }).catch(() => {});
+    }, 30000);
 
     addLogEntry(formatTime(new Date().toISOString()), '시스템', '대시보드 연결됨');
 });

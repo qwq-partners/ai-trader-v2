@@ -35,6 +35,8 @@ def setup_api_routes(app: web.Application, data_collector):
     app.router.add_get("/api/equity-curve", handler.get_equity_curve)
     app.router.add_get("/api/health-checks", handler.get_health_checks)
     app.router.add_get("/api/accounts/positions", handler.get_external_accounts)
+    app.router.add_get("/api/equity-history", handler.get_equity_history)
+    app.router.add_get("/api/equity-history/positions", handler.get_equity_history_positions)
     app.router.add_post("/api/evolution/apply", handler.apply_evolution_parameter)
 
 
@@ -132,6 +134,35 @@ class APIHandler:
 
     async def get_external_accounts(self, request: web.Request) -> web.Response:
         return web.json_response(await self.dc.get_external_accounts())
+
+    async def get_equity_history(self, request: web.Request) -> web.Response:
+        date_from = request.query.get("from")
+        date_to = request.query.get("to")
+        if date_from and date_to:
+            # 날짜 형식 검증
+            try:
+                datetime.strptime(date_from, "%Y-%m-%d")
+                datetime.strptime(date_to, "%Y-%m-%d")
+            except ValueError:
+                return web.json_response(
+                    {"error": "Invalid date format. Use YYYY-MM-DD"}, status=400
+                )
+            return web.json_response(
+                self.dc.get_equity_history_range(date_from, date_to)
+            )
+        # fallback: days 파라미터
+        try:
+            days = int(request.query.get("days", "30"))
+        except ValueError:
+            return web.json_response({"error": "Invalid days parameter"}, status=400)
+        days = max(1, min(days, 365))
+        return web.json_response(self.dc.get_equity_history(days))
+
+    async def get_equity_history_positions(self, request: web.Request) -> web.Response:
+        date_str = request.query.get("date")
+        if not date_str:
+            return web.json_response({"error": "date parameter required"}, status=400)
+        return web.json_response(self.dc.get_equity_history_positions(date_str))
 
     async def apply_evolution_parameter(self, request: web.Request) -> web.Response:
         """

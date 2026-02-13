@@ -224,6 +224,21 @@ class SchedulerMixin:
                         except Exception as e:
                             logger.error(f"[레포트] 오후 레포트 발송 실패: {e}")
 
+                        # 자산 스냅샷 저장 (오후 레포트 직후)
+                        equity_tracker = getattr(self, 'equity_tracker', None)
+                        if equity_tracker and not getattr(self, '_last_equity_snapshot_date', None) == today:
+                            try:
+                                name_cache = {}
+                                if hasattr(self, 'dashboard') and self.dashboard:
+                                    name_cache = self.dashboard.data_collector._build_name_cache()
+                                equity_tracker.save_snapshot(
+                                    self.engine.portfolio, self.trade_journal, name_cache
+                                )
+                                self._last_equity_snapshot_date = today
+                                logger.info("[자산추적] 일일 스냅샷 저장 완료")
+                            except Exception as e:
+                                logger.error(f"[자산추적] 스냅샷 저장 실패: {e}")
+
                 # 1분마다 체크
                 await asyncio.sleep(60)
 

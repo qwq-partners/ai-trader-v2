@@ -935,6 +935,87 @@ class DashboardDataCollector:
             return result
 
     # ----------------------------------------------------------
+    # 자산 히스토리 (Equity History)
+    # ----------------------------------------------------------
+
+    def _build_equity_summary(self, snapshots) -> Dict[str, Any]:
+        """스냅샷 리스트에서 요약 통계 계산"""
+        snap_dicts = [s.to_dict() for s in snapshots]
+
+        first_equity = snapshots[0].total_equity
+        last_equity = snapshots[-1].total_equity
+        period_return = last_equity - first_equity
+        period_return_pct = (period_return / first_equity * 100) if first_equity > 0 else 0
+
+        # 최대 낙폭 (MDD)
+        peak = snapshots[0].total_equity
+        max_drawdown = 0.0
+        for s in snapshots:
+            if s.total_equity > peak:
+                peak = s.total_equity
+            dd = (s.total_equity - peak) / peak * 100 if peak > 0 else 0
+            if dd < max_drawdown:
+                max_drawdown = dd
+
+        # 평균 일일 손익
+        daily_pnls = [s.daily_pnl for s in snapshots if s.daily_pnl != 0]
+        avg_daily_pnl = sum(daily_pnls) / len(daily_pnls) if daily_pnls else 0
+
+        # 가장 오래된/최신 날짜
+        tracker = getattr(self.bot, 'equity_tracker', None)
+        oldest_date = tracker.get_oldest_date() if tracker else None
+
+        return {
+            "snapshots": snap_dicts,
+            "summary": {
+                "period_return": round(period_return, 0),
+                "period_return_pct": round(period_return_pct, 2),
+                "max_drawdown_pct": round(max_drawdown, 2),
+                "avg_daily_pnl": round(avg_daily_pnl, 0),
+                "first_equity": first_equity,
+                "last_equity": last_equity,
+                "data_days": len(snapshots),
+                "oldest_date": oldest_date,
+            },
+        }
+
+    def get_equity_history(self, days: int = 30) -> Dict[str, Any]:
+        """일별 자산 히스토리 + 요약 통계 (days 기반)"""
+        tracker = getattr(self.bot, 'equity_tracker', None)
+        if not tracker:
+            return {"snapshots": [], "summary": {}}
+
+        snapshots = tracker.load_history(days)
+        if not snapshots:
+            return {"snapshots": [], "summary": {"oldest_date": tracker.get_oldest_date()}}
+
+        return self._build_equity_summary(snapshots)
+
+    def get_equity_history_range(self, date_from: str, date_to: str) -> Dict[str, Any]:
+        """일별 자산 히스토리 + 요약 통계 (from~to 범위)"""
+        tracker = getattr(self.bot, 'equity_tracker', None)
+        if not tracker:
+            return {"snapshots": [], "summary": {}}
+
+        snapshots = tracker.load_history_range(date_from, date_to)
+        if not snapshots:
+            return {"snapshots": [], "summary": {"oldest_date": tracker.get_oldest_date()}}
+
+        return self._build_equity_summary(snapshots)
+
+    def get_equity_history_positions(self, date_str: str) -> Dict[str, Any]:
+        """특정일 자산 스냅샷 + 포지션 상세"""
+        tracker = getattr(self.bot, 'equity_tracker', None)
+        if not tracker:
+            return {"error": "Equity tracker not available"}
+
+        snapshot = tracker.get_snapshot(date_str)
+        if not snapshot:
+            return {"error": f"No data for {date_str}", "date": date_str, "positions": []}
+
+        return snapshot.to_dict()
+
+    # ----------------------------------------------------------
     # 시스템 건강 메트릭
     # ----------------------------------------------------------
 

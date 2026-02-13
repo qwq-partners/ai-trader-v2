@@ -169,6 +169,9 @@ class TradingBot(SchedulerMixin):
         self.trade_journal = None
         self.strategy_evolver = None
 
+        # 자산 히스토리 추적기
+        self.equity_tracker = None
+
         # 감시 종목
         self._watch_symbols: List[str] = []
 
@@ -581,6 +584,15 @@ class TradingBot(SchedulerMixin):
                                 logger.info(f"  포지션 전략 보강: {symbol} → {trade.entry_strategy}")
 
                 logger.info("자가 진화 엔진 초기화 완료")
+
+            # 자산 히스토리 추적기 초기화
+            from src.analytics.equity_tracker import EquityTracker
+            self.equity_tracker = EquityTracker()
+            # 기존 거래 저널에서 과거 데이터 백필
+            if self.trade_journal:
+                self.equity_tracker.backfill_from_journal(
+                    initial_capital=float(self.engine.portfolio.initial_capital)
+                )
 
             # 종목 스크리너 초기화
             self.screener = get_screener()

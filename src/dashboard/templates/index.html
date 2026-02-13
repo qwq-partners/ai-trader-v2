@@ -337,9 +337,9 @@
                 <!-- Nav links -->
                 <div style="display: flex; gap: 4px;">
                     <a href="/" class="nav-pill active" data-page="index">실시간</a>
-                    <a href="/orders" class="nav-pill" data-page="orders">주문</a>
                     <a href="/trades" class="nav-pill" data-page="trades">거래</a>
                     <a href="/performance" class="nav-pill" data-page="performance">성과</a>
+                    <a href="/equity" class="nav-pill" data-page="equity">자산</a>
                     <a href="/themes" class="nav-pill" data-page="themes">테마</a>
                     <a href="/evolution" class="nav-pill" data-page="evolution">진화</a>
                     <a href="/settings" class="nav-pill" data-page="settings">설정</a>
@@ -541,6 +541,27 @@
         <!-- External Accounts -->
         <div id="external-accounts-section" style="display: none; margin-bottom: 16px;">
             <div id="external-accounts-container"></div>
+        </div>
+
+        <!-- Order Event Log -->
+        <div id="order-history-card" class="card animate-in delay-4" style="padding: 24px; margin-bottom: 16px; display: none;">
+            <div class="card-header">
+                <span class="dot" style="background: var(--accent-cyan); box-shadow: 0 0 8px var(--accent-cyan);"></span>
+                주문 이벤트 로그
+                <span id="order-history-count" style="margin-left: auto; font-size: 0.7rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; background: var(--bg-elevated); padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border-subtle);">0건</span>
+            </div>
+            <div style="overflow-x: auto; max-height: 300px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(99,102,241,0.15) transparent;">
+                <table style="width: 100%; text-align: left; border-collapse: collapse;">
+                    <thead>
+                        <tr style="border-bottom: 1px solid var(--border-subtle);">
+                            <th style="padding: 0 10px 10px 0;">시간</th>
+                            <th style="padding: 0 10px 10px 0;">유형</th>
+                            <th style="padding: 0 0 10px 0;">내용</th>
+                        </tr>
+                    </thead>
+                    <tbody id="order-history-body"></tbody>
+                </table>
+            </div>
         </div>
 
         <!-- Event Log -->
