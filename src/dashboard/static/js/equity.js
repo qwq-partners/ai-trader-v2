@@ -107,6 +107,24 @@ function renderEquityChart(snapshots) {
             `변동  ${sign}${Number(change).toLocaleString('ko-KR')}원 (${pctSign}${s.daily_pnl_pct}%)`;
     });
 
+    // Y축 범위: 데이터 min/max 기준 ±3% 패딩
+    const minEquity = Math.min(...equities);
+    const maxEquity = Math.max(...equities);
+    const padding = (maxEquity - minEquity) * 0.3 || maxEquity * 0.02;
+    const yMin = minEquity - padding;
+    const yMax = maxEquity + padding;
+
+    // 영역 채우기용 베이스라인 trace
+    const baseLine = {
+        x: dates,
+        y: dates.map(() => yMin),
+        type: 'scatter',
+        mode: 'lines',
+        line: { width: 0 },
+        showlegend: false,
+        hoverinfo: 'skip',
+    };
+
     const trace = {
         x: dates,
         y: equities,
@@ -120,8 +138,8 @@ function renderEquityChart(snapshots) {
             line: { color: '#1a1a2e', width: 2 },
             symbol: 'circle',
         },
-        fill: 'tozeroy',
-        fillcolor: 'rgba(99,102,241,0.06)',
+        fill: 'tonexty',
+        fillcolor: 'rgba(99,102,241,0.08)',
         hovertext: hoverTexts,
         hoverinfo: 'text',
     };
@@ -146,6 +164,7 @@ function renderEquityChart(snapshots) {
             tickfont: { size: 11, family: 'JetBrains Mono, monospace', color: '#5a6480' },
             tickformat: ',.0f',
             ticksuffix: '원',
+            range: [yMin, yMax],
             showspikes: true,
             spikemode: 'across',
             spikethickness: 1,
@@ -165,10 +184,10 @@ function renderEquityChart(snapshots) {
     const config = { displayModeBar: false, responsive: true };
 
     if (!equityChartInitialized) {
-        Plotly.newPlot('equity-chart', [trace], layout, config);
+        Plotly.newPlot('equity-chart', [baseLine, trace], layout, config);
         equityChartInitialized = true;
     } else {
-        Plotly.react('equity-chart', [trace], layout, config);
+        Plotly.react('equity-chart', [baseLine, trace], layout, config);
     }
 }
 
