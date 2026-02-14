@@ -172,6 +172,9 @@ class TradingBot(SchedulerMixin):
         # 자산 히스토리 추적기
         self.equity_tracker = None
 
+        # 일일 거래 리뷰어
+        self.daily_reviewer = None
+
         # 감시 종목
         self._watch_symbols: List[str] = []
 
@@ -596,6 +599,11 @@ class TradingBot(SchedulerMixin):
                 self.equity_tracker.backfill_from_journal(
                     initial_capital=float(self.engine.portfolio.initial_capital)
                 )
+
+            # 일일 거래 리뷰어 초기화
+            from src.core.evolution.daily_reviewer import DailyReviewer
+            self.daily_reviewer = DailyReviewer()
+            logger.info("일일 거래 리뷰어 초기화 완료")
 
             # 종목 스크리너 초기화
             self.screener = get_screener()

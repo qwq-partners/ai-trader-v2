@@ -37,6 +37,8 @@ def setup_api_routes(app: web.Application, data_collector):
     app.router.add_get("/api/accounts/positions", handler.get_external_accounts)
     app.router.add_get("/api/equity-history", handler.get_equity_history)
     app.router.add_get("/api/equity-history/positions", handler.get_equity_history_positions)
+    app.router.add_get("/api/daily-review", handler.get_daily_review)
+    app.router.add_get("/api/daily-review/dates", handler.get_daily_review_dates)
     app.router.add_post("/api/evolution/apply", handler.apply_evolution_parameter)
 
 
@@ -157,6 +159,22 @@ class APIHandler:
             return web.json_response({"error": "Invalid days parameter"}, status=400)
         days = max(1, min(days, 365))
         return web.json_response(self.dc.get_equity_history(days))
+
+    async def get_daily_review(self, request: web.Request) -> web.Response:
+        date_str = request.query.get("date")
+        if not date_str:
+            # 기본값: 오늘
+            date_str = date.today().isoformat()
+        try:
+            datetime.strptime(date_str, "%Y-%m-%d")
+        except ValueError:
+            return web.json_response(
+                {"error": "Invalid date format. Use YYYY-MM-DD"}, status=400
+            )
+        return web.json_response(self.dc.get_daily_review(date_str))
+
+    async def get_daily_review_dates(self, request: web.Request) -> web.Response:
+        return web.json_response(self.dc.get_daily_review_dates())
 
     async def get_equity_history_positions(self, request: web.Request) -> web.Response:
         date_str = request.query.get("date")

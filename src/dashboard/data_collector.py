@@ -1016,6 +1016,33 @@ class DashboardDataCollector:
         return snapshot.to_dict()
 
     # ----------------------------------------------------------
+    # 일일 거래 리뷰 (Daily Review)
+    # ----------------------------------------------------------
+
+    def get_daily_review(self, date_str: str) -> Dict[str, Any]:
+        """일일 거래 리뷰 (거래 복기 + LLM 평가 통합)"""
+        reviewer = getattr(self.bot, 'daily_reviewer', None)
+        if not reviewer:
+            return {"date": date_str, "trade_report": None, "llm_review": None}
+
+        trade_report = reviewer.load_report(date_str)
+        llm_review = reviewer.load_llm_review(date_str)
+
+        return _serialize({
+            "date": date_str,
+            "trade_report": trade_report,
+            "llm_review": llm_review,
+        })
+
+    def get_daily_review_dates(self) -> Dict[str, Any]:
+        """리뷰 가능 날짜 목록"""
+        reviewer = getattr(self.bot, 'daily_reviewer', None)
+        if not reviewer:
+            return {"dates": []}
+
+        return {"dates": reviewer.list_available_dates()}
+
+    # ----------------------------------------------------------
     # 시스템 건강 메트릭
     # ----------------------------------------------------------
 

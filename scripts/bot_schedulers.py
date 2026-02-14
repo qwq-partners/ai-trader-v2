@@ -239,6 +239,16 @@ class SchedulerMixin:
                             except Exception as e:
                                 logger.error(f"[자산추적] 스냅샷 저장 실패: {e}")
 
+                        # 거래 복기 리포트 생성 (17:00)
+                        daily_reviewer = getattr(self, 'daily_reviewer', None)
+                        if daily_reviewer and not getattr(self, '_last_trade_report_date', None) == today:
+                            try:
+                                daily_reviewer.generate_trade_report(self.trade_journal)
+                                self._last_trade_report_date = today
+                                logger.info("[거래리뷰] 일일 거래 복기 리포트 생성 완료")
+                            except Exception as e:
+                                logger.error(f"[거래리뷰] 거래 복기 리포트 생성 실패: {e}")
+
                 # 1분마다 체크
                 await asyncio.sleep(60)
 
@@ -249,14 +259,14 @@ class SchedulerMixin:
 
     async def _run_evolution_scheduler(self):
         """
-        자가 진화 스케줄러 (단순화)
+        LLM 거래 리뷰 스케줄러
 
-        - 넥스트장 마감 후 1회 실행
-        - evolve() 내부에서 평가/롤백/적용 모두 처리
+        - 매일 20:30 LLM 종합평가 생성 + 텔레그램 발송
+        - 자동 파라미터 변경 비활성화 (리포트만 생성)
         """
-        last_evolution_date: Optional[date] = None
+        last_review_date: Optional[date] = None
 
-        # config에서 진화 실행 시간 로드
+        # config에서 리뷰 실행 시간 로드
         sched_cfg = self.config.get("scheduler") or {}
         evo_time_str = sched_cfg.get("evolution_time", "20:30")
         evo_hour, evo_min = (int(x) for x in evo_time_str.split(":"))
@@ -271,54 +281,39 @@ class SchedulerMixin:
                     await asyncio.sleep(60)
                     continue
 
-                # 넥스트장 마감 후 일일 진화 실행 (설정 시간 ~ +15분)
+                # 20:30 ~ +15분: LLM 종합평가 생성
                 if now.hour == evo_hour and evo_min <= now.minute < evo_min + 15:
-                    if last_evolution_date != today:
-                        logger.info("[진화] 일일 자가 진화 시작...")
+                    if last_review_date != today:
+                        daily_reviewer = getattr(self, 'daily_reviewer', None)
+                        if daily_reviewer:
+                            logger.info("[거래리뷰] LLM 종합평가 생성 시작...")
 
-                        try:
-                            evolution_cfg = self.config.get("evolution") or {}
-                            analysis_days = evolution_cfg.get("analysis_days", 7)
-
-                            result = await self.strategy_evolver.evolve(days=analysis_days)
-
-                            status = result.get("status", "unknown")
-                            reason = result.get("reason", "")
-                            change = result.get("change")
-
-                            logger.info(f"[진화] 결과: status={status}, reason={reason}")
-
-                            if change:
-                                logger.info(
-                                    f"[진화] 변경: {change.get('parameter', '?')} "
-                                    f"= {change.get('new_value', '?')} "
-                                    f"(이유: {change.get('reason', '?')})"
+                            try:
+                                result = await daily_reviewer.generate_llm_review(
+                                    self.trade_journal
                                 )
 
-                            # 텔레그램 알림 (적용/롤백/확정 시)
-                            if status in ("applied", "rollback", "keep") and evolution_cfg.get("send_telegram", True):
-                                emoji = {"applied": "🔧", "rollback": "⏪", "keep": "✅"}.get(status, "📊")
-                                msg = f"{emoji} <b>[진화]</b> {status.upper()}"
-                                if change:
-                                    msg += f"\n파라미터: {change.get('parameter', '?')}"
-                                    msg += f"\n값: {change.get('new_value', '?')}"
-                                    msg += f"\n이유: {change.get('reason', '?')}"
-                                try:
-                                    await send_alert(msg)
-                                except Exception:
-                                    pass
+                                assessment = result.get("assessment", "unknown")
+                                trade_count = len(result.get("trade_reviews", []))
+                                logger.info(
+                                    f"[거래리뷰] LLM 평가 완료: "
+                                    f"assessment={assessment}, "
+                                    f"거래 {trade_count}건 복기"
+                                )
 
-                            last_evolution_date = today
+                                last_review_date = today
 
-                        except Exception as e:
-                            logger.error(f"[진화] 실행 오류: {e}")
-                            import traceback
-                            await self._send_error_alert(
-                                "ERROR",
-                                "자가 진화 실행 오류",
-                                traceback.format_exc()
-                            )
-                            last_evolution_date = today
+                            except Exception as e:
+                                logger.error(f"[거래리뷰] LLM 평가 생성 실패: {e}")
+                                import traceback
+                                await self._send_error_alert(
+                                    "ERROR",
+                                    "LLM 거래 리뷰 생성 오류",
+                                    traceback.format_exc()
+                                )
+                                last_review_date = today
+                        else:
+                            last_review_date = today
 
                 # 1분마다 체크
                 await asyncio.sleep(60)
@@ -326,7 +321,7 @@ class SchedulerMixin:
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.error(f"진화 스케줄러 오류: {e}")
+            logger.error(f"거래 리뷰 스케줄러 오류: {e}")
 
     async def _run_stock_master_refresh(self):
         """

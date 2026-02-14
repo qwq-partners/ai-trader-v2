@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Trader v2 - 진화 리포트</title>
+    <title>AI Trader v2 - 거래 리뷰</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -69,6 +69,7 @@
         .badge-yellow { background: rgba(251,191,36,0.12); color: var(--accent-amber); border: 1px solid rgba(251,191,36,0.15); }
         .badge-blue { background: rgba(99,102,241,0.12); color: var(--accent-blue); border: 1px solid rgba(99,102,241,0.15); }
         .badge-purple { background: rgba(167,139,250,0.12); color: var(--accent-purple); border: 1px solid rgba(167,139,250,0.15); }
+        .badge-cyan { background: rgba(34,211,238,0.12); color: var(--accent-cyan); border: 1px solid rgba(34,211,238,0.15); }
         .nav-pill {
             padding: 7px 16px; border-radius: 10px; font-size: 0.8rem; font-weight: 500;
             color: var(--text-muted); text-decoration: none; transition: all 0.2s cubic-bezier(0.4,0,0.2,1); border: 1px solid transparent;
@@ -179,6 +180,7 @@
         .delay-4 { animation-delay: 0.24s; }
         .delay-5 { animation-delay: 0.30s; }
         .delay-6 { animation-delay: 0.36s; }
+        .delay-7 { animation-delay: 0.42s; }
 
         /* Recommendation card */
         .recommendation-card {
@@ -209,11 +211,145 @@
             box-shadow: 0 4px 12px rgba(52,211,153,0.35);
             transform: translateY(-1px);
         }
-        .btn-apply:active {
-            transform: translateY(0);
+        .btn-apply:active { transform: translateY(0); }
+        .btn-apply:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* ---- Date Navigation ---- */
+        .date-nav {
+            display: flex; align-items: center; gap: 12px;
         }
-        .btn-apply:disabled {
-            opacity: 0.5; cursor: not-allowed;
+        .date-nav-btn {
+            width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--border-subtle);
+            background: var(--bg-elevated); color: var(--text-secondary); cursor: pointer;
+            display: flex; align-items: center; justify-content: center; transition: all 0.2s;
+            font-size: 1rem; line-height: 1;
+        }
+        .date-nav-btn:hover:not(:disabled) { color: var(--text-primary); border-color: var(--border-accent); background: rgba(99,102,241,0.08); }
+        .date-nav-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+        .date-nav-label {
+            font-family: 'JetBrains Mono', monospace; font-size: 0.95rem; font-weight: 600;
+            color: var(--text-primary); min-width: 120px; text-align: center;
+            letter-spacing: 0.02em;
+        }
+
+        /* ---- Summary Cards Row ---- */
+        .summary-grid {
+            display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px;
+        }
+        .summary-card {
+            background: var(--bg-surface); border: 1px solid var(--border-subtle);
+            border-radius: 12px; padding: 16px 18px; position: relative; overflow: hidden;
+        }
+        .summary-card::before {
+            content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(99,102,241,0.12), transparent);
+        }
+        .summary-card-label {
+            font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em;
+            color: var(--text-muted); margin-bottom: 8px;
+        }
+        .summary-card-value {
+            font-family: 'JetBrains Mono', monospace; font-size: 1.3rem; font-weight: 700;
+        }
+
+        /* ---- Trade Review Card ---- */
+        .trade-card {
+            background: var(--bg-surface); border: 1px solid var(--border-subtle);
+            border-radius: 12px; padding: 20px 22px; margin-bottom: 12px;
+            border-left: 3px solid var(--text-muted);
+            position: relative; overflow: hidden; transition: all 0.2s;
+        }
+        .trade-card::before {
+            content: ''; position: absolute; top: 0; left: 3px; right: 0; height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(99,102,241,0.1), transparent);
+        }
+        .trade-card:hover { border-color: var(--border-accent); border-left-color: inherit; }
+        .trade-card.win { border-left-color: var(--accent-green); }
+        .trade-card.loss { border-left-color: var(--accent-red); }
+
+        .trade-card-header {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 12px; flex-wrap: wrap; gap: 8px;
+        }
+        .trade-card-header-left {
+            display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+        }
+        .trade-name {
+            font-size: 0.95rem; font-weight: 600; color: var(--text-primary);
+        }
+        .trade-symbol {
+            font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;
+            color: var(--text-muted); font-weight: 400;
+        }
+        .trade-pnl {
+            font-family: 'JetBrains Mono', monospace; font-size: 1.05rem; font-weight: 700;
+        }
+        .trade-detail-row {
+            display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+            font-size: 0.82rem; color: var(--text-secondary); flex-wrap: wrap;
+        }
+        .trade-detail-row .label {
+            color: var(--text-muted); font-size: 0.72rem; font-weight: 500;
+            text-transform: uppercase; letter-spacing: 0.06em; min-width: 52px;
+        }
+        .trade-indicators {
+            display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px;
+        }
+        .trade-indicator {
+            font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;
+            color: var(--text-muted); background: rgba(99,102,241,0.05);
+            padding: 2px 8px; border-radius: 4px; border: 1px solid var(--border-subtle);
+        }
+        .trade-indicator .ind-label { color: var(--text-muted); margin-right: 4px; }
+        .trade-indicator .ind-value { color: var(--text-secondary); font-weight: 500; }
+
+        .trade-llm-block {
+            margin-top: 10px; padding: 10px 14px; border-radius: 8px;
+            background: rgba(99,102,241,0.03); border: 1px solid var(--border-subtle);
+            font-size: 0.82rem; line-height: 1.6; color: var(--text-secondary);
+        }
+        .trade-llm-block + .trade-llm-block { margin-top: 6px; }
+
+        /* ---- Strategy Performance Table ---- */
+        .strat-perf-table { width: 100%; text-align: left; border-collapse: collapse; }
+        .strat-perf-table th {
+            color: var(--text-muted); font-weight: 500; font-size: 0.7rem;
+            text-transform: uppercase; letter-spacing: 0.08em;
+            padding: 0 12px 10px 0; border-bottom: 1px solid var(--border-subtle);
+        }
+        .strat-perf-table td {
+            padding: 10px 12px 10px 0; font-size: 0.85rem;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        .strat-perf-table tbody tr { transition: background 0.15s; }
+        .strat-perf-table tbody tr:hover { background: rgba(99,102,241,0.04); }
+
+        /* ---- LLM Review Section ---- */
+        .llm-section-grid {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+        }
+
+        /* ---- Placeholder ---- */
+        .placeholder-text {
+            padding: 30px 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;
+        }
+
+        /* ---- Trade card stagger animation ---- */
+        @keyframes tradeSlideIn {
+            from { opacity: 0; transform: translateX(-8px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+        .trade-card-animate {
+            animation: tradeSlideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+
+        /* ---- Exit type badge ---- */
+        .badge-exit { font-size: 0.65rem; padding: 2px 8px; }
+
+        @media (max-width: 768px) {
+            .summary-grid { grid-template-columns: repeat(2, 1fr); }
+            .llm-section-grid { grid-template-columns: 1fr; }
+            .trade-card-header { flex-direction: column; align-items: flex-start; }
         }
     </style>
 </head>
@@ -239,7 +375,7 @@
                 </div>
             </div>
             <div style="display: flex; align-items: center; gap: 12px;">
-                <button id="btn-refresh" class="btn-refresh" onclick="loadEvolution()">
+                <button id="btn-refresh" class="btn-refresh" onclick="loadCurrentDate()">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                     새로고침
                 </button>
@@ -250,136 +386,133 @@
     <!-- Main content -->
     <main style="max-width: 1280px; margin: 0 auto; padding: 24px;">
 
-        <!-- Top row: Summary + Assessment -->
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
-
-            <!-- Evolution Summary Card -->
-            <div class="card animate-in delay-1" style="padding: 24px;">
-                <div class="card-header">
-                    <span class="dot" style="background: var(--accent-purple); box-shadow: 0 0 8px var(--accent-purple);"></span>
-                    진화 요약
+        <!-- Date Navigation Header -->
+        <div class="card animate-in delay-1" style="padding: 16px 24px; margin-bottom: 16px;">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span class="dot" style="width: 6px; height: 6px; border-radius: 50%; background: var(--accent-purple); box-shadow: 0 0 8px var(--accent-purple);"></span>
+                    <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-primary);">거래 리뷰</span>
                 </div>
-                <div class="metric-row">
-                    <span class="metric-label">버전</span>
-                    <span id="evo-version" class="metric-value">v0</span>
-                </div>
-                <div class="metric-row">
-                    <span class="metric-label">총 진화 횟수</span>
-                    <span id="evo-total" class="metric-value">0</span>
-                </div>
-                <div class="metric-row">
-                    <span class="metric-label">성공 변경</span>
-                    <span id="evo-success" class="metric-value text-profit">0</span>
-                </div>
-                <div class="metric-row">
-                    <span class="metric-label">롤백</span>
-                    <span id="evo-rollback" class="metric-value text-loss">0</span>
-                </div>
-                <hr class="sep">
-                <div class="metric-row">
-                    <span class="metric-label">마지막 실행</span>
-                    <span id="evo-last" class="mono" style="font-size: 0.78rem; color: var(--text-secondary);">--</span>
-                </div>
-            </div>
-
-            <!-- Assessment Card -->
-            <div class="card animate-in delay-2" style="padding: 24px;">
-                <div class="card-header">
-                    <span class="dot" style="background: var(--accent-cyan); box-shadow: 0 0 8px var(--accent-cyan);"></span>
-                    전체 평가
-                </div>
-                <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 16px;">
-                    <span id="evo-assessment" class="badge badge-blue" style="font-size: 1rem; padding: 6px 16px;">--</span>
-                </div>
-                <div class="metric-row">
-                    <span class="metric-label">신뢰도</span>
-                    <div class="conf-gauge">
-                        <div class="conf-bar-bg" style="width: 80px;">
-                            <div id="evo-conf-bar" class="conf-bar-fill bg-blue-500" style="width: 0%;"></div>
-                        </div>
-                        <span id="evo-confidence" class="mono" style="font-size: 0.82rem;">0%</span>
-                    </div>
-                </div>
-                <hr class="sep">
-                <div style="padding-top: 8px;">
-                    <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px;">전망</div>
-                    <div id="evo-outlook" style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.6;">--</div>
+                <div class="date-nav">
+                    <button id="btn-prev" class="date-nav-btn" onclick="navigateDate(-1)" disabled>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+                    </button>
+                    <span id="date-label" class="date-nav-label">--</span>
+                    <button id="btn-next" class="date-nav-btn" onclick="navigateDate(1)" disabled>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                    </button>
                 </div>
             </div>
         </div>
 
-        <!-- Insights Card -->
+        <!-- Summary Cards (4 columns) -->
+        <div id="summary-grid" class="summary-grid animate-in delay-2">
+            <div class="summary-card">
+                <div class="summary-card-label">승률</div>
+                <div id="sum-winrate" class="summary-card-value" style="color: var(--text-muted);">--</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-card-label">손익비</div>
+                <div id="sum-pf" class="summary-card-value" style="color: var(--text-muted);">--</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-card-label">총손익</div>
+                <div id="sum-pnl" class="summary-card-value" style="color: var(--text-muted);">--</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-card-label">평가</div>
+                <div id="sum-assessment" class="summary-card-value" style="color: var(--text-muted);">--</div>
+            </div>
+        </div>
+
+        <!-- Trade Review Cards -->
         <div class="card animate-in delay-3" style="padding: 24px; margin-bottom: 16px;">
             <div class="card-header">
-                <span class="dot" style="background: var(--accent-blue); box-shadow: 0 0 8px var(--accent-blue);"></span>
-                핵심 인사이트
-            </div>
-            <div id="evo-insights">
-                <div style="padding: 20px 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">데이터 없음</div>
-            </div>
-        </div>
-
-        <!-- Parameter Recommendations (AI Suggestions with Apply Button) -->
-        <div class="card animate-in delay-4" style="padding: 24px; margin-bottom: 16px;">
-            <div class="card-header">
-                <span class="dot" style="background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green);"></span>
-                파라미터 추천 (AI 제안)
-            </div>
-            <div id="evo-recommendations">
-                <div style="padding: 20px 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">추천 내용 없음</div>
-            </div>
-        </div>
-
-        <!-- Parameter Changes Table (AS-IS / TO-BE) - Applied Changes -->
-        <div class="card animate-in delay-4" style="padding: 24px; margin-bottom: 16px;">
-            <div class="card-header">
                 <span class="dot" style="background: var(--accent-cyan); box-shadow: 0 0 8px var(--accent-cyan);"></span>
-                파라미터 변경 (적용된 변경사항)
+                거래별 상세 복기
+            </div>
+            <div id="trade-cards-container">
+                <div class="placeholder-text">데이터 없음</div>
+            </div>
+        </div>
+
+        <!-- Strategy Performance Table -->
+        <div class="card animate-in delay-4" style="padding: 24px; margin-bottom: 16px;">
+            <div class="card-header">
+                <span class="dot" style="background: var(--accent-purple); box-shadow: 0 0 8px var(--accent-purple);"></span>
+                전략별 성과 비교
             </div>
             <div style="overflow-x: auto;">
-                <table class="evo-table" style="width: 100%; text-align: left; border-collapse: collapse;">
+                <table class="strat-perf-table">
                     <thead>
-                        <tr style="border-bottom: 1px solid var(--border-subtle);">
-                            <th style="padding: 0 12px 10px 0;">전략</th>
-                            <th style="padding: 0 12px 10px 0;">파라미터</th>
-                            <th style="padding: 0 12px 10px 0; text-align: right;">AS-IS</th>
-                            <th style="padding: 0 8px 10px 8px; text-align: center;"></th>
-                            <th style="padding: 0 12px 10px 0; text-align: right;">TO-BE</th>
-                            <th style="padding: 0 12px 10px 0;">사유</th>
-                            <th style="padding: 0 12px 10px 0; text-align: center;">신뢰도</th>
-                            <th style="padding: 0 0 10px 0; text-align: center;">효과</th>
+                        <tr>
+                            <th>전략</th>
+                            <th style="text-align: right;">거래</th>
+                            <th style="text-align: right;">승</th>
+                            <th style="text-align: right;">패</th>
+                            <th style="text-align: right;">승률</th>
+                            <th style="text-align: right;">총손익</th>
+                            <th style="text-align: right;">평균수익률</th>
                         </tr>
                     </thead>
-                    <tbody id="evo-changes-body">
-                        <tr><td colspan="8" style="padding: 30px 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">파라미터 변경 없음</td></tr>
+                    <tbody id="strat-perf-body">
+                        <tr><td colspan="7" class="placeholder-text">데이터 없음</td></tr>
                     </tbody>
                 </table>
             </div>
         </div>
 
-        <!-- Avoid Patterns + Focus Opportunities -->
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+        <!-- LLM Comprehensive Review -->
+        <div id="llm-review-section" class="card animate-in delay-5" style="padding: 24px; margin-bottom: 16px; display: none;">
+            <div class="card-header">
+                <span class="dot" style="background: var(--accent-blue); box-shadow: 0 0 8px var(--accent-blue);"></span>
+                LLM 종합 평가
+            </div>
 
-            <!-- Avoid Patterns Card -->
-            <div class="card animate-in delay-5" style="padding: 24px;">
-                <div class="card-header">
-                    <span class="dot" style="background: var(--accent-amber); box-shadow: 0 0 8px var(--accent-amber);"></span>
-                    회피 패턴
+            <!-- Insights -->
+            <div id="llm-insights" style="margin-bottom: 20px;"></div>
+
+            <!-- Avoid + Focus side by side -->
+            <div class="llm-section-grid" style="margin-bottom: 20px;">
+                <div>
+                    <div style="font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent-amber); margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+                        <span style="width:5px;height:5px;border-radius:50%;background:var(--accent-amber);"></span>
+                        회피 패턴
+                    </div>
+                    <div id="llm-avoid">
+                        <div style="color: var(--text-muted); font-size: 0.82rem;">없음</div>
+                    </div>
                 </div>
-                <div id="evo-avoid">
-                    <div style="padding: 20px 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">데이터 없음</div>
+                <div>
+                    <div style="font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent-green); margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+                        <span style="width:5px;height:5px;border-radius:50%;background:var(--accent-green);"></span>
+                        집중 기회
+                    </div>
+                    <div id="llm-focus">
+                        <div style="color: var(--text-muted); font-size: 0.82rem;">없음</div>
+                    </div>
                 </div>
             </div>
 
-            <!-- Focus Opportunities Card -->
-            <div class="card animate-in delay-5" style="padding: 24px;">
-                <div class="card-header">
-                    <span class="dot" style="background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green);"></span>
-                    집중 기회
+            <!-- Parameter Recommendations -->
+            <div id="llm-params-section" style="display: none;">
+                <div style="font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent-green); margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+                    <span style="width:5px;height:5px;border-radius:50%;background:var(--accent-green);"></span>
+                    파라미터 추천
                 </div>
-                <div id="evo-focus">
-                    <div style="padding: 20px 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">데이터 없음</div>
-                </div>
+                <div id="llm-recommendations"></div>
+            </div>
+        </div>
+
+        <!-- LLM Waiting Placeholder (shown when trade_report exists but no llm_review) -->
+        <div id="llm-waiting-section" class="card animate-in delay-5" style="padding: 24px; margin-bottom: 16px; display: none;">
+            <div class="card-header">
+                <span class="dot" style="background: var(--accent-blue); box-shadow: 0 0 8px var(--accent-blue);"></span>
+                LLM 종합 평가
+            </div>
+            <div style="padding: 30px 0; text-align: center;">
+                <div style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 6px;">LLM 평가 대기중</div>
+                <div style="color: var(--text-muted); font-size: 0.75rem;">매일 20:30 이후 자동 생성됩니다</div>
             </div>
         </div>
 
@@ -404,7 +537,7 @@
                         </tr>
                     </thead>
                     <tbody id="evo-history-body">
-                        <tr><td colspan="8" style="padding: 30px 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">변경 이력 없음</td></tr>
+                        <tr><td colspan="8" class="placeholder-text">변경 이력 없음</td></tr>
                     </tbody>
                 </table>
             </div>
