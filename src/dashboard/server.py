@@ -21,6 +21,20 @@ STATIC_DIR = DASHBOARD_DIR / "static"
 
 
 @web.middleware
+async def cors_middleware(request, handler):
+    """CORS 미들웨어 — 모바일 앱 웹 프리뷰 및 외부 클라이언트 허용"""
+    if request.method == "OPTIONS":
+        response = web.Response(status=204)
+    else:
+        response = await handler(request)
+
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
+
+
+@web.middleware
 async def no_cache_middleware(request, handler):
     """정적 파일 캐시 방지 미들웨어"""
     response = await handler(request)
@@ -48,7 +62,7 @@ class DashboardServer:
 
     def _create_app(self) -> web.Application:
         """aiohttp 앱 생성"""
-        app = web.Application(middlewares=[no_cache_middleware])
+        app = web.Application(middlewares=[cors_middleware, no_cache_middleware])
 
         # REST API 라우트
         setup_api_routes(app, self.data_collector)
