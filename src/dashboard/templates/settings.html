@@ -177,6 +177,17 @@
                 </div>
             </div>
 
+            <!-- Mobile App Download -->
+            <div class="card animate-in delay-3" style="padding: 24px;">
+                <div class="card-header">
+                    <span class="dot" style="background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green);"></span>
+                    모바일 앱
+                </div>
+                <div id="app-download">
+                    <div style="color: var(--text-muted); font-size: 0.85rem;">확인 중...</div>
+                </div>
+            </div>
+
             <!-- US Market -->
             <div class="card animate-in delay-3" style="padding: 24px; grid-column: 1 / -1;">
                 <div class="card-header">
@@ -281,8 +292,81 @@
             }
         }
 
+        async function loadAppDownload() {
+            var el = document.getElementById('app-download');
+            try {
+                var data = await api('/api/app/latest');
+                if (!data.available) {
+                    el.textContent = 'APK 파일 없음';
+                    return;
+                }
+                var modified = new Date(data.modified);
+                var dateStr = modified.getFullYear() + '-' +
+                    String(modified.getMonth()+1).padStart(2,'0') + '-' +
+                    String(modified.getDate()).padStart(2,'0');
+
+                // 안전한 DOM 생성
+                el.replaceChildren();
+
+                var infoDiv = document.createElement('div');
+                infoDiv.style.marginBottom = '14px';
+
+                var rows = [
+                    ['파일', data.filename],
+                    ['크기', data.size_mb + ' MB'],
+                    ['빌드일', dateStr],
+                ];
+                rows.forEach(function(r) {
+                    var row = document.createElement('div');
+                    row.className = 'config-row';
+                    var lbl = document.createElement('span');
+                    lbl.className = 'config-label';
+                    lbl.textContent = r[0];
+                    var val = document.createElement('span');
+                    val.className = 'config-value';
+                    val.style.fontSize = '0.78rem';
+                    val.textContent = r[1];
+                    row.appendChild(lbl);
+                    row.appendChild(val);
+                    infoDiv.appendChild(row);
+                });
+                el.appendChild(infoDiv);
+
+                var link = document.createElement('a');
+                link.href = data.url;
+                link.download = '';
+                link.style.cssText = 'display:inline-flex;align-items:center;gap:8px;padding:10px 20px;border-radius:10px;font-size:0.85rem;font-weight:600;color:#fff;background:linear-gradient(135deg,var(--accent-green),#10b981);text-decoration:none;box-shadow:0 2px 10px rgba(52,211,153,0.25);transition:all 0.2s;';
+
+                var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                svg.setAttribute('width', '16');
+                svg.setAttribute('height', '16');
+                svg.setAttribute('viewBox', '0 0 24 24');
+                svg.setAttribute('fill', 'none');
+                svg.setAttribute('stroke', 'currentColor');
+                svg.setAttribute('stroke-width', '2.5');
+                svg.setAttribute('stroke-linecap', 'round');
+                svg.setAttribute('stroke-linejoin', 'round');
+                var p1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                p1.setAttribute('d', 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4');
+                var p2 = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+                p2.setAttribute('points', '7 10 12 15 17 10');
+                var p3 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                p3.setAttribute('x1', '12'); p3.setAttribute('y1', '15');
+                p3.setAttribute('x2', '12'); p3.setAttribute('y2', '3');
+                svg.appendChild(p1); svg.appendChild(p2); svg.appendChild(p3);
+                link.appendChild(svg);
+
+                var txt = document.createTextNode('APK 다운로드');
+                link.appendChild(txt);
+                el.appendChild(link);
+            } catch (e) {
+                el.textContent = '로드 실패';
+            }
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
             loadConfig();
+            loadAppDownload();
             sse.connect();
         });
     </script>

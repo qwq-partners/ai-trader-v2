@@ -40,6 +40,7 @@ def setup_api_routes(app: web.Application, data_collector):
     app.router.add_get("/api/daily-review", handler.get_daily_review)
     app.router.add_get("/api/daily-review/dates", handler.get_daily_review_dates)
     app.router.add_post("/api/evolution/apply", handler.apply_evolution_parameter)
+    app.router.add_get("/api/app/latest", handler.get_latest_app)
 
 
 class APIHandler:
@@ -244,6 +245,23 @@ class APIHandler:
                 {"success": False, "message": str(e)},
                 status=500,
             )
+
+    async def get_latest_app(self, request: web.Request) -> web.Response:
+        """최신 APK 파일 정보 반환"""
+        from pathlib import Path
+        static_dir = Path(__file__).parent / "static"
+        apk_files = sorted(static_dir.glob("*.apk"), key=lambda f: f.stat().st_mtime, reverse=True)
+        if not apk_files:
+            return web.json_response({"available": False})
+        latest = apk_files[0]
+        size_mb = round(latest.stat().st_size / (1024 * 1024), 1)
+        return web.json_response({
+            "available": True,
+            "filename": latest.name,
+            "url": f"/static/{latest.name}",
+            "size_mb": size_mb,
+            "modified": datetime.fromtimestamp(latest.stat().st_mtime).isoformat(),
+        })
 
     async def _restart_bot_delayed(self, delay_seconds: int):
         """봇 재시작 (지연 실행)"""
