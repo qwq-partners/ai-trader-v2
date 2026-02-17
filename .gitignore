@@ -26,6 +26,9 @@ data/*.csv
 *.swp
 *.swo
 
+# 빌드 산출물
+*.apk
+
 # OS
 .DS_Store
 Thumbs.db
