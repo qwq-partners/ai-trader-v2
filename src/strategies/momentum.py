@@ -179,6 +179,12 @@ class MomentumBreakoutStrategy(BaseStrategy):
         if vol_ratio < self.momentum_config.volume_surge_ratio:
             return None
 
+        # 5일 모멘텀 필터: 추세 없는 단발 급등 차단
+        change_5d = indicators.get("change_5d", 0)
+        if change_5d < 2.0:
+            logger.debug(f"[Momentum] {symbol} 5일 모멘텀 부족 ({change_5d:+.1f}% < 2.0%) - 진입 제한")
+            return None
+
         # 모멘텀 점수 계산 (설정값 사용, 하드코딩 제거)
         score = self.calculate_score(symbol)
         effective_min_score = self.config.min_score

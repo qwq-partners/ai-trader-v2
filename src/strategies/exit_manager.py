@@ -308,14 +308,15 @@ class ExitManager:
             if exit_signal:
                 return exit_signal
 
-        # 3. 1R 본전 이동 체크
-        one_r = state.dynamic_stop_pct or state.stop_loss_pct or self.config.stop_loss_pct
-        if net_pnl_pct >= one_r and not state.breakeven_activated:
-            state.breakeven_activated = True
-            logger.info(
-                f"[ExitManager] {symbol} 1R({one_r:.1f}%) 도달 → 본전 이동 활성화 "
-                f"(현재 +{net_pnl_pct:.2f}%)"
-            )
+        # 3. 1R 본전 이동 체크 — 1차 익절 이후에만 활성화 (승자를 더 오래 보유)
+        if state.current_stage != ExitStage.NONE and not state.breakeven_activated:
+            one_r = state.dynamic_stop_pct or state.stop_loss_pct or self.config.stop_loss_pct
+            if net_pnl_pct >= one_r:
+                state.breakeven_activated = True
+                logger.info(
+                    f"[ExitManager] {symbol} 1차익절후 1R({one_r:.1f}%) 도달 → 본전 이동 활성화 "
+                    f"(현재 +{net_pnl_pct:.2f}%)"
+                )
 
         # 4. 트레일링 스탑
         if state.highest_price <= 0:

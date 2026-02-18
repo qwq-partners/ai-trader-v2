@@ -477,9 +477,9 @@ class TradingBot(SchedulerMixin):
                 "momentum_breakout": {
                     "stop_loss_pct": momentum_cfg.get("stop_loss_pct", 2.5),
                     "trailing_stop_pct": momentum_cfg.get("trailing_stop_pct", 1.5),
-                    "first_exit_pct": momentum_cfg.get("take_profit_pct", 10.0) * 0.3,   # 3.0%
-                    "second_exit_pct": momentum_cfg.get("take_profit_pct", 10.0) * 0.6,  # 6.0%
-                    "third_exit_pct": momentum_cfg.get("take_profit_pct", 10.0),          # 10.0%
+                    "first_exit_pct": 3.0,    # 수정 B안: 3.0% (기존 2.5%)
+                    "second_exit_pct": 5.0,   # 수정 B안: 5.0% (기존 6.0%)
+                    "third_exit_pct": momentum_cfg.get("take_profit_pct", 10.0),  # 10.0%
                 },
                 "theme_chasing": {
                     "stop_loss_pct": theme_strategy_cfg.get("stop_loss_pct", 2.0),
@@ -529,9 +529,9 @@ class TradingBot(SchedulerMixin):
             self.exit_manager = ExitManager(ExitConfig(
                 enable_partial_exit=exit_cfg.get("enable_partial_exit", True),
                 first_exit_pct=exit_cfg.get("first_exit_pct", 3.0),
-                first_exit_ratio=exit_cfg.get("first_exit_ratio", 0.3),
+                first_exit_ratio=exit_cfg.get("first_exit_ratio", 0.25),
                 second_exit_pct=exit_cfg.get("second_exit_pct", 5.0),
-                second_exit_ratio=exit_cfg.get("second_exit_ratio", 0.5),
+                second_exit_ratio=exit_cfg.get("second_exit_ratio", 0.3),
                 stop_loss_pct=exit_cfg.get("stop_loss_pct", 2.5),
                 trailing_stop_pct=exit_cfg.get("trailing_stop_pct", 1.5),
                 trailing_activate_pct=exit_cfg.get("trailing_activate_pct", 3.0),
