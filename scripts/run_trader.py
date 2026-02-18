@@ -1000,7 +1000,21 @@ class TradingBot(SchedulerMixin):
                     # RiskManager pending도 동기화 해제 (매도 영구 차단 방지)
                     if self.engine.risk_manager:
                         await self.engine.risk_manager.clear_pending(s)
-                    logger.warning(f"[청산 pending] {s} 타임아웃 해제 (3분 초과, RiskManager 동기화)")
+                    # ExitManager stage 롤백 (stale timeout = 주문 실패로 간주)
+                    if self.exit_manager:
+                        self.exit_manager.rollback_stage(s)
+                    logger.warning(f"[청산 pending] {s} 타임아웃 해제 (3분 초과, RiskManager+ExitManager 동기화)")
+
+            # 엔진 RiskManager에서 이미 해제된 종목은 _exit_pending_symbols에서도 동기화 해제
+            if self._exit_pending_symbols and self.engine.risk_manager:
+                orphaned = [s for s in self._exit_pending_symbols
+                            if s not in self.engine.risk_manager._pending_orders]
+                for s in orphaned:
+                    self._exit_pending_symbols.discard(s)
+                    self._exit_pending_timestamps.pop(s, None)
+                    if self.exit_manager:
+                        self.exit_manager.rollback_stage(s)
+                    logger.warning(f"[청산 pending] {s} 동기화 해제 (RiskManager에 없음 → 고아 pending 정리)")
 
             # 이미 매도 주문이 진행 중이면 중복 방지 (ExitManager + 전략 SELL 양방향)
             if symbol in self._exit_pending_symbols:
@@ -1126,6 +1140,9 @@ class TradingBot(SchedulerMixin):
                     self._exit_pending_timestamps.pop(symbol, None)
                     if self.engine.risk_manager:
                         await self.engine.risk_manager.clear_pending(symbol)
+                    # ExitManager stage 롤백 (stage만 올라가고 매도 안 된 상태 방지)
+                    if self.exit_manager:
+                        self.exit_manager.rollback_stage(symbol)
 
                     # 비재시도 에러 판별: NXT 거래불가 / 장운영시간 아님
                     result_str = str(result)
@@ -1512,18 +1529,17 @@ class TradingBot(SchedulerMixin):
 
             # ExitManager 매도 pending 해제 (체결 확인) + 엔진 RiskManager pending 해제
             if fill.side.value.upper() == "SELL":
-                # 포지션 완전 종료 시에만 pending 해제 (부분 체결 시 중복 매도 방지)
+                # 매도 체결 시 항상 pending 해제 (부분/전량 무관)
+                # → ExitManager의 stage 진행이 동일 단계 중복 익절을 방지하므로 안전
+                self._exit_pending_symbols.discard(fill.symbol)
+                self._exit_pending_timestamps.pop(fill.symbol, None)
+                if self.engine.risk_manager:
+                    await self.engine.risk_manager.clear_pending(fill.symbol)
+
                 if fill.symbol not in self.engine.portfolio.positions:
-                    self._exit_pending_symbols.discard(fill.symbol)
-                    self._exit_pending_timestamps.pop(fill.symbol, None)
-                    if self.engine.risk_manager:
-                        await self.engine.risk_manager.clear_pending(fill.symbol)
-                    # WebSocket 우선순위 구독 해제 (포지션 종료 종목)
+                    # 포지션 완전 종료: WS 구독 해제
                     if self.ws_feed and hasattr(self.ws_feed, '_priority_symbols'):
                         self.ws_feed._priority_symbols.discard(fill.symbol)
-                else:
-                    # 부분 체결: 타임스탬프만 갱신 (stale timeout 리셋)
-                    self._exit_pending_timestamps[fill.symbol] = datetime.now()
 
                 # EXIT 레코드 기록 (진입가/손익/사유)
                 # _pre_sell_entry_price: update_position 전에 캡처한 원래 매수 평균가

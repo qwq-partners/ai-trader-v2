@@ -439,6 +439,37 @@ class ExitManager:
         # 수량 업데이트는 실제 체결 후에 처리
         return (action, quantity, reason)
 
+    def rollback_stage(self, symbol: str) -> bool:
+        """주문 실패 시 stage를 이전 단계로 되돌림
+
+        _check_partial_exit()에서 stage를 먼저 올린 후 주문 제출하는데,
+        주문 실패 시 stage만 올라간 채 고착되는 것을 방지합니다.
+
+        Returns:
+            bool: 롤백 성공 여부
+        """
+        if symbol not in self._states:
+            return False
+
+        state = self._states[symbol]
+        prev_stage = state.current_stage
+
+        stage_order = [ExitStage.NONE, ExitStage.FIRST, ExitStage.SECOND,
+                       ExitStage.THIRD, ExitStage.TRAILING]
+        try:
+            idx = stage_order.index(state.current_stage)
+        except ValueError:
+            return False
+
+        if idx > 0:
+            state.current_stage = stage_order[idx - 1]
+            logger.warning(
+                f"[ExitManager] {symbol} stage 롤백: {prev_stage.value} → {state.current_stage.value} "
+                f"(주문 실패로 복원)"
+            )
+            return True
+        return False
+
     def on_fill(self, symbol: str, sold_quantity: int, fill_price: Decimal):
         """체결 후 상태 업데이트"""
         if symbol not in self._states:

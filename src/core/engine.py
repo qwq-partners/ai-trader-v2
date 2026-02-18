@@ -809,7 +809,11 @@ class RiskManager:
         # stale 매도: 지정가 취소 → 시장가 재주문 (최대 2회 폴백)
         _MAX_FALLBACK = 2
         for s in stale_sells:
-            elapsed = (now - self._pending_timestamps[s]).total_seconds()
+            # await 중 dict 변경 가능 → 안전 접근
+            ts = self._pending_timestamps.get(s)
+            if not ts:
+                continue  # 이미 다른 경로에서 해제됨
+            elapsed = (now - ts).total_seconds()
             fallback_cnt = self._pending_fallback_count.get(s, 0)
             if fallback_cnt >= _MAX_FALLBACK:
                 logger.warning(
@@ -835,9 +839,11 @@ class RiskManager:
                 )
                 try:
                     await self.engine.broker.submit_order(fallback_order)
-                    self._pending_timestamps[s] = datetime.now()  # 타이머 리셋
-                    self._pending_sides[s] = OrderSide.SELL
-                    self._pending_fallback_count[s] = fallback_cnt + 1
+                    # await 후 dict write → lock 보호
+                    async with self._pending_lock:
+                        self._pending_timestamps[s] = datetime.now()  # 타이머 리셋
+                        self._pending_sides[s] = OrderSide.SELL
+                        self._pending_fallback_count[s] = fallback_cnt + 1
                     logger.info(f"[리스크] 시장가 폴백 주문 제출: {s} {pos.quantity}주 (폴백 {fallback_cnt+1}/{_MAX_FALLBACK}회)")
                 except Exception as e:
                     logger.error(f"[리스크] 시장가 폴백 주문 실패: {s} - {e}")
@@ -847,7 +853,10 @@ class RiskManager:
 
         # stale 매수: 기존 로직 (거래소 취소 + 내부 정리)
         for s in stale_buys:
-            elapsed = (now - self._pending_timestamps[s]).total_seconds()
+            ts = self._pending_timestamps.get(s)
+            if not ts:
+                continue
+            elapsed = (now - ts).total_seconds()
             cancel_ok = False
             if self.engine.broker and hasattr(self.engine.broker, 'cancel_all_for_symbol'):
                 try:
