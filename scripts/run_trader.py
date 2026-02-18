@@ -244,6 +244,11 @@ class TradingBot(SchedulerMixin):
                     row = await conn.fetchrow(
                         "SELECT corp_cls FROM kr_stock_master WHERE ticker = $1", symbol)
                     if row and row["corp_cls"]:
+                        if len(self._sector_cache) > 2000:
+                            # 절반 제거 (간단 LRU 근사)
+                            keys_to_del = list(self._sector_cache.keys())[:1000]
+                            for k in keys_to_del:
+                                del self._sector_cache[k]
                         self._sector_cache[symbol] = row["corp_cls"]
                         return row["corp_cls"]
             except Exception as e:
@@ -301,7 +306,7 @@ class TradingBot(SchedulerMixin):
                     if actual_capital > 0:
                         self.engine.portfolio.initial_capital = Decimal(str(actual_capital))
                         self.engine.portfolio.cash = Decimal(str(available_cash))
-                        self.config.trading.initial_capital = actual_capital
+                        self.config.trading.initial_capital = Decimal(str(actual_capital))
 
                         logger.info(f"=== 실제 계좌 잔고 ===")
                         logger.info(f"  초기자본(총자산): {actual_capital:,.0f}원")
@@ -710,16 +715,17 @@ class TradingBot(SchedulerMixin):
 
         except Exception as e:
             logger.exception(f"초기화 실패: {e}")
-            # 에러 알림 발송 (동기로 실행)
+            # 에러 알림 발송 (이벤트 루프 존재 시에만)
             try:
                 import traceback
-                asyncio.create_task(self._send_error_alert(
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._send_error_alert(
                     "CRITICAL",
                     "봇 초기화 실패",
                     traceback.format_exc()
                 ))
-            except Exception:
-                pass
+            except RuntimeError:
+                pass  # 이벤트 루프 없음 — 무시
             return False
 
     async def _load_existing_positions(self):
@@ -1078,10 +1084,11 @@ class TradingBot(SchedulerMixin):
                 self._exit_pending_timestamps[symbol] = datetime.now()
                 # 엔진 RiskManager에도 pending 등록 (전략 SELL 신호 중복 차단용)
                 if self.engine.risk_manager:
-                    self.engine.risk_manager._pending_orders.add(symbol)
-                    self.engine.risk_manager._pending_timestamps[symbol] = datetime.now()
-                    self.engine.risk_manager._pending_sides[symbol] = OrderSide.SELL
-                    self.engine.risk_manager._pending_quantities[symbol] = quantity
+                    async with self.engine.risk_manager._pending_lock:
+                        self.engine.risk_manager._pending_orders.add(symbol)
+                        self.engine.risk_manager._pending_timestamps[symbol] = datetime.now()
+                        self.engine.risk_manager._pending_sides[symbol] = OrderSide.SELL
+                        self.engine.risk_manager._pending_quantities[symbol] = quantity
 
                 # 브로커에 주문 제출 (실패 시 최대 2회 재시도)
                 success = False
@@ -1184,10 +1191,11 @@ class TradingBot(SchedulerMixin):
                                 self._exit_pending_symbols.add(symbol)
                                 self._exit_pending_timestamps[symbol] = datetime.now()
                                 if self.engine.risk_manager:
-                                    self.engine.risk_manager._pending_orders.add(symbol)
-                                    self.engine.risk_manager._pending_timestamps[symbol] = datetime.now()
-                                    self.engine.risk_manager._pending_sides[symbol] = OrderSide.SELL
-                                    self.engine.risk_manager._pending_quantities[symbol] = actual_qty
+                                    async with self.engine.risk_manager._pending_lock:
+                                        self.engine.risk_manager._pending_orders.add(symbol)
+                                        self.engine.risk_manager._pending_timestamps[symbol] = datetime.now()
+                                        self.engine.risk_manager._pending_sides[symbol] = OrderSide.SELL
+                                        self.engine.risk_manager._pending_quantities[symbol] = actual_qty
 
                                 retry_ok, retry_result = await self.broker.submit_order(corrected_order)
                                 if retry_ok:
@@ -1663,7 +1671,8 @@ class TradingBot(SchedulerMixin):
         portfolio = self.engine.portfolio
         stats = self.engine.stats
 
-        pnl_pct = float(portfolio.daily_pnl / portfolio.initial_capital * 100) if portfolio.initial_capital > 0 else 0
+        daily_pnl_val = getattr(portfolio, 'effective_daily_pnl', portfolio.daily_pnl)
+        pnl_pct = float(daily_pnl_val / portfolio.total_equity * 100) if portfolio.total_equity > 0 else 0.0
 
         # trade_journal 기반 wins/losses 실제 계산
         wins = 0

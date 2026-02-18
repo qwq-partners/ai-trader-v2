@@ -142,23 +142,32 @@ class ExitManager:
             third_exit_pct: 전략별 3차 익절 목표 (None이면 글로벌 config 사용)
         """
         if position.symbol in self._states:
-            # 추가매수: 수량/평단가 변경 반영
+            # 수량/평단가 변경 반영
             state = self._states[position.symbol]
             if position.quantity != state.remaining_quantity:
                 old_qty = state.remaining_quantity
                 state.entry_price = position.avg_price
                 state.original_quantity = position.quantity
                 state.remaining_quantity = position.quantity
-                # 추가매수 시 익절 단계 초기화 및 고가 재계산
-                state.current_stage = ExitStage.NONE
-                new_high = position.current_price or position.avg_price
-                state.highest_price = max(state.highest_price, new_high)
-                logger.debug(
-                    f"[ExitManager] 포지션 업데이트(추가매수): {position.symbol} "
-                    f"{old_qty}주 → {position.quantity}주, "
-                    f"평단가={position.avg_price:,.0f}원, "
-                    f"stage→NONE, highest→{state.highest_price:,.0f}원"
-                )
+                if position.quantity > old_qty:
+                    # 수량 증가 = 추가매수 → stage 리셋 및 고가 재계산
+                    state.current_stage = ExitStage.NONE
+                    new_high = position.current_price or position.avg_price
+                    state.highest_price = max(state.highest_price, new_high)
+                    logger.debug(
+                        f"[ExitManager] 포지션 업데이트(추가매수): {position.symbol} "
+                        f"{old_qty}주 → {position.quantity}주, "
+                        f"평단가={position.avg_price:,.0f}원, "
+                        f"stage→NONE, highest→{state.highest_price:,.0f}원"
+                    )
+                else:
+                    # 수량 감소 = 부분 매도 → stage 유지 (이미 on_fill에서 처리됨)
+                    logger.debug(
+                        f"[ExitManager] 포지션 업데이트(부분매도): {position.symbol} "
+                        f"{old_qty}주 → {position.quantity}주, "
+                        f"평단가={position.avg_price:,.0f}원, "
+                        f"stage={state.current_stage.value} 유지"
+                    )
             return
 
         # ATR 계산 및 동적 손절 설정

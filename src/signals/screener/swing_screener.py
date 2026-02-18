@@ -108,6 +108,10 @@ class SwingScreener:
                 top_stocks = await self._stock_master.get_top_stocks(limit=200)
                 for symbol in top_stocks:
                     name = await self._stock_master.get_name(symbol) or symbol
+                    # ETF/ETN/파생상품 제외 (이름 기반)
+                    if self._should_exclude(name):
+                        logger.debug(f"[스크리닝] ETF/ETN 제외: {name}({symbol})")
+                        continue
                     universe[symbol] = {"symbol": symbol, "name": name}
             except Exception as e:
                 logger.warning(f"[스윙스크리너] StockMaster 조회 실패: {e}")
@@ -122,8 +126,9 @@ class SwingScreener:
                         continue
                     name = item.get("name", item.get("hts_kor_isnm", symbol))
                     price = float(item.get("price", item.get("stck_prpr", 0)))
-                    # ETF 제외 (6자리 숫자 아닌 것 or 이름에 ETF/KODEX/TIGER 등)
+                    # ETF/ETN/파생상품 제외
                     if self._should_exclude(name):
+                        logger.debug(f"[스크리닝] ETF/ETN 제외: {name}({symbol})")
                         continue
                     if price < 2000:
                         continue
@@ -139,6 +144,8 @@ class SwingScreener:
                     name = item.get("name", item.get("hts_kor_isnm", symbol))
                     if symbol and not self._should_exclude(name):
                         universe[symbol] = {"symbol": symbol, "name": name}
+                    elif symbol and self._should_exclude(name):
+                        logger.debug(f"[스크리닝] ETF/ETN 제외: {name}({symbol})")
             except Exception as e:
                 logger.debug(f"[스윙스크리너] 외국인 순매수 조회 실패: {e}")
 
@@ -150,6 +157,8 @@ class SwingScreener:
                     name = item.get("name", item.get("hts_kor_isnm", symbol))
                     if symbol and not self._should_exclude(name):
                         universe[symbol] = {"symbol": symbol, "name": name}
+                    elif symbol and self._should_exclude(name):
+                        logger.debug(f"[스크리닝] ETF/ETN 제외: {name}({symbol})")
             except Exception as e:
                 logger.debug(f"[스윙스크리너] 기관 순매수 조회 실패: {e}")
 
@@ -392,16 +401,28 @@ class SwingScreener:
 
     @staticmethod
     def _should_exclude(name: str) -> bool:
-        """ETF/관리종목/정리매매 제외 판단"""
-        exclude_keywords = [
-            # ETF
+        """ETF/ETN/관리종목/정리매매 제외 판단"""
+        upper = name.upper()
+        exclude_keywords_upper = [
+            # ETF 운용사 브랜드 (대문자 비교)
             "KODEX", "TIGER", "KBSTAR", "ARIRANG", "KOSEF",
-            "HANARO", "SOL", "KINDEX", "ACE", "ETF",
-            "인버스", "레버리지", "선물",
-            # 관리종목/정리매매
+            "HANARO", "SOL", "KINDEX", "ACE", "PLUS", "RISE",
+            "BNK", "TIMEFOLIO", "WOORI", "FOCUS", "TREX",
+            "SMART", "MASTER",
+            # ETF/ETN 키워드
+            "ETF", "ETN",
+            # 파생상품 키워드
+            "인버스", "레버리지", "선물", "채권", "원유", "금선물",
+        ]
+        exclude_keywords_any = [
+            # 관리종목/정리매매 (원문 포함 검사)
             "관리", "정리매매", "투자주의",
         ]
-        return any(kw in name for kw in exclude_keywords)
+        if any(kw in upper for kw in exclude_keywords_upper):
+            return True
+        if any(kw in name for kw in exclude_keywords_any):
+            return True
+        return False
 
     async def _load_benchmark_index(self):
         """벤치마크 지수(KOSPI) 1년치 로드 (MRS 계산용)"""

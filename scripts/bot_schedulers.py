@@ -111,8 +111,8 @@ class SchedulerMixin:
                         try:
                             h = await self.kis_market_data.fetch_holidays(next_month)
                             if h:
-                                from src.core.engine import _kr_market_holidays
-                                _kr_market_holidays.update(h)
+                                from src.core.engine import set_kr_market_holidays, _kr_market_holidays
+                                set_kr_market_holidays(_kr_market_holidays | h)
                                 logger.info(f"[휴장일] 익월({next_month}) 휴장일 {len(h)}일 추가 로드")
                             last_holiday_refresh_month = next_month
                         except Exception as e:

@@ -229,13 +229,21 @@ class TradingEngine:
     async def emit_many(self, events: List[Event]):
         """여러 이벤트 일괄 발행"""
         async with self._queue_lock:
+            # 포화 시 한 번만 정리 (루프마다 sort 반복 방지)
+            needed = len(events)
+            current = len(self._event_queue)
+            if current + needed > self._MAX_QUEUE_SIZE:
+                logger.warning(f"이벤트 큐 포화 ({current}건) → 최저 우선순위 이벤트 폐기")
+                self._event_queue.sort()
+                keep = max(self._MAX_QUEUE_SIZE - needed, self._MAX_QUEUE_SIZE // 2)
+                self._event_queue = self._event_queue[:keep]
+                heapq.heapify(self._event_queue)
+            # 일괄 push
             for event in events:
-                if len(self._event_queue) >= self._MAX_QUEUE_SIZE:
-                    logger.warning(f"이벤트 큐 포화 ({len(self._event_queue)}건) → 최저 우선순위 이벤트 폐기")
-                    self._event_queue.sort()
-                    self._event_queue = self._event_queue[:self._MAX_QUEUE_SIZE - 1]
-                    heapq.heapify(self._event_queue)
-                heapq.heappush(self._event_queue, event)
+                if len(self._event_queue) < self._MAX_QUEUE_SIZE:
+                    heapq.heappush(self._event_queue, event)
+                else:
+                    logger.warning(f"[엔진] 이벤트 큐 포화 — {event.type} 폐기")
 
     # ============================================================
     # 메인 이벤트 루프

@@ -224,6 +224,10 @@ class StockScreener:
                         continue
                     if trading_value < self.min_trading_value:  # 거래대금 1억 미만 제외
                         continue
+                    # ETF/ETN/파생상품 제외
+                    if self._is_etf_etn(name):
+                        logger.debug(f"[스크리닝] ETF/ETN 제외: {name}({symbol})")
+                        continue
 
                     score = min(volume_ratio * 10 + change_pct * 5, 100)
 
@@ -316,6 +320,10 @@ class StockScreener:
                         continue
                     if change_pct > self.max_change_pct:
                         continue
+                    # ETF/ETN/파생상품 제외
+                    if self._is_etf_etn(name):
+                        logger.debug(f"[스크리닝] ETF/ETN 제외: {name}({symbol})")
+                        continue
 
                     score = min(change_pct * 8, 100)
 
@@ -398,10 +406,14 @@ class StockScreener:
                     change_pct = float(item.get("prdy_ctrt", 0) or 0)
                     volume = int(item.get("acml_vol", 0) or 0)
 
-                    # 동전주/과열 제외
+                    # 동전주/과열/ETF 제외
                     if price < 1000:  # 1,000원 미만 동전주 항상 제외
                         continue
                     if change_pct > self.max_change_pct:
+                        continue
+                    # ETF/ETN/파생상품 제외
+                    if self._is_etf_etn(name):
+                        logger.debug(f"[스크리닝] ETF/ETN 제외: {name}({symbol})")
                         continue
 
                     score = 70 + min(change_pct * 2, 30)  # 신고가 기본 70점
@@ -459,6 +471,10 @@ class StockScreener:
                 if price < 1000 or change_pct < 0 or change_pct > self.max_change_pct:
                     continue
                 if trading_value < self.min_trading_value:
+                    continue
+                # ETF/ETN/파생상품 제외
+                if self._is_etf_etn(name):
+                    logger.debug(f"[스크리닝] ETF/ETN 제외: {name}({symbol})")
                     continue
 
                 score = min(change_pct * 7 + 20, 100)
@@ -519,6 +535,10 @@ class StockScreener:
                 if price < 1000 or net_buy_qty <= 0:
                     continue
                 if trading_value < self.min_trading_value:
+                    continue
+                # ETF/ETN/파생상품 제외
+                if self._is_etf_etn(name):
+                    logger.debug(f"[스크리닝] ETF/ETN 제외: {name}({symbol})")
                     continue
 
                 score = min(60 + change_pct * 3, 100)
@@ -1375,12 +1395,15 @@ class StockScreener:
         # ============================================================
         result = list(all_stocks.values())
 
-        # ETF/ETN/파생상품 제거 → 단일 종목만 추천
+        # ETF/ETN/파생상품 제거 → 단일 종목만 추천 (개별 메서드 필터 후 잔존분 최종 정리)
         before_cnt = len(result)
+        etf_excluded = [s for s in result if self._is_etf_etn(s.name)]
         result = [s for s in result if not self._is_etf_etn(s.name)]
         filtered_cnt = before_cnt - len(result)
+        for s in etf_excluded:
+            logger.info(f"[스크리닝] ETF/ETN 제외: {s.name}({s.symbol})")
         if filtered_cnt:
-            logger.info(f"[Screener] ETF/ETN {filtered_cnt}개 제외")
+            logger.info(f"[Screener] ETF/ETN 최종 {filtered_cnt}개 제외 완료")
 
         # 최소 가격 필터 (소형주/저가주 제외)
         if min_price > 0:

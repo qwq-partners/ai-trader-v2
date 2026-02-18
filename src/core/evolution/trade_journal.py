@@ -164,8 +164,11 @@ class TradeJournal:
             "updated_at": datetime.now().isoformat(),
         }
 
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"[거래저널] 저장 실패: {file_path} — {e}")
 
         logger.debug(f"거래 저장: {file_path} ({len(trades)}건)")
 
@@ -244,15 +247,17 @@ class TradeJournal:
         # 청산 정보 업데이트
         trade.exit_time = now
         trade.exit_price = exit_price
-        trade.exit_quantity = exit_quantity
+        trade.exit_quantity = (trade.exit_quantity or 0) + exit_quantity  # 누적
         trade.exit_reason = exit_reason
         trade.exit_type = exit_type
         trade.indicators_at_exit = indicators or {}
 
-        # 손익 계산
+        # 손익 계산 (누적: 부분 매도 시 += 방식)
         if trade.entry_price > 0:
-            trade.pnl = (exit_price - trade.entry_price) * exit_quantity
-            trade.pnl_pct = (exit_price - trade.entry_price) / trade.entry_price * 100
+            trade.pnl += (exit_price - trade.entry_price) * exit_quantity  # += 누적
+            # 총 투자원금 기준 손익률
+            invested = trade.entry_price * trade.entry_quantity
+            trade.pnl_pct = float(trade.pnl / invested * 100) if invested > 0 else 0.0
 
         # 보유 시간 계산
         if trade.entry_time:

@@ -44,6 +44,7 @@ class StockMaster:
         # 인메모리 캐시
         self._name_cache: Dict[str, str] = {}  # 종목명 → 코드
         self._ticker_set: Set[str] = set()  # 전체 코드 집합
+        self._etf_set: Set[str] = set()  # ETF/ETN 코드 집합 (market='ETF' or corp_cls='ETF')
         self._cache_loaded = False
 
     async def connect(self):
@@ -103,13 +104,21 @@ class StockMaster:
         await self._ensure_connected()
 
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch("SELECT ticker, corp_name FROM kr_stock_master")
+            rows = await conn.fetch("SELECT ticker, corp_name, market, corp_cls FROM kr_stock_master")
 
             self._name_cache = {row["corp_name"]: row["ticker"] for row in rows}
             self._ticker_set = {row["ticker"] for row in rows}
+            # ETF/ETN 코드 집합: market='ETF' 또는 corp_cls가 'ETF'인 종목
+            self._etf_set = {
+                row["ticker"] for row in rows
+                if row["market"] == "ETF" or (row["corp_cls"] or "").upper() == "ETF"
+            }
             self._cache_loaded = True
 
-            logger.info(f"[StockMaster] 캐시 로드: {len(self._ticker_set)}개 종목")
+            logger.info(
+                f"[StockMaster] 캐시 로드: {len(self._ticker_set)}개 종목 "
+                f"(ETF/ETN: {len(self._etf_set)}개)"
+            )
 
     @staticmethod
     def _sync_load_fdr() -> List[Dict]:
@@ -304,6 +313,26 @@ class StockMaster:
             await self._load_cache()
 
         return code in self._ticker_set
+
+    async def is_etf(self, code: str) -> bool:
+        """
+        종목코드가 ETF/ETN인지 DB 기반으로 판별
+
+        market='ETF' 또는 corp_cls='ETF'인 경우 True 반환.
+        캐시(_etf_set)가 로드되지 않았으면 DB에서 직접 조회.
+
+        Args:
+            code: 6자리 종목코드
+
+        Returns:
+            ETF/ETN 여부 (True=ETF/ETN, False=일반 주식 또는 미확인)
+        """
+        await self._ensure_connected()
+
+        if not self._cache_loaded:
+            await self._load_cache()
+
+        return code in self._etf_set
 
     async def validate_tickers_batch(self, codes: List[str]) -> Set[str]:
         """코드 배치 검증
