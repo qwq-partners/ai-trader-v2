@@ -936,12 +936,20 @@ class SchedulerMixin:
                         continue
 
                     # 대상 종목 수집: 보유 포지션 + 스크리닝 상위
-                    target_symbols = list(self.engine.portfolio.positions.keys())
+                    # WS가 보유종목 실시간 시세를 담당하면 REST에서는 제외
+                    ws_covered = set()
+                    if self.ws_feed and self.ws_feed._connected:
+                        ws_covered = self.ws_feed._subscribed_symbols
+
+                    position_symbols = [
+                        s for s in self.engine.portfolio.positions.keys()
+                        if s.zfill(6) not in ws_covered
+                    ]
                     screened_symbols = [
                         s.symbol for s in self._last_screened
-                        if s.symbol not in target_symbols
+                        if s.symbol not in self.engine.portfolio.positions
                     ]
-                    target_symbols.extend(screened_symbols[:max(0, 20 - len(target_symbols))])
+                    target_symbols = position_symbols + screened_symbols[:max(0, 20 - len(position_symbols))]
 
                     if not target_symbols:
                         await asyncio.sleep(45)
@@ -979,9 +987,10 @@ class SchedulerMixin:
                         await asyncio.sleep(0.15)  # API rate limit (초당 ~6건)
 
                     if success_count > 0:
+                        ws_info = f", WS실시간={len(ws_covered)}" if ws_covered else ""
                         logger.info(
-                            f"[REST피드] {success_count}/{len(target_symbols)}개 종목 시세 갱신 "
-                            f"(보유={len(self.engine.portfolio.positions)}, 세션={current_session.value})"
+                            f"[REST피드] {success_count}/{len(target_symbols)}개 시세 갱신 "
+                            f"(보유={len(self.engine.portfolio.positions)}, 세션={current_session.value}{ws_info})"
                         )
 
                 except Exception as e:

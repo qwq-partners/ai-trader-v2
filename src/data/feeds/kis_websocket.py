@@ -29,9 +29,11 @@ from ...utils.kis_token_manager import get_token_manager
 
 class KISWebSocketType(str, Enum):
     """WebSocket 구독 타입"""
-    PRICE = "H0STCNT0"      # 실시간 체결가
-    ORDERBOOK = "H0STASP0"  # 실시간 호가
-    NOTICE = "H0STCNI0"     # 체결 통보
+    PRICE = "H0STCNT0"          # 실시간 체결가 (정규장)
+    ORDERBOOK = "H0STASP0"      # 실시간 호가 (정규장)
+    NOTICE = "H0STCNI0"         # 체결 통보
+    NXT_PRICE = "H0NXCNT0"      # NXT 실시간 체결가 (시간외단일가)
+    NXT_ORDERBOOK = "H0NXASP0"  # NXT 실시간 호가 (시간외단일가)
 
 
 @dataclass
@@ -417,9 +419,17 @@ class KISWebSocketFeed:
             logger.error(f"[WS] 롤링 루프 오류: {e}")
 
     async def _rebuild_subscriptions(self):
-        """구독 재구성 (세션 변경 시)"""
+        """구독 재구성 (세션 변경 시 — TR_ID 전환을 위해 전체 재구독)"""
         self._rolling_index = 0  # 세션 전환 시 인덱스 리셋 (큐 크기 변경 대응)
         self._update_rolling_queue()
+
+        # 세션 변경 시 기존 구독 전량 해제 후 새 TR_ID로 재구독
+        # (정규장↔NXT 전환 시 TR_ID가 바뀌므로 필수)
+        if self._connected:
+            for symbol in list(self._subscribed_symbols):
+                await self._unsubscribe_symbol(symbol)
+            self._subscribed_symbols.clear()
+
         await self._apply_subscriptions()
 
         # 롤링 태스크 관리
@@ -469,10 +479,18 @@ class KISWebSocketFeed:
             "is_rolling": self._rolling_task is not None,
         }
 
+    def _get_tr_ids(self) -> tuple:
+        """현재 세션에 맞는 TR_ID 반환 (체결가, 호가)"""
+        if self._current_session in (MarketSession.PRE_MARKET, MarketSession.NEXT):
+            return KISWebSocketType.NXT_PRICE.value, KISWebSocketType.NXT_ORDERBOOK.value
+        return KISWebSocketType.PRICE.value, KISWebSocketType.ORDERBOOK.value
+
     async def _subscribe_symbol(self, symbol: str):
-        """단일 종목 구독 (체결가 + 호가)"""
+        """단일 종목 구독 (체결가 + 호가, 세션별 TR_ID 자동 전환)"""
         if not self._ws or self._ws.closed:
             return
+
+        price_tr, orderbook_tr = self._get_tr_ids()
 
         try:
             # 1. 실시간 체결가 구독
@@ -485,7 +503,7 @@ class KISWebSocketFeed:
                 },
                 "body": {
                     "input": {
-                        "tr_id": KISWebSocketType.PRICE.value,
+                        "tr_id": price_tr,
                         "tr_key": symbol,
                     }
                 }
@@ -502,7 +520,7 @@ class KISWebSocketFeed:
                 },
                 "body": {
                     "input": {
-                        "tr_id": KISWebSocketType.ORDERBOOK.value,
+                        "tr_id": orderbook_tr,
                         "tr_key": symbol,
                     }
                 }
@@ -511,52 +529,55 @@ class KISWebSocketFeed:
 
             self._subscribed_symbols.add(symbol)
 
-            logger.debug(f"종목 구독 (체결가+호가): {symbol}")
+            logger.debug(f"종목 구독 ({price_tr}+{orderbook_tr}): {symbol}")
 
         except Exception as e:
             logger.error(f"구독 실패 ({symbol}): {e}")
 
     async def _unsubscribe_symbol(self, symbol: str):
-        """단일 종목 구독 해제 (체결가 + 호가)"""
+        """단일 종목 구독 해제 (체결가 + 호가, 양쪽 TR_ID 모두 해제)"""
         if not self._ws or self._ws.closed:
             logger.debug(f"[WS] 구독 해제 스킵 ({symbol}): 연결 없음")
             self._subscribed_symbols.discard(symbol)
             return
 
         try:
-            # 1. 실시간 체결가 구독 해제
-            price_message = {
-                "header": {
-                    "approval_key": self._approval_key,
-                    "custtype": "P",
-                    "tr_type": "2",  # 2: 해제
-                    "content-type": "utf-8",
-                },
-                "body": {
-                    "input": {
-                        "tr_id": KISWebSocketType.PRICE.value,
-                        "tr_key": symbol,
+            # 정규장 + NXT 양쪽 모두 해제 (세션 전환 시 잔여 구독 방지)
+            for price_tr, ob_tr in [
+                (KISWebSocketType.PRICE.value, KISWebSocketType.ORDERBOOK.value),
+                (KISWebSocketType.NXT_PRICE.value, KISWebSocketType.NXT_ORDERBOOK.value),
+            ]:
+                price_message = {
+                    "header": {
+                        "approval_key": self._approval_key,
+                        "custtype": "P",
+                        "tr_type": "2",  # 2: 해제
+                        "content-type": "utf-8",
+                    },
+                    "body": {
+                        "input": {
+                            "tr_id": price_tr,
+                            "tr_key": symbol,
+                        }
                     }
                 }
-            }
-            await self._ws.send_json(price_message)
+                await self._ws.send_json(price_message)
 
-            # 2. 실시간 호가 구독 해제
-            orderbook_message = {
-                "header": {
-                    "approval_key": self._approval_key,
-                    "custtype": "P",
-                    "tr_type": "2",  # 2: 해제
-                    "content-type": "utf-8",
-                },
-                "body": {
-                    "input": {
-                        "tr_id": KISWebSocketType.ORDERBOOK.value,
-                        "tr_key": symbol,
+                orderbook_message = {
+                    "header": {
+                        "approval_key": self._approval_key,
+                        "custtype": "P",
+                        "tr_type": "2",  # 2: 해제
+                        "content-type": "utf-8",
+                    },
+                    "body": {
+                        "input": {
+                            "tr_id": ob_tr,
+                            "tr_key": symbol,
+                        }
                     }
                 }
-            }
-            await self._ws.send_json(orderbook_message)
+                await self._ws.send_json(orderbook_message)
 
         except Exception as e:
             logger.error(f"구독 해제 실패 ({symbol}): {e}")
@@ -678,11 +699,11 @@ class KISWebSocketFeed:
             if self._message_count % 5000 == 0:
                 logger.info(f"[WS] 메시지 수신 통계: 총 {self._message_count}건, TR={tr_id}")
 
-            # TR ID별 처리
-            if tr_id == KISWebSocketType.PRICE.value:
+            # TR ID별 처리 (정규장 + NXT 공통)
+            if tr_id in (KISWebSocketType.PRICE.value, KISWebSocketType.NXT_PRICE.value):
                 await self._handle_price_data(raw_data)
 
-            elif tr_id == KISWebSocketType.ORDERBOOK.value:
+            elif tr_id in (KISWebSocketType.ORDERBOOK.value, KISWebSocketType.NXT_ORDERBOOK.value):
                 await self._handle_orderbook_data(raw_data)
 
         except Exception as e:

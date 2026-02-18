@@ -644,13 +644,15 @@ class TradingBot(SchedulerMixin):
             data_cfg = self.config.get("data") or {}
             realtime_source = data_cfg.get("realtime_source", "kis_websocket")
 
-            # WebSocket 피드 초기화 (실시간 모드만)
-            if not self.dry_run and realtime_source == "kis_websocket":
+            # WebSocket 피드 초기화 (항상 — 보유종목 실시간 시세 + NXT 지원)
+            # REST 폴링은 스크리닝 종목용으로 병행 유지
+            if not self.dry_run:
                 self.ws_feed = KISWebSocketFeed(KISWebSocketConfig.from_env())
                 self.ws_feed.on_market_data(self._on_market_data)
-                logger.info("WebSocket 피드 초기화 완료")
-            elif realtime_source == "rest_polling":
-                logger.info("REST 폴링 모드: WebSocket 비활성화")
+                if realtime_source == "rest_polling":
+                    logger.info("REST+WS 병행 모드: WS=보유종목 실시간, REST=스크리닝 종목")
+                else:
+                    logger.info("WebSocket 피드 초기화 완료")
 
             # 배치 분석기 초기화 (스윙 모멘텀 모드)
             if rsi2_cfg.get("enabled") or sepa_cfg.get("enabled"):
@@ -1527,6 +1529,11 @@ class TradingBot(SchedulerMixin):
                     if not position.sector:
                         position.sector = await self._get_sector(fill.symbol)
 
+                # 매수 체결 즉시 WS 보유종목 구독 추가 (NXT 시세 포함)
+                if self.ws_feed:
+                    self.ws_feed.set_priority_symbols(list(self.engine.portfolio.positions.keys()))
+                    logger.debug(f"[WS] 매수 체결 → 보유종목 구독 갱신: {fill.symbol} 추가")
+
             # ExitManager 매도 pending 해제 (체결 확인) + 엔진 RiskManager pending 해제
             if fill.side.value.upper() == "SELL":
                 # 매도 체결 시 항상 pending 해제 (부분/전량 무관)
@@ -1747,7 +1754,7 @@ class TradingBot(SchedulerMixin):
             # 1. 메인 엔진 실행
             tasks.append(asyncio.create_task(self.engine.run(), name="engine"))
 
-            # 2. WebSocket 피드 실행 (실시간 모드)
+            # 2. WebSocket 피드 실행 (보유종목 실시간 시세 — NXT 포함)
             if self.ws_feed:
                 # 보유 종목을 우선순위로 설정 (항상 구독)
                 if self.engine.portfolio.positions:
@@ -1755,8 +1762,8 @@ class TradingBot(SchedulerMixin):
                     logger.info(f"[WS] 보유 종목 {len(self.engine.portfolio.positions)}개 우선 구독 설정")
                 tasks.append(asyncio.create_task(self._run_ws_feed(), name="ws_feed"))
 
-            # 2-1. REST 시세 피드 (WebSocket 미사용 시)
-            if not self.ws_feed and self.broker:
+            # 2-1. REST 시세 피드 (WS와 병행 — 스크리닝 종목 시세용)
+            if self.broker:
                 tasks.append(asyncio.create_task(self._run_rest_price_feed(), name="rest_price_feed"))
 
             # 3. 테마 탐지 루프 실행
@@ -1851,7 +1858,7 @@ class TradingBot(SchedulerMixin):
             await self.shutdown()
 
     async def _run_ws_feed(self):
-        """WebSocket 피드 실행"""
+        """WebSocket 피드 실행 (보유종목 실시간 시세 — NXT 세션 포함)"""
         try:
             # 연결
             if await self.ws_feed.connect():
@@ -1862,22 +1869,17 @@ class TradingBot(SchedulerMixin):
                 current_session = self._get_current_session()
                 self.ws_feed.set_session(current_session)
 
-                # 종목별 점수 설정 (스크리너에서)
-                scores = {}
-                if self.screener and hasattr(self.screener, '_last_screened'):
-                    for stock in getattr(self.screener, '_last_screened', []):
-                        scores[stock.symbol] = stock.score
-
-                # 감시 종목 구독 (롤링 방식으로 전체 구독)
-                if self._watch_symbols:
-                    await self.ws_feed.subscribe(self._watch_symbols, scores)
+                # 보유종목만 구독 (REST 폴링이 스크리닝 종목 담당)
+                position_symbols = list(self.engine.portfolio.positions.keys())
+                if position_symbols:
+                    await self.ws_feed.subscribe(position_symbols)
                     stats = self.ws_feed.get_subscription_stats()
                     logger.info(
-                        f"WebSocket 구독: 감시={stats['total_watch']}개, "
-                        f"세션종목={stats['session_tradable']}개, "
-                        f"구독={stats['subscribed_count']}개, "
-                        f"롤링={'ON' if stats['is_rolling'] else 'OFF'}"
+                        f"[WS] 보유종목 구독: {stats['subscribed_count']}개, "
+                        f"세션={current_session.value}"
                     )
+                else:
+                    logger.info("[WS] 보유종목 없음 — 대기 (매수 체결 시 자동 구독)")
 
                 # 세션 체크 태스크 시작
                 asyncio.create_task(self._session_check_loop())
