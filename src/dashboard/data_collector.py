@@ -1162,3 +1162,224 @@ class DashboardDataCollector:
             "watch_symbols_count": len(getattr(bot, '_watch_symbols', [])),
             "timestamp": datetime.now(),
         })
+
+    # ----------------------------------------------------------
+    # 일일 정산 (KIS 체결 기반)
+    # ----------------------------------------------------------
+
+    # 수수료율 상수
+    BUY_FEE_RATE = 0.000141   # 매수 수수료 0.0141%
+    SELL_FEE_RATE = 0.000131  # 매도 수수료 0.0131%
+    SELL_TAX_RATE = 0.002     # 증권거래세 0.20%
+
+    async def get_daily_settlement(self, target_date: date = None) -> Dict[str, Any]:
+        """
+        KIS 체결 내역 기반 일일 정산.
+
+        매수/매도 체결을 KIS API에서 조회하고, DB 진입가와 대조하여
+        수수료·세금 포함 실현손익을 계산합니다.
+        """
+        target_date = target_date or date.today()
+        broker = getattr(self.bot, 'broker', None)
+        if not broker or not getattr(broker, 'is_connected', False):
+            return {"error": "브로커 미연결", "date": target_date.isoformat()}
+
+        try:
+            fills = await broker.get_all_fills_for_date(target_date)
+        except Exception as e:
+            logger.error(f"[정산] KIS 체결 조회 실패: {e}")
+            return {"error": f"KIS 체결 조회 실패: {e}", "date": target_date.isoformat()}
+
+        if not fills:
+            return {
+                "date": target_date.isoformat(),
+                "buys": [], "sells": [], "holdings": [],
+                "summary": {
+                    "total_buy_amount": 0, "total_sell_amount": 0,
+                    "realized_pnl": 0, "unrealized_pnl": 0,
+                    "total_pnl": 0, "buy_count": 0, "sell_count": 0,
+                    "win_count": 0, "loss_count": 0,
+                },
+            }
+
+        buys_raw = [f for f in fills if f.get('sll_buy_dvsn_cd') == '02']
+        sells_raw = [f for f in fills if f.get('sll_buy_dvsn_cd') == '01']
+
+        # DB에서 진입가 조회
+        entry_prices = await self._load_entry_prices(target_date)
+
+        # KIS 보유 종목 평균단가 (더 정확)
+        positions_raw = {}
+        try:
+            positions_raw = await broker.get_positions()
+            # dict or list 모두 처리
+            pos_items = positions_raw.values() if isinstance(positions_raw, dict) else positions_raw
+            for p in pos_items:
+                try:
+                    sym = p.symbol
+                    avg = float(p.avg_price)
+                    if sym and avg > 0:
+                        entry_prices[sym] = avg
+                except Exception:
+                    continue
+        except Exception:
+            positions_raw = {}
+
+        name_cache = self._build_name_cache()
+
+        # 매수 정리
+        buy_list = []
+        total_buy_amount = 0
+        for f in sorted(buys_raw, key=lambda x: x.get('ord_tmd', '')):
+            qty = int(f.get('tot_ccld_qty', 0))
+            price = float(f.get('avg_prvs', 0))
+            amount = qty * price
+            fee = round(amount * self.BUY_FEE_RATE)
+            sym = f.get('symbol', '')
+            name = f.get('name', '') or name_cache.get(sym, sym)
+            total_buy_amount += amount + fee
+            buy_list.append({
+                "time": self._format_kis_time(f.get('ord_tmd', '')),
+                "symbol": sym, "name": name,
+                "quantity": qty, "price": price,
+                "amount": amount, "fee": fee,
+                "total": amount + fee,
+                "odno": f.get('odno', ''),
+            })
+
+        # 매도 정리 + 손익 계산
+        sell_list = []
+        total_sell_net = 0
+        total_realized_pnl = 0
+        win_count = 0
+        loss_count = 0
+        for f in sorted(sells_raw, key=lambda x: x.get('ord_tmd', '')):
+            qty = int(f.get('tot_ccld_qty', 0))
+            sell_price = float(f.get('avg_prvs', 0))
+            sell_amount = qty * sell_price
+            sell_fee = round(sell_amount * self.SELL_FEE_RATE)
+            sell_tax = round(sell_amount * self.SELL_TAX_RATE)
+            sell_net = sell_amount - sell_fee - sell_tax
+            total_sell_net += sell_net
+
+            sym = f.get('symbol', '')
+            name = f.get('name', '') or name_cache.get(sym, sym)
+
+            ep = entry_prices.get(sym, 0)
+            pnl = 0
+            pnl_pct = 0
+            if ep > 0:
+                buy_cost = qty * ep
+                buy_fee = round(buy_cost * self.BUY_FEE_RATE)
+                pnl = sell_net - buy_cost - buy_fee
+                pnl_pct = (pnl / (buy_cost + buy_fee) * 100) if (buy_cost + buy_fee) > 0 else 0
+                total_realized_pnl += pnl
+                if pnl >= 0:
+                    win_count += 1
+                else:
+                    loss_count += 1
+
+            sell_list.append({
+                "time": self._format_kis_time(f.get('ord_tmd', '')),
+                "symbol": sym, "name": name,
+                "quantity": qty, "price": sell_price,
+                "amount": sell_amount, "fee": sell_fee, "tax": sell_tax,
+                "net": sell_net,
+                "entry_price": ep,
+                "pnl": round(pnl), "pnl_pct": round(pnl_pct, 2),
+                "odno": f.get('odno', ''),
+            })
+
+        # 보유 현황 (미실현)
+        holdings = []
+        total_unrealized = 0
+        try:
+            pos_items = positions_raw.values() if isinstance(positions_raw, dict) else positions_raw
+            for p in pos_items:
+                try:
+                    sym = p.symbol
+                    avg = float(p.avg_price)
+                    cur = float(p.current_price) if p.current_price else 0
+                    qty = p.quantity
+                    if qty <= 0 or avg <= 0:
+                        continue
+                    unrealized = (cur - avg) * qty
+                    pct = (cur - avg) / avg * 100 if avg > 0 else 0
+                    total_unrealized += unrealized
+                    name = getattr(p, 'name', '') or name_cache.get(sym, sym)
+                    holdings.append({
+                        "symbol": sym, "name": name,
+                        "quantity": qty, "avg_price": avg,
+                        "current_price": cur,
+                        "unrealized_pnl": round(unrealized),
+                        "unrealized_pct": round(pct, 2),
+                    })
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        # 미실현 수익률순 정렬
+        holdings.sort(key=lambda h: h.get('unrealized_pnl', 0), reverse=True)
+
+        return _serialize({
+            "date": target_date.isoformat(),
+            "buys": buy_list,
+            "sells": sell_list,
+            "holdings": holdings,
+            "summary": {
+                "total_buy_amount": round(total_buy_amount),
+                "total_sell_amount": round(total_sell_net),
+                "realized_pnl": round(total_realized_pnl),
+                "unrealized_pnl": round(total_unrealized),
+                "total_pnl": round(total_realized_pnl + total_unrealized),
+                "buy_count": len(buy_list),
+                "sell_count": len(sell_list),
+                "win_count": win_count,
+                "loss_count": loss_count,
+                "holdings_count": len(holdings),
+            },
+        })
+
+    async def _load_entry_prices(self, target_date: date) -> Dict[str, float]:
+        """DB에서 매도 종목의 진입가 로딩"""
+        entry_prices: Dict[str, float] = {}
+        journal = self.bot.trade_journal
+        if not journal:
+            return entry_prices
+
+        # TradeStorage (DB) 사용 시
+        pool = getattr(journal, 'pool', None) or getattr(journal, '_pool', None)
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch("""
+                        SELECT symbol, entry_price, exit_time
+                        FROM trades
+                        WHERE exit_time IS NULL
+                           OR exit_time::date = $1
+                        ORDER BY entry_time
+                    """, target_date)
+                    for r in rows:
+                        entry_prices[r['symbol']] = float(r['entry_price'])
+            except Exception as e:
+                logger.warning(f"[정산] DB 진입가 조회 실패: {e}")
+
+        # 캐시 폴백
+        if not entry_prices:
+            try:
+                for t in journal.get_open_trades():
+                    entry_prices[t.symbol] = float(t.entry_price)
+                for t in journal.get_trades_by_date(target_date):
+                    entry_prices[t.symbol] = float(t.entry_price)
+            except Exception as e:
+                logger.warning(f"[정산] 캐시 진입가 조회 실패: {e}")
+
+        return entry_prices
+
+    @staticmethod
+    def _format_kis_time(ord_tmd: str) -> str:
+        """KIS 시각 포맷 (HHMMSS → HH:MM:SS)"""
+        if len(ord_tmd) >= 6:
+            return f"{ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:6]}"
+        return ord_tmd

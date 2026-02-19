@@ -78,6 +78,7 @@ class DashboardServer:
         app.router.add_get("/themes", self._serve_page("themes.html"))
         app.router.add_get("/settings", self._serve_page("settings.html"))
         app.router.add_get("/evolution", self._serve_page("evolution.html"))
+        app.router.add_get("/settlement", self._serve_page("settlement.html"))
 
         # 정적 파일 서빙
         app.router.add_static("/static", STATIC_DIR, name="static")
