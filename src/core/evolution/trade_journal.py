@@ -232,11 +232,13 @@ class TradeJournal:
         exit_type: str,
         indicators: Dict[str, float] = None,
         exit_time: datetime = None,
+        avg_entry_price: float = None,
     ) -> Optional[TradeRecord]:
         """
         청산 기록
 
         매도 체결 시 호출합니다.
+        avg_entry_price: 포트폴리오 평균단가 (KIS 일치용). None이면 개별 trade.entry_price 사용.
         """
         trade = self._trades.get(trade_id)
         if not trade:
@@ -254,12 +256,14 @@ class TradeJournal:
         trade.indicators_at_exit = indicators or {}
 
         # 손익 계산 (수수료 포함, 누적: 부분 매도 시 += 방식)
-        if trade.entry_price > 0:
+        # 포트폴리오 평균단가 우선 사용 (KIS와 일치)
+        entry_price_for_pnl = avg_entry_price or trade.entry_price
+        if entry_price_for_pnl > 0:
             from src.utils.fee_calculator import calculate_net_pnl
-            partial_pnl, _ = calculate_net_pnl(trade.entry_price, exit_price, exit_quantity)
+            partial_pnl, _ = calculate_net_pnl(entry_price_for_pnl, exit_price, exit_quantity)
             trade.pnl += partial_pnl  # += 누적 (수수료 포함)
             # 총 투자원금 기준 손익률
-            invested = trade.entry_price * trade.entry_quantity
+            invested = entry_price_for_pnl * trade.entry_quantity
             trade.pnl_pct = float(trade.pnl / invested * 100) if invested > 0 else 0.0
 
         # 보유 시간 계산

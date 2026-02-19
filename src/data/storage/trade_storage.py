@@ -287,6 +287,7 @@ class TradeStorage:
         exit_type: str,
         indicators: Dict[str, float] = None,
         exit_time: datetime = None,
+        avg_entry_price: float = None,
     ) -> Optional[TradeRecord]:
         """청산 기록: 캐시 + JSON + DB큐"""
         # exit_type 세분화: reason에 구체적 정보가 있으면 재분류
@@ -301,6 +302,7 @@ class TradeStorage:
             exit_type=exit_type,
             indicators=indicators,
             exit_time=exit_time,
+            avg_entry_price=avg_entry_price,
         )
         if not trade:
             return None

@@ -1686,6 +1686,12 @@ class TradingBot(SchedulerMixin):
                     if not reason:
                         reason = exit_type
 
+                    # KIS와 일치하도록 포트폴리오 평균단가 사용
+                    avg_price = None
+                    pos = self.engine.portfolio.positions.get(fill.symbol)
+                    if pos and pos.avg_price > 0:
+                        avg_price = float(pos.avg_price)
+
                     self.trade_journal.record_exit(
                         trade_id=trade.id,
                         exit_price=float(fill.price),
@@ -1693,6 +1699,7 @@ class TradingBot(SchedulerMixin):
                         exit_reason=reason,
                         exit_type=exit_type,
                         indicators=indicators,
+                        avg_entry_price=avg_price,
                     )
 
         except Exception as e:
