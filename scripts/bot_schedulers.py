@@ -753,11 +753,11 @@ class SchedulerMixin:
                             # 시간대별 등락률 상한 (과열 방지)
                             hour_min = now.strftime("%H:%M")
                             if hour_min < "10:00":
-                                overheating_cap = 8.0    # 장초반: 갭상승 되돌림 빈번 → 보수적
+                                overheating_cap = 12.0   # 장초반
                             elif hour_min >= "13:30":
-                                overheating_cap = 8.0    # 오후: 종가베팅 과열 방지
+                                overheating_cap = 10.0   # 오후
                             else:
-                                overheating_cap = 10.0   # 10:00~13:30: 안정적 추세 형성 후
+                                overheating_cap = 15.0   # 10:00~13:30: 추세 형성 후
 
                             max_daily_entries = 2  # 동일 종목 당일 최대 진입 횟수
                             # 마켓 레짐 보수적 모드: KOSDAQ -0.5~-1.0% → 점수 85 이상만
