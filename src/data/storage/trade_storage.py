@@ -293,6 +293,12 @@ class TradeStorage:
         # exit_type 세분화: reason에 구체적 정보가 있으면 재분류
         exit_type = self._refine_exit_type(exit_type, exit_reason)
 
+        # 누적 PnL 캡처 (이번 매도분 PnL 계산용)
+        prev_pnl = 0.0
+        prev_trade = self._journal.get_trade(trade_id)
+        if prev_trade:
+            prev_pnl = float(prev_trade.pnl)
+
         # 1) 캐시 + JSON
         trade = self._journal.record_exit(
             trade_id=trade_id,
@@ -307,12 +313,18 @@ class TradeStorage:
         if not trade:
             return None
 
+        # 이번 매도분 PnL (누적 - 이전)
+        this_sell_pnl = float(trade.pnl) - prev_pnl
+        entry_price_for_pct = avg_entry_price or float(trade.entry_price)
+        invested_this = entry_price_for_pct * exit_quantity
+        this_sell_pnl_pct = (this_sell_pnl / invested_this * 100) if invested_this > 0 else 0.0
+
         # 상태 결정
         total_exited = trade.exit_quantity or 0
         is_fully_closed = total_exited >= trade.entry_quantity
         status = exit_type if is_fully_closed else "partial"
 
-        # 2) DB 큐 — trades UPDATE
+        # 2) DB 큐 — trades UPDATE (누적 PnL)
         self._enqueue(
             """UPDATE trades SET
                exit_time=$1, exit_price=$2, exit_quantity=$3,
@@ -329,7 +341,7 @@ class TradeStorage:
             ),
         )
 
-        # 3) DB 큐 — trade_events SELL INSERT
+        # 3) DB 큐 — trade_events SELL INSERT (이번 매도분 PnL)
         self._enqueue(
             """INSERT INTO trade_events
                (trade_id, symbol, name, event_type, event_time, price, quantity,
@@ -339,7 +351,7 @@ class TradeStorage:
                 trade.id, trade.symbol, trade.name,
                 trade.exit_time, float(exit_price), exit_quantity,
                 exit_type, exit_reason,
-                float(trade.pnl), float(trade.pnl_pct),
+                float(this_sell_pnl), float(this_sell_pnl_pct),
                 trade.entry_strategy, float(trade.entry_signal_score),
                 status,
             ),

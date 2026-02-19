@@ -1670,6 +1670,7 @@ class TradingBot(SchedulerMixin):
                 # 매도 청산 기록 - 가장 최근 미청산 거래 찾기
                 open_trades = self.trade_journal.get_open_trades()
                 matching = [t for t in open_trades if t.symbol == fill.symbol]
+                matching.sort(key=lambda t: t.entry_time)  # FIFO: 가장 오래된 거래 우선
 
                 if matching:
                     trade = matching[0]
@@ -1691,6 +1692,11 @@ class TradingBot(SchedulerMixin):
                     pos = self.engine.portfolio.positions.get(fill.symbol)
                     if pos and pos.avg_price > 0:
                         avg_price = float(pos.avg_price)
+                    elif not pos:
+                        logger.debug(
+                            f"[저널] {fill.symbol} 포지션 없음 (전량 매도 후 삭제?) "
+                            f"→ 개별 진입가로 PnL 계산"
+                        )
 
                     self.trade_journal.record_exit(
                         trade_id=trade.id,
@@ -1700,6 +1706,11 @@ class TradingBot(SchedulerMixin):
                         exit_type=exit_type,
                         indicators=indicators,
                         avg_entry_price=avg_price,
+                    )
+                else:
+                    logger.warning(
+                        f"[저널] 매도 체결 매칭 실패: {fill.symbol} {fill.quantity}주 @ {fill.price:,.0f}원 "
+                        f"— 미청산 거래에서 해당 종목 못 찾음 (open_trades={len(open_trades)}건)"
                     )
 
         except Exception as e:

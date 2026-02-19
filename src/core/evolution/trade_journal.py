@@ -64,8 +64,10 @@ class TradeRecord:
 
     @property
     def is_closed(self) -> bool:
-        """청산 완료 여부"""
-        return self.exit_time is not None
+        """청산 완료 여부 (전량 매도 시에만 True)"""
+        if self.exit_time is None:
+            return False
+        return self.entry_quantity > 0 and (self.exit_quantity or 0) >= self.entry_quantity
 
     def to_dict(self) -> Dict:
         """딕셔너리로 변환 (JSON 저장용)"""
