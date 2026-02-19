@@ -196,27 +196,32 @@ class ExitManager:
                 logger.warning(f"[ExitManager] {position.symbol} ATR 계산 실패: {e}")
 
         # 현재 수익률 기반으로 초기 단계 결정 (재시작/재등록 시)
+        # 전략별 익절 목표 우선, 없으면 글로벌 기본값
+        eff_first = first_exit_pct or self.config.first_exit_pct
+        eff_second = second_exit_pct or self.config.second_exit_pct
+        eff_third = third_exit_pct or self.config.third_exit_pct
+
         initial_stage = ExitStage.NONE
         current_price = position.current_price or position.avg_price
         if position.avg_price and position.avg_price > 0 and current_price > position.avg_price:
             pnl_pct = float((current_price - position.avg_price) / position.avg_price * 100)
-            if pnl_pct >= self.config.third_exit_pct:
+            if pnl_pct >= eff_third:
                 initial_stage = ExitStage.TRAILING
                 logger.info(
                     f"[ExitManager] {position.symbol} 수익률 +{pnl_pct:.1f}% → "
-                    f"트레일링 단계로 등록 (고점={current_price:,.0f}원)"
+                    f"트레일링 단계로 등록 (고점={current_price:,.0f}원, 3차목표={eff_third:.1f}%)"
                 )
-            elif pnl_pct >= self.config.second_exit_pct:
+            elif pnl_pct >= eff_second:
                 initial_stage = ExitStage.THIRD
                 logger.info(
                     f"[ExitManager] {position.symbol} 수익률 +{pnl_pct:.1f}% → "
-                    f"3차 익절 완료 단계로 등록"
+                    f"3차 익절 완료 단계로 등록 (2차목표={eff_second:.1f}%)"
                 )
-            elif pnl_pct >= self.config.first_exit_pct:
+            elif pnl_pct >= eff_first:
                 initial_stage = ExitStage.FIRST
                 logger.info(
                     f"[ExitManager] {position.symbol} 수익률 +{pnl_pct:.1f}% → "
-                    f"1차 익절 완료 단계로 등록"
+                    f"1차 익절 완료 단계로 등록 (1차목표={eff_first:.1f}%)"
                 )
 
         self._states[position.symbol] = PositionExitState(

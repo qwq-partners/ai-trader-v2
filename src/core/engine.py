@@ -827,9 +827,14 @@ class RiskManager:
                     await self.engine.broker.cancel_all_for_symbol(s)
                 except Exception as e:
                     logger.warning(f"[리스크] 매도 취소 실패: {s} - {e}")
-            # 시장가 재주문
+            # 시장가 재주문 (동시호가 시간대에는 지정가 유지)
             pos = self.engine.portfolio.positions.get(s)
             if pos and pos.quantity > 0:
+                time_val = now.hour * 100 + now.minute
+                if 1520 <= time_val < 1530:
+                    # 동시호가(15:20~15:30): 시장가 불가 — 지정가 유지
+                    logger.info(f"[리스크] 동시호가 시간대 시장가 불가: {s} → 지정가 유지")
+                    continue
                 fallback_order = Order(
                     symbol=s,
                     side=OrderSide.SELL,

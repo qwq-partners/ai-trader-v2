@@ -831,10 +831,10 @@ class StockScreener:
                     lows = [Decimal(str(d["low"])) for d in daily_prices]
                     closes = [Decimal(str(d["close"])) for d in daily_prices]
 
-                    # ATR 계산 (14일)
-                    highs.reverse()  # 최신 → 과거 순서로
-                    lows.reverse()
-                    closes.reverse()
+                    # ATR 계산 (14일) — 원본 리스트 보존
+                    highs = list(reversed(highs))
+                    lows = list(reversed(lows))
+                    closes = list(reversed(closes))
 
                     atr_pct = calculate_atr(highs, lows, closes, period=14)
                     if atr_pct is None:
@@ -1435,11 +1435,10 @@ class StockScreener:
 
             if max_score > min_score:
                 for stock in result:
-                    # 정규화: (score - min) / (max - min) * 100
-                    normalized = (stock.score - min_score) / (max_score - min_score) * 100
-                    stock.score = normalized
+                    # 정규화: 바닥 30점 보장 (30~100 범위)
+                    stock.score = 30 + (stock.score - min_score) / (max_score - min_score) * 70
                 logger.debug(
-                    f"[Screener] 점수 정규화 완료: {min_score:.1f}~{max_score:.1f} → 0~100"
+                    f"[Screener] 점수 정규화 완료: {min_score:.1f}~{max_score:.1f} → 30~100"
                 )
 
         result.sort(key=lambda x: x.score, reverse=True)

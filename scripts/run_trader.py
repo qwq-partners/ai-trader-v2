@@ -1483,6 +1483,10 @@ class TradingBot(SchedulerMixin):
                 pos = self.engine.portfolio.positions.get(fill.symbol)
                 if pos:
                     _pre_sell_entry_price = pos.avg_price
+                # 인스턴스 변수에도 저장 (_record_trade_to_journal에서 폴백 사용)
+                if not hasattr(self, '_last_sell_entry_price'):
+                    self._last_sell_entry_price = {}
+                self._last_sell_entry_price[fill.symbol] = _pre_sell_entry_price
 
             # 포트폴리오 업데이트 (동기화 lock으로 보호)
             async with self._portfolio_lock:
@@ -1506,7 +1510,9 @@ class TradingBot(SchedulerMixin):
                         # update_position 전에 캡처한 평균단가 사용
                         entry_price = _pre_sell_entry_price
                     if entry_price > 0:
-                        trade_pnl = (fill.price - entry_price) * fill.quantity
+                        from src.utils.fee_calculator import calculate_net_pnl as _calc_net_pnl
+                        net_pnl, _ = _calc_net_pnl(float(entry_price), float(fill.price), fill.quantity)
+                        trade_pnl = Decimal(str(net_pnl))
                         self.risk_manager.record_trade_result(trade_pnl)
                 except Exception as e:
                     logger.debug(f"거래 결과 기록 실패: {e}")
@@ -1693,10 +1699,19 @@ class TradingBot(SchedulerMixin):
                     if pos and pos.avg_price > 0:
                         avg_price = float(pos.avg_price)
                     elif not pos:
-                        logger.debug(
-                            f"[저널] {fill.symbol} 포지션 없음 (전량 매도 후 삭제?) "
-                            f"→ 개별 진입가로 PnL 계산"
-                        )
+                        # 전량 매도 후 포지션 삭제됨 → _on_fill에서 캡처한 진입가 사용
+                        cached = getattr(self, '_last_sell_entry_price', {})
+                        pre_price = cached.get(fill.symbol, Decimal("0"))
+                        if pre_price > 0:
+                            avg_price = float(pre_price)
+                            logger.debug(
+                                f"[저널] {fill.symbol} 포지션 삭제됨 → 캡처된 평균단가 {avg_price:,.0f}원 사용"
+                            )
+                        else:
+                            logger.debug(
+                                f"[저널] {fill.symbol} 포지션 없음 (전량 매도 후 삭제?) "
+                                f"→ 개별 진입가로 PnL 계산"
+                            )
 
                     self.trade_journal.record_exit(
                         trade_id=trade.id,

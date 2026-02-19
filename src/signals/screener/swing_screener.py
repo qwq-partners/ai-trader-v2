@@ -106,8 +106,14 @@ class SwingScreener:
         if self._stock_master:
             try:
                 top_stocks = await self._stock_master.get_top_stocks(limit=200)
-                for symbol in top_stocks:
-                    name = await self._stock_master.get_name(symbol) or symbol
+                for entry in top_stocks:
+                    # get_top_stocks() 반환값: "종목명=코드" 형식
+                    parts = entry.split("=")
+                    if len(parts) == 2:
+                        name, symbol = parts[0], parts[1]
+                    else:
+                        symbol = entry
+                        name = await self._stock_master.get_name(symbol) or symbol
                     # ETF/ETN/파생상품 제외 (이름 기반)
                     if self._should_exclude(name):
                         logger.debug(f"[스크리닝] ETF/ETN 제외: {name}({symbol})")
@@ -175,7 +181,7 @@ class SwingScreener:
         results = []
         start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         for stock in universe:
             symbol = stock["symbol"]
@@ -427,7 +433,7 @@ class SwingScreener:
     async def _load_benchmark_index(self):
         """벤치마크 지수(KOSPI) 1년치 로드 (MRS 계산용)"""
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
             kospi_df = await loop.run_in_executor(
                 None, self._fetch_fdr_data, "KS11", start_date

@@ -1,0 +1,11 @@
+[Unit]
+Description=AI Trader 헬스체크 (1회 실행)
+After=ai-trader.service
+
+[Service]
+Type=oneshot
+User=user
+ExecStart=/home/user/projects/ai-trader-v2/scripts/service/ai-trader-healthcheck.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-trader-healthcheck

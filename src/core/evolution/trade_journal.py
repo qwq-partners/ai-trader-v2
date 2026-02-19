@@ -212,7 +212,7 @@ class TradeJournal:
 
         self._trades[trade_id] = trade
 
-        if now.date() == date.today():
+        if now.date() == date.today() and trade_id not in self._today_trades:
             self._today_trades.append(trade_id)
 
         # 저장

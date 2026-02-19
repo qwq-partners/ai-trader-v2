@@ -16,6 +16,7 @@ import asyncpg
 from loguru import logger
 
 from src.core.evolution.trade_journal import TradeJournal, TradeRecord
+from src.utils.fee_calculator import FeeConfig
 
 
 # ── SQL 스키마 ──────────────────────────────────────────────
@@ -196,6 +197,7 @@ class TradeStorage:
                     await conn.execute(sql, *params)
             except Exception as e:
                 if retries_left > 0:
+                    await asyncio.sleep(1 * (4 - retries_left))  # 백오프: 1초, 2초, 3초
                     await self._write_queue.put((sql, params, retries_left - 1))
                     logger.warning(f"[TradeStorage] DB 쓰기 재시도 ({retries_left}): {e}")
                 else:
@@ -520,10 +522,11 @@ class TradeStorage:
 
     # ── KIS 동기화 ────────────────────────────────────────
 
-    # 수수료/세금 상수 (한국투자증권 BanKIS 2026년~)
-    BUY_FEE_RATE = 0.000141   # 매수 수수료 0.0141%
-    SELL_FEE_RATE = 0.000131  # 매도 수수료 0.0131%
-    SELL_TAX_RATE = 0.002     # 증권거래세 0.20%
+    # 수수료/세금 상수 — FeeCalculator 기준값 사용 (fee_calculator.py 단일 소스)
+    _fee_config = FeeConfig()
+    BUY_FEE_RATE = float(_fee_config.buy_commission_rate)    # 매수 수수료 0.0140527%
+    SELL_FEE_RATE = float(_fee_config.sell_commission_rate)   # 매도 수수료 0.0130527%
+    SELL_TAX_RATE = float(_fee_config.sell_tax_rate)          # 증권거래세 0.20%
 
     @staticmethod
     def _parse_kis_time(ord_tmd: str, base_date: date) -> Optional[datetime]:
@@ -622,6 +625,7 @@ class TradeStorage:
                     open_trades = [t for t in self.get_open_trades() if t.symbol == sym]
                     if not open_trades:
                         continue
+                    open_trades.sort(key=lambda t: t.entry_time)  # FIFO 보장
                     cache_trade = open_trades[0]
 
                 if cache_trade.is_closed:
@@ -719,6 +723,16 @@ class TradeStorage:
                 if abs(correct_pnl - old_pnl) < 1:
                     continue
 
+                # 분할매도(SELL 이벤트 2건 이상) 시 trades 테이블 PnL 보정 건너뜀
+                # — 개별 매도 이벤트의 PnL 합이 가중평균보다 정확함
+                sell_count = await self.pool.fetchval("""
+                    SELECT COUNT(*) FROM trade_events
+                    WHERE trade_id = $1 AND event_type = 'SELL'
+                """, row['id'])
+                if sell_count and sell_count > 1:
+                    logger.debug(f"[PnL보정] {sym} 분할매도 {sell_count}건 — trades 테이블 보정 건너뜀")
+                    continue
+
                 # DB 업데이트
                 await self.pool.execute("""
                     UPDATE trades SET pnl = $1, pnl_pct = $2, exit_price = $3,
@@ -726,17 +740,12 @@ class TradeStorage:
                     WHERE id = $4
                 """, correct_pnl, correct_pct, kis_exit_price, row['id'])
 
-                # trade_events SELL 이벤트 보정 (단건 매도만 — 분할매도는 개별 PnL 유지)
-                sell_count = await self.pool.fetchval("""
-                    SELECT COUNT(*) FROM trade_events
-                    WHERE trade_id = $1 AND event_type = 'SELL' AND event_time::date = $2
-                """, row['id'], target_date)
-                if sell_count == 1:
-                    await self.pool.execute("""
-                        UPDATE trade_events SET pnl = $1, pnl_pct = $2, price = $3
-                        WHERE trade_id = $4 AND event_type = 'SELL'
-                          AND event_time::date = $5
-                    """, correct_pnl, correct_pct, kis_exit_price, row['id'], target_date)
+                # trade_events SELL 이벤트도 보정 (여기 도달 시 sell_count <= 1 보장)
+                await self.pool.execute("""
+                    UPDATE trade_events SET pnl = $1, pnl_pct = $2, price = $3
+                    WHERE trade_id = $4 AND event_type = 'SELL'
+                      AND event_time::date = $5
+                """, correct_pnl, correct_pct, kis_exit_price, row['id'], target_date)
 
                 # 캐시도 동기화
                 cached = self._journal.get_trade(row['id'])

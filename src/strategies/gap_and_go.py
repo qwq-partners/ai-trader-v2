@@ -81,6 +81,7 @@ class GapAndGoStrategy(BaseStrategy):
         # 갭상승 종목 추적
         self._gap_stocks: Dict[str, Dict[str, Any]] = {}
         # symbol -> {"gap_pct": float, "open_price": Decimal, "high_price": Decimal, "detected_at": datetime}
+        self._gap_date: Optional[date] = None  # 일일 리셋 추적
 
     async def generate_signal(
         self,
@@ -91,7 +92,7 @@ class GapAndGoStrategy(BaseStrategy):
         """매매 신호 생성"""
         # 일일 자동 리셋 (전일 갭 데이터 잔존 방지)
         today = date.today()
-        if not hasattr(self, '_gap_date') or self._gap_date != today:
+        if self._gap_date != today:
             self._gap_stocks.clear()
             self._gap_date = today
 

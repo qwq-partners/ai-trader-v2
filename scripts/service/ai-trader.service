@@ -1,0 +1,36 @@
+[Unit]
+Description=AI Trader v2 - KRX Automated Trading Bot
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=user
+Group=user
+WorkingDirectory=/home/user/projects/ai-trader-v2
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/home/user/projects/ai-trader-v2/.env
+ExecStart=/home/user/projects/ai-trader-v2/venv/bin/python scripts/run_trader.py --config config/default.yml
+ExecStop=/bin/kill -SIGTERM $MAINPID
+
+# 재시작 정책
+Restart=on-failure
+RestartSec=15
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# 로그
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-trader
+
+# 프로세스 관리
+KillMode=mixed
+TimeoutStopSec=30
+
+# 리소스 제한
+MemoryMax=1G
+CPUQuota=80%
+
+[Install]
+WantedBy=multi-user.target

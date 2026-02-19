@@ -1,0 +1,10 @@
+[Unit]
+Description=AI Trader 헬스체크 타이머 (5분 주기)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

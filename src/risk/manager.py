@@ -221,10 +221,17 @@ class RiskManager:
         Returns:
             (가능 여부, 거부 사유)
         """
+        # 0. 쿨다운 만료 항목 자동 정리 (메모리 누수 방지)
+        now_dt = datetime.now()
+        expired = [s for s, t in self._stop_loss_today.items()
+                   if (now_dt - t).total_seconds() > self._cooldown_minutes * 60]
+        for s in expired:
+            del self._stop_loss_today[s]
+
         # 1. 당일 재진입 금지 체크 (손절 후 쿨다운)
         if symbol in self._stop_loss_today:
             stop_time = self._stop_loss_today[symbol]
-            elapsed = (datetime.now() - stop_time).total_seconds() / 60
+            elapsed = (now_dt - stop_time).total_seconds() / 60
             if elapsed < self._cooldown_minutes:
                 remaining = int(self._cooldown_minutes - elapsed)
                 return False, f"손절 후 재진입 금지 ({remaining}분 남음)"

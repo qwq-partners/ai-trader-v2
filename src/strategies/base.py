@@ -291,7 +291,7 @@ class BaseStrategy(ABC):
             indicators["prev_close"] = float(history[-2].close)
             indicators["open"] = float(history[-1].open)
         elif len(history) == 1:
-            indicators["prev_close"] = closes[-1]
+            indicators["prev_close"] = 0  # 전일 데이터 없음 — 갭 계산 불가 (0이면 gap_and_go에서 조기 리턴)
             indicators["open"] = float(history[-1].open)
 
         # 모멘텀
@@ -450,6 +450,6 @@ class BaseStrategy(ABC):
             reason=reason,
             metadata={
                 "strategy_name": self.name,
-                "indicators": self._indicators.get(symbol, {}),
+                "indicators": dict(self._indicators.get(symbol, {})),
             },
         )

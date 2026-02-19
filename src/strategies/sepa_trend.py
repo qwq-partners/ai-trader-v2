@@ -195,10 +195,12 @@ class SEPATrendStrategy(BaseStrategy):
             # LCI 미계산 시 기존 방식 폴백 (변경: 축소)
             foreign_net = ind.get("foreign_net_buy", 0)
             inst_net = ind.get("inst_net_buy", 0)
+            supply_score = 0
             if foreign_net > 0:
-                score += 10  # 변경: 15->10
+                supply_score += 10
             if inst_net > 0:
-                score += 10  # 변경: 15->10
+                supply_score += 10
+            score += min(supply_score, 20)  # LCI 경로와 동일 상한
 
         # 3. 재무 (20점)
         per = ind.get("per", 0)

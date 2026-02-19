@@ -112,19 +112,22 @@ class KISBroker(BaseBroker):
     # ============================================================
 
     async def _rate_limit(self):
-        """API 호출 전 레이트 리미트 대기 (슬라이딩 윈도우)"""
-        async with self._rate_limit_lock:
-            now = time.monotonic()
-            # 1초 이내 호출 기록만 유지
-            while self._api_call_times and now - self._api_call_times[0] > 1.0:
-                self._api_call_times.popleft()
-            # 초당 호출 한도 도달 시 대기
-            if len(self._api_call_times) >= self._max_rps:
+        """API 호출 전 레이트 리미트 대기 (슬라이딩 윈도우, Lock 밖에서 sleep)"""
+        while True:
+            async with self._rate_limit_lock:
+                now = time.monotonic()
+                # 1초 이내 호출 기록만 유지
+                while self._api_call_times and now - self._api_call_times[0] > 1.0:
+                    self._api_call_times.popleft()
+                # 초당 호출 한도 미달 시 즉시 등록 후 통과
+                if len(self._api_call_times) < self._max_rps:
+                    self._api_call_times.append(time.monotonic())
+                    return
                 wait_time = 1.0 - (now - self._api_call_times[0])
-                if wait_time > 0:
-                    logger.debug(f"[레이트 리밋] {wait_time:.3f}초 대기 (초당 {self._max_rps}건 제한)")
-                    await asyncio.sleep(wait_time)
-            self._api_call_times.append(time.monotonic())
+            # Lock 해제 후 sleep (다른 코루틴 블로킹 방지)
+            if wait_time > 0:
+                logger.debug(f"[레이트 리밋] {wait_time:.3f}초 대기 (초당 {self._max_rps}건 제한)")
+                await asyncio.sleep(wait_time)
 
     # ============================================================
     # 연결 관리
@@ -858,7 +861,7 @@ class KISBroker(BaseBroker):
         return list(self._pending_orders.values())
 
     async def get_positions(self) -> Dict[str, Position]:
-        """보유 포지션 조회"""
+        """보유 포지션 조회 (페이지네이션 포함)"""
         if not self.is_connected:
             if not await self.connect():
                 return {}
@@ -869,45 +872,58 @@ class KISBroker(BaseBroker):
             tr_id = "TTTC8434R"
             url = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/inquire-balance"
 
-            params = {
-                "CANO": self.config.account_no,
-                "ACNT_PRDT_CD": self.config.account_product_cd,
-                "AFHR_FLPR_YN": "N",
-                "FUND_STTL_ICLD_YN": "N",
-                "FNCG_AMT_AUTO_RDPT_YN": "N",
-                "INQR_DVSN": "01",
-                "OFL_YN": "N",
-                "PRCS_DVSN": "00",
-                "UNPR_DVSN": "01",
-                "CTX_AREA_FK100": "",
-                "CTX_AREA_NK100": "",
-            }
+            ctx_fk = ""
+            ctx_nk = ""
 
-            data = await self._api_get(url, tr_id, params)
+            for page in range(10):  # 최대 10페이지 (약 500건)
+                params = {
+                    "CANO": self.config.account_no,
+                    "ACNT_PRDT_CD": self.config.account_product_cd,
+                    "AFHR_FLPR_YN": "N",
+                    "FUND_STTL_ICLD_YN": "N",
+                    "FNCG_AMT_AUTO_RDPT_YN": "N",
+                    "INQR_DVSN": "01",
+                    "OFL_YN": "N",
+                    "PRCS_DVSN": "00",
+                    "UNPR_DVSN": "01",
+                    "CTX_AREA_FK100": ctx_fk,
+                    "CTX_AREA_NK100": ctx_nk,
+                }
 
-            rt_cd = data.get("rt_cd", "")
-            if str(rt_cd) != "0":
-                logger.warning(f"포지션 조회 실패: {data.get('msg1', '')}")
-                return positions
+                data = await self._api_get(url, tr_id, params)
 
-            output1 = data.get("output1", []) or []
+                rt_cd = data.get("rt_cd", "")
+                if str(rt_cd) != "0":
+                    if page == 0:
+                        logger.warning(f"포지션 조회 실패: {data.get('msg1', '')}")
+                    break
 
-            for item in output1:
-                symbol = str(item.get("pdno", "")).zfill(6)
-                qty = int(item.get("hldg_qty", "0") or "0")
+                output1 = data.get("output1", []) or []
 
-                if qty > 0:
-                    avg_price = Decimal(str(item.get("pchs_avg_pric", "0") or "0"))
-                    current_price = Decimal(str(item.get("prpr", "0") or "0"))
-                    name = str(item.get("prdt_name", "") or "").strip()
+                for item in output1:
+                    symbol = str(item.get("pdno", "")).zfill(6)
+                    qty = int(item.get("hldg_qty", "0") or "0")
 
-                    positions[symbol] = Position(
-                        symbol=symbol,
-                        name=name,
-                        quantity=qty,
-                        avg_price=avg_price,
-                        current_price=current_price if current_price > 0 else avg_price,
-                    )
+                    if qty > 0:
+                        avg_price = Decimal(str(item.get("pchs_avg_pric", "0") or "0"))
+                        current_price = Decimal(str(item.get("prpr", "0") or "0"))
+                        name = str(item.get("prdt_name", "") or "").strip()
+
+                        positions[symbol] = Position(
+                            symbol=symbol,
+                            name=name,
+                            quantity=qty,
+                            avg_price=avg_price,
+                            current_price=current_price if current_price > 0 else avg_price,
+                        )
+
+                # 연속 조회 키 확인 — 비어있으면 마지막 페이지
+                ctx_fk = (data.get("ctx_area_fk100") or "").strip()
+                ctx_nk = (data.get("ctx_area_nk100") or "").strip()
+                if not ctx_fk and not ctx_nk:
+                    break
+                if len(output1) == 0:
+                    break
 
             logger.debug(f"포지션 조회 완료: {len(positions)}개")
             return positions
@@ -1300,7 +1316,7 @@ class KISBroker(BaseBroker):
 
     async def _query_daily_fills(self, target_date: str = None) -> list:
         """
-        KIS 일일 체결 내역 원시 조회 (TTTC8001R).
+        KIS 일일 체결 내역 원시 조회 (TTTC8001R) — 페이지네이션 포함.
 
         Args:
             target_date: YYYYMMDD 형식. None이면 오늘.
@@ -1315,30 +1331,45 @@ class KISBroker(BaseBroker):
         tr_id = "TTTC8001R"
         url = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
 
-        params = {
-            "CANO": self.config.account_no,
-            "ACNT_PRDT_CD": self.config.account_product_cd,
-            "INQR_STRT_DT": target_date,
-            "INQR_END_DT": target_date,
-            "SLL_BUY_DVSN_CD": "00",
-            "ORD_GNO_BRNO": "",
-            "CCLD_DVSN": "01",
-            "INQR_DVSN": "00",
-            "INQR_DVSN_1": "",
-            "INQR_DVSN_3": "00",
-            "EXCG_ID_DVSN_CD": "ALL",
-            "CTX_AREA_FK100": "",
-            "CTX_AREA_NK100": "",
-            "PDNO": "",
-            "ODNO": "",
-        }
+        all_items = []
+        ctx_fk = ""
+        ctx_nk = ""
 
-        data = await self._api_get(url, tr_id, params)
-        rt_cd = data.get("rt_cd", "")
-        if str(rt_cd) != "0":
-            return []
+        for page in range(10):  # 최대 10페이지 (약 300건)
+            params = {
+                "CANO": self.config.account_no,
+                "ACNT_PRDT_CD": self.config.account_product_cd,
+                "INQR_STRT_DT": target_date,
+                "INQR_END_DT": target_date,
+                "SLL_BUY_DVSN_CD": "00",
+                "ORD_GNO_BRNO": "",
+                "CCLD_DVSN": "01",
+                "INQR_DVSN": "00",
+                "INQR_DVSN_1": "",
+                "INQR_DVSN_3": "00",
+                "EXCG_ID_DVSN_CD": "ALL",
+                "CTX_AREA_FK100": ctx_fk,
+                "CTX_AREA_NK100": ctx_nk,
+                "PDNO": "",
+                "ODNO": "",
+            }
 
-        return data.get("output1", []) or []
+            data = await self._api_get(url, tr_id, params)
+            if str(data.get("rt_cd", "")) != "0":
+                break
+
+            items = data.get("output1", []) or []
+            all_items.extend(items)
+
+            # 연속 조회 키 확인 — 비어있으면 마지막 페이지
+            ctx_fk = (data.get("ctx_area_fk100") or "").strip()
+            ctx_nk = (data.get("ctx_area_nk100") or "").strip()
+            if not ctx_fk and not ctx_nk:
+                break
+            if len(items) == 0:
+                break
+
+        return all_items
 
     async def get_all_fills_for_date(self, target_date=None) -> List[Dict]:
         """
@@ -1389,6 +1420,9 @@ class KISBroker(BaseBroker):
             # KIS 주문번호 -> 내부 주문 ID 매핑
             kis_to_order_id = {v: k for k, v in self._order_id_to_kis_no.items()}
 
+            # 완전 체결된 주문을 루프 후 일괄 삭제하기 위한 set
+            completed_order_ids: set = set()
+
             for item in output1:
                 odno = str(item.get("ODNO") or item.get("odno", "")).strip()
                 ccld_qty = int(item.get("TOT_CCLD_QTY") or item.get("tot_ccld_qty", "0") or "0")
@@ -1396,6 +1430,11 @@ class KISBroker(BaseBroker):
 
                 if odno in kis_to_order_id and ccld_qty > 0:
                     order_id = kis_to_order_id[odno]
+
+                    # 이미 완전체결 처리된 주문은 스킵 (동일 odno 복수 행 대응)
+                    if order_id in completed_order_ids:
+                        continue
+
                     order = self._pending_orders.get(order_id)
 
                     if order:
@@ -1414,6 +1453,10 @@ class KISBroker(BaseBroker):
                             incremental_price = (total_cost - prev_cost) / new_qty if new_qty > 0 else ccld_price
                         else:
                             incremental_price = ccld_price  # 첫 체결은 그대로
+
+                        # 증분 체결가 음수 방어 (역산 오차 시 누적 평균가로 폴백)
+                        if incremental_price <= 0:
+                            incremental_price = ccld_price
 
                         fill_price = Decimal(str(round(incremental_price, 2)))
 
@@ -1438,16 +1481,19 @@ class KISBroker(BaseBroker):
 
                         if order.filled_quantity >= order.quantity:
                             order.status = OrderStatus.FILLED
-                            # 완전 체결: 추적에서 제거
-                            self._pending_orders.pop(order_id, None)
-                            self._order_id_to_kis_no.pop(order_id, None)
-                            self._order_id_to_orgno.pop(order_id, None)
+                            completed_order_ids.add(order_id)
                         else:
                             order.status = OrderStatus.PARTIAL
                             logger.info(
                                 f"[부분체결] {order.symbol} "
                                 f"{order.filled_quantity}/{order.quantity}주"
                             )
+
+            # 완전 체결된 주문을 루프 종료 후 일괄 삭제
+            for order_id in completed_order_ids:
+                self._pending_orders.pop(order_id, None)
+                self._order_id_to_kis_no.pop(order_id, None)
+                self._order_id_to_orgno.pop(order_id, None)
 
             return fills
 
