@@ -1,5 +1,5 @@
 /**
- * AI Trader v2 - 거래 이벤트 로그 페이지
+ * AI Trader v2 - 거래 내역 (통합 거래+정산)
  *
  * Note: innerHTML usage is safe here as all data comes from our own
  * trusted backend API (trade_events table), not user input.
@@ -7,6 +7,7 @@
 
 const dateInput = document.getElementById('trade-date');
 const btnToday = document.getElementById('btn-today');
+const loadingEl = document.getElementById('loading-indicator');
 
 let currentFilter = 'all';
 let cachedEvents = [];
@@ -16,19 +17,50 @@ function todayStr() {
     return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
-async function loadTradeEvents(dateStr, type) {
+// HTML 이스케이프 (XSS 방지)
+function esc(s) {
+    if (s === null || s === undefined) return '';
+    const d = document.createElement('div');
+    d.textContent = String(s);
+    return d.innerHTML;
+}
+
+// ============================================================
+// 데이터 로드 (양쪽 API 병렬 호출)
+// ============================================================
+
+async function loadTradeData(dateStr, type) {
+    dateStr = dateStr || todayStr();
+    type = type || currentFilter;
+    loadingEl.style.display = 'inline';
+
     try {
-        const date = dateStr || todayStr();
-        type = type || currentFilter;
-        const url = `/api/trade-events?date=${date}&type=${type}`;
-        const events = await api(url);
+        // 두 API 병렬 호출
+        const [events, settlement] = await Promise.all([
+            api(`/api/trade-events?date=${dateStr}&type=${type}`).catch(() => []),
+            api(`/api/daily-settlement?date=${encodeURIComponent(dateStr)}`).catch(() => null),
+        ]);
+
         cachedEvents = events;
+
+        // 렌더링
         renderEvents(events);
-        renderSummary(events);
         renderExitTypeChart(events);
-        updateFilterCounts(date);
+
+        // 정산 데이터 있으면 정산 기반 요약, 없으면 이벤트 기반
+        if (settlement && !settlement.error) {
+            renderSettlementSummary(settlement.summary);
+            renderHoldings(settlement.holdings);
+        } else {
+            renderEventSummary(events);
+            hideHoldings();
+        }
+
+        updateFilterCounts(dateStr);
     } catch (e) {
-        console.error('거래 이벤트 로드 오류:', e);
+        console.warn('[거래] 데이터 로드 오류:', e);
+    } finally {
+        loadingEl.style.display = 'none';
     }
 }
 
@@ -50,6 +82,97 @@ async function updateFilterCounts(dateStr) {
     }
 }
 
+// ============================================================
+// 정산 기반 요약 (KIS 데이터 사용)
+// ============================================================
+
+function renderSettlementSummary(s) {
+    if (!s) return;
+    const el = (id) => document.getElementById(id);
+
+    const realized = el('s-realized');
+    realized.textContent = formatPnl(s.realized_pnl);
+    realized.className = 'stat-value mono ' + pnlClass(s.realized_pnl);
+
+    const unrealized = el('s-unrealized');
+    unrealized.textContent = formatPnl(s.unrealized_pnl);
+    unrealized.className = 'stat-value mono ' + pnlClass(s.unrealized_pnl);
+
+    const total = el('s-total-pnl');
+    total.textContent = formatPnl(s.total_pnl);
+    total.className = 'stat-value mono ' + pnlClass(s.total_pnl);
+
+    // 승/패
+    const wl = el('s-winloss');
+    wl.textContent = '';
+    const winSpan = document.createElement('span');
+    winSpan.className = 'text-profit';
+    winSpan.textContent = s.win_count;
+    const sep = document.createTextNode(' / ');
+    const lossSpan = document.createElement('span');
+    lossSpan.className = 'text-loss';
+    lossSpan.textContent = s.loss_count;
+    wl.appendChild(winSpan);
+    wl.appendChild(sep);
+    wl.appendChild(lossSpan);
+
+    el('s-buysell').textContent = `${s.buy_count} / ${s.sell_count}`;
+}
+
+// ============================================================
+// 이벤트 기반 요약 (DB 데이터 — 과거 날짜용)
+// ============================================================
+
+function renderEventSummary(events) {
+    const el = (id) => document.getElementById(id);
+
+    const sells = events.filter(e => e.event_type === 'SELL');
+    const buys = events.filter(e => e.event_type === 'BUY');
+    const holding = buys.filter(e => e.status === 'holding');
+
+    const sellPnl = sells.reduce((s, e) => s + (e.pnl || 0), 0);
+    const holdPnl = holding.reduce((s, e) => s + (e.pnl || 0), 0);
+
+    const realized = el('s-realized');
+    realized.textContent = sells.length > 0 ? formatPnl(sellPnl) : '--';
+    realized.className = 'stat-value mono ' + pnlClass(sellPnl);
+
+    const unrealized = el('s-unrealized');
+    unrealized.textContent = holding.length > 0 ? formatPnl(holdPnl) : '--';
+    unrealized.className = 'stat-value mono ' + pnlClass(holdPnl);
+
+    const totalPnl = sellPnl + holdPnl;
+    const total = el('s-total-pnl');
+    total.textContent = (sells.length > 0 || holding.length > 0) ? formatPnl(totalPnl) : '--';
+    total.className = 'stat-value mono ' + pnlClass(totalPnl);
+
+    // 승/패
+    const wins = sells.filter(e => (e.pnl || 0) > 0).length;
+    const losses = sells.filter(e => (e.pnl || 0) < 0).length;
+    const wl = el('s-winloss');
+    wl.textContent = '';
+    if (sells.length > 0) {
+        const winSpan = document.createElement('span');
+        winSpan.className = 'text-profit';
+        winSpan.textContent = wins;
+        const sep = document.createTextNode(' / ');
+        const lossSpan = document.createElement('span');
+        lossSpan.className = 'text-loss';
+        lossSpan.textContent = losses;
+        wl.appendChild(winSpan);
+        wl.appendChild(sep);
+        wl.appendChild(lossSpan);
+    } else {
+        wl.textContent = '--';
+    }
+
+    el('s-buysell').textContent = `${buys.length} / ${sells.length}`;
+}
+
+// ============================================================
+// 이벤트 로그 테이블
+// ============================================================
+
 function renderEvents(events) {
     const tbody = document.getElementById('trades-body');
 
@@ -65,7 +188,6 @@ function renderEvents(events) {
         return;
     }
 
-    // Build table rows from trusted API data
     const fragment = document.createDocumentFragment();
     events.forEach(ev => {
         const tr = document.createElement('tr');
@@ -193,47 +315,95 @@ function createStatusBadge(status, isBuy) {
     return span;
 }
 
-function renderSummary(events) {
-    const buys = events.filter(e => e.event_type === 'BUY');
-    const sells = events.filter(e => e.event_type === 'SELL');
-    const holding = buys.filter(e => e.status === 'holding');
+// ============================================================
+// 보유 현황
+// ============================================================
 
-    const sellPnl = sells.reduce((s, e) => s + (e.pnl || 0), 0);
-    const holdPnl = holding.reduce((s, e) => s + (e.pnl || 0), 0);
-    const totalPnl = sellPnl + holdPnl;
+function renderHoldings(holdings) {
+    const section = document.getElementById('holdings-section');
+    const tbody = document.getElementById('holdings-tbody');
+    tbody.textContent = '';
 
-    const withPnl = [...sells, ...holding].filter(e => e.pnl !== 0 && e.pnl != null);
-    const avgPnlPct = withPnl.length > 0
-        ? withPnl.reduce((s, e) => s + (e.pnl_pct || 0), 0) / withPnl.length : 0;
-
-    const wins = sells.filter(e => (e.pnl || 0) > 0);
-    const winRate = sells.length > 0 ? (wins.length / sells.length * 100) : 0;
-
-    // 거래 수
-    const countEl = document.getElementById('s-count');
-    countEl.textContent = buys.length;
-    if (holding.length > 0) {
-        countEl.textContent = buys.length;
-        const sub = document.createElement('span');
-        sub.style.cssText = 'font-size:0.65rem; color:var(--text-muted); font-weight:400;';
-        sub.textContent = ` (보유${holding.length})`;
-        countEl.appendChild(sub);
+    if (!holdings || holdings.length === 0) {
+        section.style.display = 'none';
+        return;
     }
 
-    const wrEl = document.getElementById('s-winrate');
-    wrEl.textContent = sells.length > 0 ? winRate.toFixed(1) + '%' : '--';
-    wrEl.className = 'stat-value mono ' + (winRate >= 50 ? 'text-profit' : winRate > 0 ? 'text-loss' : '');
+    section.style.display = 'block';
+    let totalUnrealized = 0;
 
-    const tpEl = document.getElementById('s-total-pnl');
-    tpEl.textContent = totalPnl !== 0 ? formatPnl(totalPnl) : '--';
-    tpEl.className = 'stat-value mono ' + pnlClass(totalPnl);
+    for (const h of holdings) {
+        totalUnrealized += h.unrealized_pnl;
+        const badgeCls = h.unrealized_pnl >= 0 ? 'badge-sell-win' : 'badge-sell-loss';
+        const tr = document.createElement('tr');
+        tr.style.borderBottom = '1px solid var(--border-subtle)';
 
-    const apEl = document.getElementById('s-avg-pnl');
-    apEl.textContent = withPnl.length > 0 ? formatPct(avgPnlPct) : '--';
-    apEl.className = 'stat-value mono ' + pnlClass(avgPnlPct);
+        // 종목
+        const tdName = document.createElement('td');
+        tdName.style.padding = '10px 12px 10px 0';
+        const nameDiv = document.createElement('div');
+        nameDiv.style.cssText = 'font-weight:600; font-size:0.85rem;';
+        nameDiv.textContent = h.name || h.symbol;
+        const codeDiv = document.createElement('div');
+        codeDiv.style.cssText = 'font-size:0.7rem; color:var(--text-muted);';
+        codeDiv.textContent = h.symbol;
+        tdName.appendChild(nameDiv);
+        tdName.appendChild(codeDiv);
 
-    document.getElementById('s-avg-hold').textContent = sells.length > 0 ? `${sells.length}건 청산` : '--';
+        // 수량
+        const tdQty = createTd('mono', formatNumber(h.quantity));
+        tdQty.style.cssText = 'padding:10px 12px 10px 0; text-align:right;';
+
+        // 평균단가
+        const tdAvg = createTd('mono', formatNumber(h.avg_price));
+        tdAvg.style.cssText = 'padding:10px 12px 10px 0; text-align:right;';
+
+        // 현재가
+        const tdCur = createTd('mono', formatNumber(h.current_price));
+        tdCur.style.cssText = 'padding:10px 12px 10px 0; text-align:right;';
+
+        // 평가손익
+        const tdPnl = document.createElement('td');
+        tdPnl.style.cssText = 'padding:10px 0; text-align:right;';
+        const pctBadge = document.createElement('span');
+        pctBadge.className = 'badge ' + esc(badgeCls);
+        pctBadge.textContent = esc(formatPct(h.unrealized_pct));
+        const pnlDiv = document.createElement('div');
+        pnlDiv.className = 'mono ' + esc(pnlClass(h.unrealized_pnl));
+        pnlDiv.style.cssText = 'font-size:0.85rem; font-weight:600; margin-top:2px;';
+        pnlDiv.textContent = formatPnl(h.unrealized_pnl);
+        tdPnl.appendChild(pctBadge);
+        tdPnl.appendChild(pnlDiv);
+
+        tr.append(tdName, tdQty, tdAvg, tdCur, tdPnl);
+        tbody.appendChild(tr);
+    }
+
+    // 합계
+    const totalTr = document.createElement('tr');
+    totalTr.style.borderTop = '2px solid var(--border-accent)';
+    const tdLabel = document.createElement('td');
+    tdLabel.colSpan = 4;
+    tdLabel.style.cssText = 'padding:12px 0;text-align:right;font-weight:600;color:var(--text-secondary);font-size:0.85rem;';
+    tdLabel.textContent = '합계';
+    const tdTotal = document.createElement('td');
+    tdTotal.style.cssText = 'padding:12px 0;text-align:right;';
+    const totalDiv = document.createElement('div');
+    totalDiv.className = 'mono ' + esc(pnlClass(totalUnrealized));
+    totalDiv.style.cssText = 'font-size:1rem;font-weight:700;';
+    totalDiv.textContent = formatPnl(totalUnrealized);
+    tdTotal.appendChild(totalDiv);
+    totalTr.append(tdLabel, tdTotal);
+    tbody.appendChild(totalTr);
 }
+
+function hideHoldings() {
+    document.getElementById('holdings-section').style.display = 'none';
+}
+
+// ============================================================
+// 청산 유형 차트
+// ============================================================
 
 function renderExitTypeChart(events) {
     const sells = events.filter(e => e.event_type === 'SELL' && e.exit_type);
@@ -279,29 +449,33 @@ function renderExitTypeChart(events) {
     Plotly.react('exit-type-chart', data, layout, { displayModeBar: false, responsive: true });
 }
 
-// 필터 탭 이벤트
+// ============================================================
+// 이벤트 핸들러
+// ============================================================
+
+// 필터 탭
 document.querySelectorAll('.filter-tab').forEach(tab => {
     tab.addEventListener('click', () => {
         document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
         currentFilter = tab.dataset.type;
-        loadTradeEvents(dateInput.value, currentFilter);
+        loadTradeData(dateInput.value, currentFilter);
     });
 });
 
 // 날짜 변경
 dateInput.addEventListener('change', () => {
-    loadTradeEvents(dateInput.value);
+    loadTradeData(dateInput.value);
 });
 
 btnToday.addEventListener('click', () => {
     dateInput.value = todayStr();
-    loadTradeEvents(todayStr());
+    loadTradeData(todayStr());
 });
 
 // 초기화
 document.addEventListener('DOMContentLoaded', () => {
     dateInput.value = todayStr();
-    loadTradeEvents(todayStr());
+    loadTradeData(todayStr());
     sse.connect();
 });

@@ -520,11 +520,47 @@ class TradeStorage:
 
     # ── KIS 동기화 ────────────────────────────────────────
 
+    # 수수료/세금 상수 (한국투자증권 BanKIS 2026년~)
+    BUY_FEE_RATE = 0.000141   # 매수 수수료 0.0141%
+    SELL_FEE_RATE = 0.000131  # 매도 수수료 0.0131%
+    SELL_TAX_RATE = 0.002     # 증권거래세 0.20%
+
+    @staticmethod
+    def _parse_kis_time(ord_tmd: str, base_date: date) -> Optional[datetime]:
+        """KIS ord_tmd (HHMMSS) → datetime 변환"""
+        if not ord_tmd or len(ord_tmd) < 6:
+            return None
+        try:
+            h, m, s = int(ord_tmd[:2]), int(ord_tmd[2:4]), int(ord_tmd[4:6])
+            return datetime(base_date.year, base_date.month, base_date.day, h, m, s)
+        except (ValueError, TypeError):
+            return None
+
+    @classmethod
+    def calc_pnl(cls, entry_price: float, exit_price: float, quantity: int) -> tuple:
+        """KIS 체결 기반 정확한 PnL 계산 (수수료+세금 포함).
+
+        Returns:
+            (pnl, pnl_pct) — 원 단위 손익, 퍼센트 수익률
+        """
+        buy_amount = entry_price * quantity
+        sell_amount = exit_price * quantity
+        buy_fee = buy_amount * cls.BUY_FEE_RATE
+        sell_fee = sell_amount * cls.SELL_FEE_RATE
+        sell_tax = sell_amount * cls.SELL_TAX_RATE
+        cost = buy_amount + buy_fee
+        net = sell_amount - sell_fee - sell_tax
+        pnl = net - cost
+        pnl_pct = (pnl / cost * 100) if cost > 0 else 0.0
+        return round(pnl), round(pnl_pct, 4)
+
     async def sync_from_kis(self, broker):
         """
         KIS 당일 체결 내역과 캐시/DB 동기화.
 
-        누락된 거래를 보정합니다. 절대 예외를 전파하지 않습니다.
+        1) 누락 매수/매도 복구
+        2) 청산 거래 PnL 보정 (수수료+세금 포함 정확한 값으로)
+        절대 예외를 전파하지 않습니다.
         """
         try:
             if not hasattr(broker, "get_all_fills_for_date"):
@@ -554,16 +590,6 @@ class TradeStorage:
                     sells.setdefault(sym, []).append(f)
 
             synced = 0
-
-            def _parse_kis_time(ord_tmd: str, base_date: date) -> Optional[datetime]:
-                """KIS ord_tmd (HHMMSS) → datetime 변환"""
-                if not ord_tmd or len(ord_tmd) < 6:
-                    return None
-                try:
-                    h, m, s = int(ord_tmd[:2]), int(ord_tmd[2:4]), int(ord_tmd[4:6])
-                    return datetime(base_date.year, base_date.month, base_date.day, h, m, s)
-                except (ValueError, TypeError):
-                    return None
 
             # 누락 매수 복구
             for sym, buy_fills in buys.items():
@@ -616,7 +642,7 @@ class TradeStorage:
                 if price <= 0:
                     continue
 
-                actual_time = _parse_kis_time(last_fill.get("ord_tmd", ""), today)
+                actual_time = self._parse_kis_time(last_fill.get("ord_tmd", ""), today)
 
                 self.record_exit(
                     trade_id=cache_trade.id,
@@ -634,8 +660,101 @@ class TradeStorage:
             else:
                 logger.info("[TradeStorage] KIS 동기화 완료: 누락 없음")
 
+            # PnL 보정 (수수료+세금 포함 정확한 값)
+            await self._reconcile_pnl(today, sells)
+
         except Exception as e:
             logger.error(f"[TradeStorage] KIS 동기화 실패 (무시): {e}")
+
+    async def _reconcile_pnl(self, target_date: date, kis_sells: Dict[str, list]):
+        """
+        당일 청산 거래의 PnL을 KIS 체결가 기준으로 보정.
+
+        엔진 PnL은 수수료/세금을 제외하거나 부정확할 수 있으므로,
+        KIS 실제 체결가와 DB 진입가를 기준으로 재계산합니다.
+        """
+        if not self._db_available or not self.pool:
+            return
+
+        try:
+            # DB에서 당일 청산 거래 조회
+            rows = await self.pool.fetch("""
+                SELECT id, symbol, entry_price, exit_price, entry_quantity,
+                       exit_quantity, pnl, pnl_pct
+                FROM trades
+                WHERE exit_time::date = $1 AND exit_time IS NOT NULL
+            """, target_date)
+
+            if not rows:
+                return
+
+            corrected = 0
+            for row in rows:
+                sym = row['symbol']
+                entry_price = float(row['entry_price'])
+                exit_qty = row['exit_quantity'] or 0
+
+                if entry_price <= 0 or exit_qty <= 0:
+                    continue
+
+                # KIS 매도 체결가 사용 (있으면), 없으면 DB exit_price 그대로
+                kis_exit_price = float(row['exit_price'])
+                if sym in kis_sells:
+                    # KIS의 가중평균 매도가 계산
+                    total_qty = 0
+                    total_amt = 0
+                    for f in kis_sells[sym]:
+                        q = int(f.get("tot_ccld_qty", 0))
+                        p = float(f.get("avg_prvs", 0))
+                        total_qty += q
+                        total_amt += q * p
+                    if total_qty > 0:
+                        kis_exit_price = total_amt / total_qty
+
+                # 수수료+세금 포함 정확한 PnL 계산
+                correct_pnl, correct_pct = self.calc_pnl(entry_price, kis_exit_price, exit_qty)
+
+                # 기존 값과 차이가 있으면 보정 (1원 이상 차이)
+                old_pnl = float(row['pnl'] or 0)
+                if abs(correct_pnl - old_pnl) < 1:
+                    continue
+
+                # DB 업데이트
+                await self.pool.execute("""
+                    UPDATE trades SET pnl = $1, pnl_pct = $2, exit_price = $3,
+                                      updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $4
+                """, correct_pnl, correct_pct, kis_exit_price, row['id'])
+
+                # trade_events SELL 이벤트 보정 (단건 매도만 — 분할매도는 개별 PnL 유지)
+                sell_count = await self.pool.fetchval("""
+                    SELECT COUNT(*) FROM trade_events
+                    WHERE trade_id = $1 AND event_type = 'SELL' AND event_time::date = $2
+                """, row['id'], target_date)
+                if sell_count == 1:
+                    await self.pool.execute("""
+                        UPDATE trade_events SET pnl = $1, pnl_pct = $2, price = $3
+                        WHERE trade_id = $4 AND event_type = 'SELL'
+                          AND event_time::date = $5
+                    """, correct_pnl, correct_pct, kis_exit_price, row['id'], target_date)
+
+                # 캐시도 동기화
+                cached = self._journal.get_trade(row['id'])
+                if cached:
+                    cached.pnl = Decimal(str(correct_pnl))
+                    cached.pnl_pct = Decimal(str(correct_pct))
+
+                corrected += 1
+                logger.info(
+                    f"[KIS보정] {sym} PnL 보정: {old_pnl:+,.0f} → {correct_pnl:+,.0f}원 "
+                    f"(entry={entry_price:,.0f} exit={kis_exit_price:,.0f} qty={exit_qty})"
+                )
+
+            if corrected > 0:
+                logger.info(f"[KIS보정] 당일 PnL 보정 완료: {corrected}건")
+
+        except Exception as e:
+            logger.error(f"[KIS보정] PnL 보정 실패 (무시): {e}")
 
 
 # ── 싱글톤 팩토리 ──────────────────────────────────────────

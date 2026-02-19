@@ -239,6 +239,17 @@ class SchedulerMixin:
                             except Exception as e:
                                 logger.error(f"[자산추적] 스냅샷 저장 실패: {e}")
 
+                        # KIS 체결 기반 PnL 보정 (17:00)
+                        if not getattr(self, '_last_kis_sync_date', None) == today:
+                            try:
+                                tj = self.trade_journal
+                                if self.broker and hasattr(tj, 'sync_from_kis'):
+                                    await tj.sync_from_kis(self.broker)
+                                    self._last_kis_sync_date = today
+                                    logger.info("[KIS동기화] 장 마감 후 체결 동기화 완료")
+                            except Exception as e:
+                                logger.error(f"[KIS동기화] 장 마감 후 동기화 실패: {e}")
+
                         # 거래 복기 리포트 생성 (17:00)
                         daily_reviewer = getattr(self, 'daily_reviewer', None)
                         if daily_reviewer and not getattr(self, '_last_trade_report_date', None) == today:
