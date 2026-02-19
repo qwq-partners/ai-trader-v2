@@ -601,25 +601,33 @@ class TradeStorage:
                 if cache_trade.is_closed:
                     continue
 
-                f = sell_fills[0]
-                qty = int(f.get("tot_ccld_qty", 0))
-                price = float(f.get("avg_prvs", 0))
-                if qty <= 0 or price <= 0:
+                # KIS 총 매도 수량 vs 이미 기록된 매도 수량 비교
+                kis_total_sold = sum(int(f.get("tot_ccld_qty", 0)) for f in sell_fills)
+                already_sold = cache_trade.exit_quantity or 0
+                missing_qty = kis_total_sold - already_sold
+
+                if missing_qty <= 0:
+                    logger.debug(f"[TradeStorage] {sym} 매도 이미 기록됨 (KIS={kis_total_sold}, 기록={already_sold})")
                     continue
 
-                # KIS 실제 체결 시간 사용
-                actual_time = _parse_kis_time(f.get("ord_tmd", ""), today)
+                # 누락분만 복구 (마지막 체결가 사용)
+                last_fill = sell_fills[-1]
+                price = float(last_fill.get("avg_prvs", 0))
+                if price <= 0:
+                    continue
+
+                actual_time = _parse_kis_time(last_fill.get("ord_tmd", ""), today)
 
                 self.record_exit(
                     trade_id=cache_trade.id,
                     exit_price=price,
-                    exit_quantity=qty,
+                    exit_quantity=missing_qty,
                     exit_reason="KIS 동기화 복구",
                     exit_type="kis_sync",
                     exit_time=actual_time,
                 )
                 synced += 1
-                logger.info(f"[TradeStorage] KIS 동기화 매도 복구: {sym} {qty}주 @ {price:,.0f}")
+                logger.info(f"[TradeStorage] KIS 동기화 매도 복구: {sym} {missing_qty}주 @ {price:,.0f} (KIS={kis_total_sold}, 기존={already_sold})")
 
             if synced > 0:
                 logger.info(f"[TradeStorage] KIS 동기화 완료: {synced}건 복구")
