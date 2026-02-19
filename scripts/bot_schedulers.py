@@ -94,6 +94,7 @@ class SchedulerMixin:
         morning_hour, morning_min = (int(x) for x in morning_time_str.split(":"))
         evening_hour, evening_min = (int(x) for x in evening_time_str.split(":"))
 
+        last_us_market_report: Optional[date] = None
         last_morning_report: Optional[date] = None
         last_evening_report: Optional[date] = None
         last_holiday_refresh_month: Optional[str] = None
@@ -195,6 +196,18 @@ class SchedulerMixin:
                 if is_kr_market_holiday(today):
                     await asyncio.sleep(60)
                     continue
+
+                # 미국증시 마감 레포트 (07:00 ~ 07:15)
+                if now.hour == 7 and 0 <= now.minute < 15:
+                    if last_us_market_report != today:
+                        logger.info("[레포트] 미국증시 마감 레포트 발송 시작")
+                        try:
+                            await self.report_generator.generate_us_market_report(
+                                send_telegram=True,
+                            )
+                            last_us_market_report = today
+                        except Exception as e:
+                            logger.error(f"[레포트] 미국증시 레포트 발송 실패: {e}")
 
                 # 아침 레포트 (설정 시간 ~ +15분)
                 if now.hour == morning_hour and morning_min <= now.minute < morning_min + 15:

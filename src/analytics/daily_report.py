@@ -651,6 +651,129 @@ class DailyReportGenerator:
             logger.warning(f"[레포트] US 시장 요약 조회 실패: {e}")
             return []
 
+    async def generate_us_market_report(self, send_telegram: bool = True) -> str:
+        """
+        미국증시 마감 레포트 생성 (매일 07:00)
+
+        Yahoo Finance 데이터 기반으로 지수, 섹터 ETF, 개별 종목 등락을
+        한눈에 보기 좋게 정리하여 텔레그램 발송.
+        """
+        from ..data.providers.us_market_data import (
+            get_us_market_data, US_KOREA_SECTOR_MAP, INDEX_SYMBOLS, INDEX_NAMES,
+        )
+
+        umd = self._us_market_data or get_us_market_data()
+        quotes = await umd.fetch_us_market_summary()
+
+        if not quotes:
+            msg = "⚠️ 미국증시 데이터 조회 실패"
+            if send_telegram:
+                await self.telegram.send_report(msg)
+            return msg
+
+        now = datetime.now()
+        date_str = now.strftime("%Y.%m.%d")
+
+        # ── 지수 ──
+        idx_lines = []
+        idx_pcts = []
+        for sym in INDEX_SYMBOLS:
+            q = quotes.get(sym)
+            if not q:
+                continue
+            name = INDEX_NAMES.get(sym, sym)
+            pct = q["change_pct"]
+            price = q["price"]
+            idx_pcts.append(pct)
+            arrow = "🟢" if pct > 0 else ("🔴" if pct < 0 else "⚪")
+            idx_lines.append(f"  {arrow} {name:<10} {price:>10,.1f}  ({pct:+.2f}%)")
+
+        avg_pct = sum(idx_pcts) / len(idx_pcts) if idx_pcts else 0
+        if avg_pct >= 1.0:
+            mood = "📈 강세 마감"
+        elif avg_pct <= -1.0:
+            mood = "📉 약세 마감"
+        else:
+            mood = "➡️ 보합 마감"
+
+        lines = [
+            f"🇺🇸 <b>미국증시 마감 리포트</b>",
+            f"<i>{date_str} 07:00 기준 (전일 NY 마감)</i>",
+            "",
+            f"<b>■ 주요 지수  {mood}</b>",
+        ]
+        lines.extend(idx_lines)
+        lines.append("")
+
+        # ── 빅테크 ──
+        bigtech = ["NVDA", "AAPL", "MSFT", "GOOG", "META", "AMZN", "TSLA"]
+        bt_lines = []
+        for sym in bigtech:
+            q = quotes.get(sym)
+            if not q:
+                continue
+            pct = q["change_pct"]
+            name = q.get("name", sym)
+            # 이름이 너무 길면 축약
+            if len(name) > 12:
+                name = name[:12]
+            icon = "▲" if pct > 0 else ("▼" if pct < 0 else "─")
+            bt_lines.append(f"{sym}({icon}{abs(pct):.1f}%)")
+
+        if bt_lines:
+            lines.append(f"<b>■ 빅테크</b>")
+            # 4개씩 줄바꿈
+            for i in range(0, len(bt_lines), 4):
+                lines.append("  " + "  ".join(bt_lines[i:i + 4]))
+            lines.append("")
+
+        # ── 섹터 ETF + 개별종목 (테마 매핑) ──
+        sector_signals = await umd.get_sector_signals()
+        if sector_signals:
+            lines.append(f"<b>■ 한국 시장 영향</b>")
+            for theme, sig in sorted(
+                sector_signals.items(),
+                key=lambda x: abs(x[1]["boost"]),
+                reverse=True,
+            ):
+                boost = sig["boost"]
+                avg = sig["us_avg_pct"]
+                movers = sig.get("top_movers", [])
+                icon = "🔺" if boost > 0 else "🔻"
+                movers_str = ", ".join(movers[:3])
+                lines.append(
+                    f"  {icon} <b>{theme}</b> (부스트 {boost:+d}점)"
+                )
+                lines.append(f"      평균 {avg:+.1f}%  {movers_str}")
+            lines.append("")
+
+        # ── 공포/탐욕 지표 대용: VIX ──
+        # VIX는 US_SYMBOLS에 없으므로 별도 조회 불필요, 지수 평균으로 대체
+        if avg_pct >= 1.5:
+            market_msg = "💡 강한 상승 — 한국 관련 테마주 갭업 가능성"
+        elif avg_pct >= 0.5:
+            market_msg = "💡 소폭 상승 — 반도체·IT 섹터 긍정적"
+        elif avg_pct <= -1.5:
+            market_msg = "⚠️ 강한 하락 — 한국 시장 하방 압력 주의"
+        elif avg_pct <= -0.5:
+            market_msg = "⚠️ 소폭 하락 — 보수적 접근 권장"
+        else:
+            market_msg = "💡 변동 미미 — 국내 자체 재료에 주목"
+
+        lines.append(f"<b>■ 오늘의 포인트</b>")
+        lines.append(f"  {market_msg}")
+
+        report = "\n".join(lines)
+
+        if send_telegram:
+            success = await self.telegram.send_report(report)
+            if success:
+                logger.info("[레포트] 미국증시 레포트 발송 완료")
+            else:
+                logger.error("[레포트] 미국증시 레포트 발송 실패")
+
+        return report
+
     def _format_morning_report(
         self,
         recommendations: List[RecommendedStock],
