@@ -562,48 +562,86 @@ class NewsCollector:
         reraise=False,
     )
     async def fetch_stockplus_news(self, limit: int = 20) -> List[NewsArticle]:
-        """stockplus.com 속보 크롤링 (최대 3회 재시도)"""
+        """stockplus.com 속보 크롤링 (Next.js SPA — JSON-LD 기반)"""
         try:
             session = await self._get_session()
-            url = "https://newsroom.stockplus.com/breaking-news"
+            base_url = "https://newsroom.stockplus.com"
             headers = {
-                "User-Agent": "Mozilla/5.0 (compatible; AITrader/2.0)",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             }
+            timeout = aiohttp.ClientTimeout(total=15)
 
+            # 1단계: 목록 페이지에서 JSON-LD의 기사 URL 추출
             async with session.get(
-                url, headers=headers,
-                timeout=aiohttp.ClientTimeout(total=15)
+                f"{base_url}/breaking-news", headers=headers, timeout=timeout
             ) as resp:
                 if resp.status != 200:
                     logger.debug(f"[뉴스] stockplus HTTP {resp.status}")
                     return []
-
                 html = await resp.text()
 
-            # HTML 파싱 (간단한 정규식 사용)
-            # 패턴: <a href="/breaking-news/123">제목</a> 형식 가정
-            # 실제 사이트 구조에 따라 조정 필요
-            articles = []
+            # JSON-LD Schema에서 itemListElement URL 추출
+            article_urls = re.findall(
+                r'"item"\s*:\s*"(https://newsroom\.stockplus\.com/breaking-news/\d+)"',
+                html
+            )
+            if not article_urls:
+                logger.debug("[뉴스] stockplus: JSON-LD에서 기사 URL 없음")
+                return []
 
-            # 제목 패턴: <h3 class="..." 또는 <a class="...">제목</a>
-            title_pattern = r'<a[^>]*href="(/breaking-news/[^"]+)"[^>]*>([^<]+)</a>'
-            matches = re.findall(title_pattern, html)
+            # 2단계: 개별 기사 페이지에서 JSON-LD NewsArticle 메타데이터 추출 (병렬)
+            article_urls = article_urls[:limit]
 
-            for link_path, title in matches[:limit]:
-                if not title.strip():
-                    continue
+            async def _fetch_article(article_url: str) -> Optional[NewsArticle]:
+                try:
+                    async with session.get(
+                        article_url, headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=10)
+                    ) as r:
+                        if r.status != 200:
+                            return None
+                        page = await r.text()
 
-                full_url = f"https://newsroom.stockplus.com{link_path}"
+                    # JSON-LD NewsArticle 파싱
+                    ld_blocks = re.findall(
+                        r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>',
+                        page, re.DOTALL
+                    )
+                    for block in ld_blocks:
+                        try:
+                            data = json.loads(block)
+                            if data.get("@type") == "NewsArticle":
+                                headline = data.get("headline", "").strip()
+                                if not headline:
+                                    continue
+                                desc = data.get("description", "")
+                                pub_str = data.get("datePublished", "")
+                                pub_dt = datetime.now()
+                                if pub_str:
+                                    try:
+                                        pub_dt = datetime.fromisoformat(
+                                            pub_str.replace("Z", "+00:00")
+                                        ).replace(tzinfo=None)
+                                    except ValueError:
+                                        pass
+                                return NewsArticle(
+                                    title=headline,
+                                    content=desc,
+                                    url=article_url,
+                                    source="stockplus",
+                                    published_at=pub_dt,
+                                )
+                        except (json.JSONDecodeError, KeyError):
+                            continue
+                    return None
+                except Exception:
+                    return None
 
-                articles.append(NewsArticle(
-                    title=title.strip(),
-                    content="",  # 속보는 제목만
-                    url=full_url,
-                    source="stockplus",
-                    published_at=datetime.now(),
-                ))
+            tasks = [_fetch_article(url) for url in article_urls]
+            results = await asyncio.gather(*tasks)
+            articles = [a for a in results if a is not None]
 
-            logger.debug(f"[뉴스] stockplus: {len(articles)}건 수집")
+            logger.debug(f"[뉴스] stockplus: {len(articles)}건 수집 (시도 {len(article_urls)}건)")
             return articles
 
         except Exception as e:
