@@ -565,6 +565,14 @@ class TradingBot(SchedulerMixin):
             evolution_cfg = self.config.get("evolution") or {}
             if evolution_cfg.get("enabled", True):
                 self.trade_journal = get_trade_journal()
+
+                # TradeStorage DB 연결 (DB+JSON 듀얼 모드)
+                if hasattr(self.trade_journal, 'connect'):
+                    await self.trade_journal.connect()
+                    # KIS 당일 체결 동기화
+                    if self.broker and hasattr(self.trade_journal, 'sync_from_kis'):
+                        await self.trade_journal.sync_from_kis(self.broker)
+
                 self.strategy_evolver = get_strategy_evolver()
 
                 # 전략 등록 (파라미터 자동 조정용)
@@ -1640,9 +1648,12 @@ class TradingBot(SchedulerMixin):
                             stock_name = fill.symbol
                     else:
                         stock_name = fill.symbol
-                # 캐시에 저장
+                # 캐시에 저장 + 포지션 name 보강
                 if stock_name and stock_name != fill.symbol:
                     self.stock_name_cache[fill.symbol] = stock_name
+                    pos = self.engine.portfolio.positions.get(fill.symbol)
+                    if pos and (not pos.name or pos.name == fill.symbol):
+                        pos.name = stock_name
 
                 self.trade_journal.record_entry(
                     trade_id=trade_id,
@@ -1669,13 +1680,11 @@ class TradingBot(SchedulerMixin):
 
                     # 청산 타입 결정 (reason 문자열 기반 추론)
                     reason = getattr(fill, 'reason', '') or ''
-                    exit_type = "unknown"
-                    if "손절" in reason:
-                        exit_type = "stop_loss"
-                    elif "익절" in reason or "트레일링" in reason:
-                        exit_type = "take_profit"
-                    elif "시간" in reason or "종료" in reason:
-                        exit_type = "time_exit"
+                    exit_type = self._infer_exit_type(reason)
+
+                    # exit_reason에 상세 사유 포함
+                    if not reason:
+                        reason = exit_type
 
                     self.trade_journal.record_exit(
                         trade_id=trade.id,
@@ -1688,6 +1697,32 @@ class TradingBot(SchedulerMixin):
 
         except Exception as e:
             logger.warning(f"거래 저널 기록 실패: {e}")
+
+    @staticmethod
+    def _infer_exit_type(reason: str) -> str:
+        """청산 사유 문자열에서 exit_type 추론"""
+        if not reason:
+            return "unknown"
+        r = reason.lower()
+        if "손절" in r:
+            return "stop_loss"
+        if "1차 익절" in r or "1차익절" in r:
+            return "first_take_profit"
+        if "2차 익절" in r or "2차익절" in r:
+            return "second_take_profit"
+        if "3차 익절" in r or "3차익절" in r:
+            return "third_take_profit"
+        if "익절" in r:
+            return "take_profit"
+        if "트레일링" in r:
+            return "trailing"
+        if "본전" in r:
+            return "breakeven"
+        if "시간" in r or "보유기간" in r or "종료" in r:
+            return "time_exit"
+        if "동기화" in r:
+            return "kis_sync"
+        return "manual"
 
     async def _daily_summary(self):
         """일일 요약"""
@@ -2107,6 +2142,13 @@ class TradingBot(SchedulerMixin):
                 logger.info("종목 마스터 종료")
         except Exception as e:
             logger.error(f"종목 마스터 종료 실패: {e}")
+
+        try:
+            if self.trade_journal and hasattr(self.trade_journal, 'disconnect'):
+                await self.trade_journal.disconnect()
+                logger.info("TradeStorage DB 종료")
+        except Exception as e:
+            logger.error(f"TradeStorage 종료 실패: {e}")
 
         try:
             if self.batch_analyzer:

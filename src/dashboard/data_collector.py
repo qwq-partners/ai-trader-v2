@@ -126,6 +126,7 @@ class DashboardDataCollector:
         """보유 포지션 목록"""
         portfolio = self.bot.engine.portfolio
         exit_mgr = self.bot.exit_manager
+        name_cache = self._build_name_cache()
         positions = []
 
         for symbol, pos in portfolio.positions.items():
@@ -141,9 +142,13 @@ class DashboardDataCollector:
                         "realized_pnl": state.total_realized_pnl,
                     }
 
+            # 종목명: pos.name → name_cache → symbol 순서 폴백
+            pos_name = getattr(pos, 'name', '') or ''
+            if not pos_name or pos_name == symbol:
+                pos_name = name_cache.get(symbol, symbol)
             positions.append(_serialize({
                 "symbol": symbol,
-                "name": getattr(pos, 'name', '') or symbol,
+                "name": pos_name,
                 "quantity": pos.quantity,
                 "avg_price": pos.avg_price,
                 "current_price": pos.current_price,
@@ -387,6 +392,70 @@ class DashboardDataCollector:
             stats['all_trades'] = stats.get('total_trades', 0)
 
         return stats
+
+    async def get_trade_events(
+        self, target_date: date = None, event_type: str = "all"
+    ) -> List[Dict[str, Any]]:
+        """거래 이벤트 로그 (trade_events 테이블 기반, 폴백: 캐시)"""
+        journal = self.bot.trade_journal
+        if not journal:
+            return []
+
+        # TradeStorage인 경우 DB 쿼리
+        if hasattr(journal, 'get_trade_events'):
+            events = await journal.get_trade_events(target_date, event_type)
+        else:
+            # 기존 TradeJournal 폴백: 캐시에서 이벤트 구성
+            target_date = target_date or date.today()
+            events = []
+            trades = journal.get_trades_by_date(target_date)
+            for t in trades:
+                if event_type in ("all", "buy"):
+                    events.append({
+                        "trade_id": t.id, "symbol": t.symbol, "name": t.name,
+                        "event_type": "BUY", "event_time": t.entry_time.isoformat() if t.entry_time else "",
+                        "price": float(t.entry_price), "quantity": t.entry_quantity,
+                        "strategy": t.entry_strategy, "signal_score": float(t.entry_signal_score),
+                        "status": t.exit_type if t.is_closed else "holding",
+                        "entry_price": float(t.entry_price), "entry_quantity": t.entry_quantity,
+                    })
+                if t.exit_time and t.exit_time.date() == target_date and event_type in ("all", "sell"):
+                    events.append({
+                        "trade_id": t.id, "symbol": t.symbol, "name": t.name,
+                        "event_type": "SELL", "event_time": t.exit_time.isoformat(),
+                        "price": float(t.exit_price), "quantity": t.exit_quantity or 0,
+                        "exit_type": t.exit_type, "exit_reason": t.exit_reason,
+                        "pnl": float(t.pnl), "pnl_pct": float(t.pnl_pct),
+                        "strategy": t.entry_strategy, "signal_score": float(t.entry_signal_score),
+                        "status": t.exit_type or "closed",
+                        "entry_price": float(t.entry_price), "entry_quantity": t.entry_quantity,
+                    })
+            events.sort(key=lambda e: e.get("event_time", ""), reverse=True)
+
+        # 종목명 + 미청산 BUY 현재가 보강
+        portfolio = self.bot.engine.portfolio
+        name_cache = self._build_name_cache()
+        for ev in events:
+            # 종목명 보강: DB에 코드만 저장된 경우
+            sym = ev.get("symbol", "")
+            ev_name = ev.get("name", "")
+            if not ev_name or ev_name == sym:
+                ev["name"] = name_cache.get(sym, sym)
+
+            # 미청산 BUY: 현재가/평가손익 보강
+            if ev.get("event_type") == "BUY" and ev.get("status") == "holding":
+                pos = portfolio.positions.get(sym)
+                if pos:
+                    ev["current_price"] = float(pos.current_price)
+                    entry_p = ev.get("entry_price") or ev.get("price", 0)
+                    qty = ev.get("entry_quantity") or ev.get("quantity", 0)
+                    if entry_p and qty:
+                        ev["pnl"] = float(pos.current_price - pos.avg_price) * qty
+                        ev["pnl_pct"] = float(
+                            (pos.current_price - pos.avg_price) / pos.avg_price * 100
+                        ) if pos.avg_price else 0
+
+        return events
 
     # ----------------------------------------------------------
     # 테마 / 스크리닝

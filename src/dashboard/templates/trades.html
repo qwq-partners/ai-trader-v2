@@ -119,6 +119,17 @@
         .delay-1 { animation-delay: 0.06s; }
         .delay-2 { animation-delay: 0.12s; }
         .delay-3 { animation-delay: 0.18s; }
+        .filter-tab {
+            padding: 6px 14px; border-radius: 8px; font-size: 0.78rem; font-weight: 500;
+            color: var(--text-muted); background: transparent; border: 1px solid var(--border-subtle);
+            cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 6px;
+        }
+        .filter-tab:hover { color: var(--text-secondary); background: rgba(99,102,241,0.06); }
+        .filter-tab.active { color: #fff; background: rgba(99,102,241,0.15); border-color: var(--accent-blue); }
+        .filter-count {
+            font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; font-weight: 600;
+            background: rgba(99,102,241,0.12); padding: 1px 6px; border-radius: 4px;
+        }
     </style>
 </head>
 <body>
@@ -151,11 +162,16 @@
     </nav>
 
     <main style="max-width: 1280px; margin: 0 auto; padding: 24px;">
-        <!-- Header + Date picker -->
-        <div class="animate-in" style="display: flex; align-items: center; gap: 16px; margin-bottom: 20px;">
+        <!-- Header + Date picker + Filter tabs -->
+        <div class="animate-in" style="display: flex; align-items: center; gap: 16px; margin-bottom: 20px; flex-wrap: wrap;">
             <h2 style="font-size: 1.25rem; font-weight: 700; color: #fff; margin: 0;">거래 내역</h2>
             <input type="date" id="trade-date">
             <button id="btn-today" class="btn-primary">오늘</button>
+            <div id="filter-tabs" style="display: flex; gap: 6px; margin-left: auto;">
+                <button class="filter-tab active" data-type="all">전체 <span class="filter-count">0</span></button>
+                <button class="filter-tab" data-type="buy">매수 <span class="filter-count">0</span></button>
+                <button class="filter-tab" data-type="sell">매도 <span class="filter-count">0</span></button>
+            </div>
         </div>
 
         <!-- Summary stats -->
@@ -191,26 +207,26 @@
             <div id="exit-type-chart" style="height: 220px;"></div>
         </div>
 
-        <!-- Trades table -->
+        <!-- Trade events table -->
         <div class="card animate-in delay-3" style="padding: 24px;">
             <div class="card-header">
                 <span class="dot" style="background: var(--accent-cyan); box-shadow: 0 0 8px var(--accent-cyan);"></span>
-                거래 목록
+                거래 이벤트 로그
             </div>
             <div style="overflow-x: auto;">
                 <table style="width: 100%; text-align: left; border-collapse: collapse;">
                     <thead>
                         <tr style="border-bottom: 1px solid var(--border-subtle);">
+                            <th style="padding: 0 10px 10px 0;">시간</th>
                             <th style="padding: 0 10px 10px 0;">종목</th>
-                            <th style="padding: 0 10px 10px 0;">전략</th>
-                            <th style="padding: 0 10px 10px 0; text-align: right;">진입가</th>
-                            <th style="padding: 0 10px 10px 0; text-align: right;">현재/청산가</th>
+                            <th style="padding: 0 10px 10px 0;">유형</th>
+                            <th style="padding: 0 10px 10px 0; text-align: right;">가격</th>
                             <th style="padding: 0 10px 10px 0; text-align: right;">수량</th>
                             <th style="padding: 0 10px 10px 0; text-align: right;">손익</th>
                             <th style="padding: 0 10px 10px 0; text-align: right;">수익률</th>
+                            <th style="padding: 0 10px 10px 0;">전략</th>
                             <th style="padding: 0 10px 10px 0;">상태</th>
-                            <th style="padding: 0 10px 10px 0;">보유시간</th>
-                            <th style="padding: 0 0 10px 0;">진입시간</th>
+                            <th style="padding: 0 0 10px 0;">사유</th>
                         </tr>
                     </thead>
                     <tbody id="trades-body">

@@ -231,6 +231,7 @@ class TradeJournal:
         exit_reason: str,
         exit_type: str,
         indicators: Dict[str, float] = None,
+        exit_time: datetime = None,
     ) -> Optional[TradeRecord]:
         """
         청산 기록
@@ -242,7 +243,7 @@ class TradeJournal:
             logger.warning(f"[저널] 거래 ID 없음: {trade_id}")
             return None
 
-        now = datetime.now()
+        now = exit_time or datetime.now()
 
         # 청산 정보 업데이트
         trade.exit_time = now
@@ -432,8 +433,14 @@ _trade_journal: Optional[TradeJournal] = None
 
 
 def get_trade_journal() -> TradeJournal:
-    """TradeJournal 인스턴스 반환"""
+    """TradeJournal 인스턴스 반환 (TradeStorage 우선, 실패 시 JSON 폴백)"""
     global _trade_journal
     if _trade_journal is None:
-        _trade_journal = TradeJournal()
+        try:
+            from src.data.storage.trade_storage import get_trade_storage
+            _trade_journal = get_trade_storage()
+            logger.info("[거래저널] TradeStorage(DB+JSON) 모드 초기화")
+        except Exception as e:
+            logger.warning(f"[거래저널] TradeStorage 초기화 실패, JSON 폴백: {e}")
+            _trade_journal = TradeJournal()
     return _trade_journal

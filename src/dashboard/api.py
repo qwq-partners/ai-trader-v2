@@ -40,6 +40,7 @@ def setup_api_routes(app: web.Application, data_collector):
     app.router.add_get("/api/daily-review", handler.get_daily_review)
     app.router.add_get("/api/daily-review/dates", handler.get_daily_review_dates)
     app.router.add_post("/api/evolution/apply", handler.apply_evolution_parameter)
+    app.router.add_get("/api/trade-events", handler.get_trade_events)
     app.router.add_get("/api/app/latest", handler.get_latest_app)
 
 
@@ -245,6 +246,26 @@ class APIHandler:
                 {"success": False, "message": str(e)},
                 status=500,
             )
+
+    async def get_trade_events(self, request: web.Request) -> web.Response:
+        """거래 이벤트 로그 조회"""
+        date_str = request.query.get("date")
+        if date_str:
+            try:
+                target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            except ValueError:
+                return web.json_response(
+                    {"error": "Invalid date format. Use YYYY-MM-DD"}, status=400
+                )
+        else:
+            target_date = date.today()
+
+        event_type = request.query.get("type", "all")
+        if event_type not in ("all", "buy", "sell"):
+            event_type = "all"
+
+        events = await self.dc.get_trade_events(target_date, event_type)
+        return web.json_response(events)
 
     async def get_latest_app(self, request: web.Request) -> web.Response:
         """최신 APK 파일 정보 반환"""

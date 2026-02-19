@@ -1298,6 +1298,84 @@ class KISBroker(BaseBroker):
     # 체결 확인
     # ============================================================
 
+    async def _query_daily_fills(self, target_date: str = None) -> list:
+        """
+        KIS 일일 체결 내역 원시 조회 (TTTC8001R).
+
+        Args:
+            target_date: YYYYMMDD 형식. None이면 오늘.
+
+        Returns:
+            output1 리스트 (각 항목은 KIS API 응답 dict)
+        """
+        if not self.is_connected:
+            return []
+
+        target_date = target_date or datetime.now().strftime("%Y%m%d")
+        tr_id = "TTTC8001R"
+        url = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+
+        params = {
+            "CANO": self.config.account_no,
+            "ACNT_PRDT_CD": self.config.account_product_cd,
+            "INQR_STRT_DT": target_date,
+            "INQR_END_DT": target_date,
+            "SLL_BUY_DVSN_CD": "00",
+            "ORD_GNO_BRNO": "",
+            "CCLD_DVSN": "01",
+            "INQR_DVSN": "00",
+            "INQR_DVSN_1": "",
+            "INQR_DVSN_3": "00",
+            "EXCG_ID_DVSN_CD": "ALL",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
+            "PDNO": "",
+            "ODNO": "",
+        }
+
+        data = await self._api_get(url, tr_id, params)
+        rt_cd = data.get("rt_cd", "")
+        if str(rt_cd) != "0":
+            return []
+
+        return data.get("output1", []) or []
+
+    async def get_all_fills_for_date(self, target_date=None) -> List[Dict]:
+        """
+        특정 날짜의 전체 체결 내역 조회 (pending 매칭 무관).
+
+        Args:
+            target_date: date 객체 또는 None(오늘)
+
+        Returns:
+            List[Dict] — symbol, name, sll_buy_dvsn_cd, tot_ccld_qty, avg_prvs, odno, ord_tmd
+        """
+        if target_date and hasattr(target_date, "strftime"):
+            date_str = target_date.strftime("%Y%m%d")
+        else:
+            date_str = None
+
+        try:
+            output1 = await self._query_daily_fills(date_str)
+            results = []
+            for item in output1:
+                ccld_qty = int(item.get("TOT_CCLD_QTY") or item.get("tot_ccld_qty", "0") or "0")
+                if ccld_qty <= 0:
+                    continue
+                results.append({
+                    "symbol": str(item.get("PDNO") or item.get("pdno", "")).strip(),
+                    "name": str(item.get("PRDT_NAME") or item.get("prdt_name", "")).strip(),
+                    "sll_buy_dvsn_cd": str(item.get("SLL_BUY_DVSN_CD") or item.get("sll_buy_dvsn_cd", "")).strip(),
+                    "tot_ccld_qty": ccld_qty,
+                    "avg_prvs": float(item.get("AVG_PRVS") or item.get("avg_prvs", "0") or "0"),
+                    "odno": str(item.get("ODNO") or item.get("odno", "")).strip(),
+                    "ord_tmd": str(item.get("ORD_TMD") or item.get("ord_tmd", "")).strip(),
+                })
+            return results
+        except Exception as e:
+            logger.error(f"[KIS] 전체 체결 조회 실패: {e}")
+            return []
+
     async def check_fills(self) -> List[Fill]:
         """체결 확인"""
         if not self.is_connected:
@@ -1306,36 +1384,7 @@ class KISBroker(BaseBroker):
         fills = []
 
         try:
-            tr_id = "TTTC8001R"
-            url = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
-
-            today = datetime.now().strftime("%Y%m%d")
-
-            params = {
-                "CANO": self.config.account_no,
-                "ACNT_PRDT_CD": self.config.account_product_cd,
-                "INQR_STRT_DT": today,
-                "INQR_END_DT": today,
-                "SLL_BUY_DVSN_CD": "00",
-                "ORD_GNO_BRNO": "",
-                "CCLD_DVSN": "01",  # 체결
-                "INQR_DVSN": "00",
-                "INQR_DVSN_1": "",
-                "INQR_DVSN_3": "00",
-                "EXCG_ID_DVSN_CD": "ALL",
-                "CTX_AREA_FK100": "",
-                "CTX_AREA_NK100": "",
-                "PDNO": "",
-                "ODNO": "",
-            }
-
-            data = await self._api_get(url, tr_id, params)
-
-            rt_cd = data.get("rt_cd", "")
-            if str(rt_cd) != "0":
-                return fills
-
-            output1 = data.get("output1", []) or []
+            output1 = await self._query_daily_fills()
 
             # KIS 주문번호 -> 내부 주문 ID 매핑
             kis_to_order_id = {v: k for k, v in self._order_id_to_kis_no.items()}
