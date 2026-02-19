@@ -685,8 +685,12 @@ class DailyReportGenerator:
             pct = q["change_pct"]
             price = q["price"]
             idx_pcts.append(pct)
-            arrow = "🟢" if pct > 0 else ("🔴" if pct < 0 else "⚪")
-            idx_lines.append(f"  {arrow} {name:<10} {price:>10,.1f}  ({pct:+.2f}%)")
+            if pct > 0:
+                idx_lines.append(f"  🔼 {name}  <b>+{pct:.2f}%</b>  ({price:,.1f})")
+            elif pct < 0:
+                idx_lines.append(f"  🔽 {name}  <b>{pct:.2f}%</b>  ({price:,.1f})")
+            else:
+                idx_lines.append(f"  ▪️ {name}  0.00%  ({price:,.1f})")
 
         avg_pct = sum(idx_pcts) / len(idx_pcts) if idx_pcts else 0
         if avg_pct >= 1.0:
@@ -717,8 +721,12 @@ class DailyReportGenerator:
             # 이름이 너무 길면 축약
             if len(name) > 12:
                 name = name[:12]
-            icon = "▲" if pct > 0 else ("▼" if pct < 0 else "─")
-            bt_lines.append(f"{sym}({icon}{abs(pct):.1f}%)")
+            if pct > 0:
+                bt_lines.append(f"{sym} <b>+{pct:.1f}%</b>")
+            elif pct < 0:
+                bt_lines.append(f"{sym} {pct:.1f}%")
+            else:
+                bt_lines.append(f"{sym} 0.0%")
 
         if bt_lines:
             lines.append(f"<b>■ 빅테크</b>")
