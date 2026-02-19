@@ -154,6 +154,32 @@ class TradeStorage:
             await conn.execute(SCHEMA_SQL)
         logger.info("[TradeStorage] 테이블 확인/생성 완료")
 
+    @staticmethod
+    def _refine_exit_type(exit_type: str, exit_reason: str) -> str:
+        """exit_reason에 구체적 정보가 있으면 exit_type 세분화"""
+        if not exit_reason:
+            return exit_type
+        r = exit_reason.lower()
+        # take_profit → first/second/third 세분화
+        if exit_type in ("take_profit", "unknown", ""):
+            if "1차 익절" in r or "1차익절" in r:
+                return "first_take_profit"
+            if "2차 익절" in r or "2차익절" in r:
+                return "second_take_profit"
+            if "3차 익절" in r or "3차익절" in r:
+                return "third_take_profit"
+        # reason에서 추론 가능한데 exit_type이 unknown인 경우
+        if exit_type == "unknown":
+            if "손절" in r:
+                return "stop_loss"
+            if "트레일링" in r:
+                return "trailing"
+            if "본전" in r:
+                return "breakeven"
+            if "익절" in r:
+                return "take_profit"
+        return exit_type
+
     # ── DB 비동기 Writer ──────────────────────────────────
 
     async def _db_writer(self):
@@ -263,6 +289,9 @@ class TradeStorage:
         exit_time: datetime = None,
     ) -> Optional[TradeRecord]:
         """청산 기록: 캐시 + JSON + DB큐"""
+        # exit_type 세분화: reason에 구체적 정보가 있으면 재분류
+        exit_type = self._refine_exit_type(exit_type, exit_reason)
+
         # 1) 캐시 + JSON
         trade = self._journal.record_exit(
             trade_id=trade_id,

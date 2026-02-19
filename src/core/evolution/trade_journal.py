@@ -253,9 +253,11 @@ class TradeJournal:
         trade.exit_type = exit_type
         trade.indicators_at_exit = indicators or {}
 
-        # 손익 계산 (누적: 부분 매도 시 += 방식)
+        # 손익 계산 (수수료 포함, 누적: 부분 매도 시 += 방식)
         if trade.entry_price > 0:
-            trade.pnl += (exit_price - trade.entry_price) * exit_quantity  # += 누적
+            from src.utils.fee_calculator import calculate_net_pnl
+            partial_pnl, _ = calculate_net_pnl(trade.entry_price, exit_price, exit_quantity)
+            trade.pnl += partial_pnl  # += 누적 (수수료 포함)
             # 총 투자원금 기준 손익률
             invested = trade.entry_price * trade.entry_quantity
             trade.pnl_pct = float(trade.pnl / invested * 100) if invested > 0 else 0.0
