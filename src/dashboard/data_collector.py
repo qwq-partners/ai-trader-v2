@@ -931,10 +931,10 @@ class DashboardDataCollector:
     # ----------------------------------------------------------
 
     def get_order_history(self) -> List[Dict[str, Any]]:
-        """주문 관련 이벤트 히스토리 (주문/체결/취소/폴백)"""
+        """주문 관련 이벤트 히스토리 (신호/주문/체결/취소/폴백/오류)"""
         engine = self.bot.engine
         events = getattr(engine, '_dashboard_events', [])
-        keywords = ("주문", "체결", "폴백", "취소")
+        keywords = ("신호", "주문", "체결", "폴백", "취소", "오류")
         return [e for e in events if any(kw in e.get("type", "") for kw in keywords)
                 or any(kw in e.get("message", "") for kw in keywords)]
 
@@ -1191,16 +1191,50 @@ class DashboardDataCollector:
             return {"error": f"KIS 체결 조회 실패: {e}", "date": target_date.isoformat()}
 
         if not fills:
-            return {
+            # 체결 없어도 보유 현황은 조회
+            holdings = []
+            total_unrealized = 0
+            try:
+                positions_raw = await broker.get_positions()
+                pos_items = positions_raw.values() if isinstance(positions_raw, dict) else positions_raw
+                name_cache = self._build_name_cache()
+                for p in pos_items:
+                    try:
+                        sym = p.symbol
+                        avg = float(p.avg_price)
+                        cur = float(p.current_price) if p.current_price else 0
+                        qty = p.quantity
+                        if qty <= 0 or avg <= 0:
+                            continue
+                        unrealized = (cur - avg) * qty
+                        pct = (cur - avg) / avg * 100 if avg > 0 else 0
+                        total_unrealized += unrealized
+                        name = getattr(p, 'name', '') or name_cache.get(sym, sym)
+                        holdings.append({
+                            "symbol": sym, "name": name,
+                            "quantity": qty, "avg_price": avg,
+                            "current_price": cur,
+                            "unrealized_pnl": round(unrealized),
+                            "unrealized_pct": round(pct, 2),
+                        })
+                    except Exception:
+                        continue
+                holdings.sort(key=lambda h: h.get('unrealized_pnl', 0), reverse=True)
+            except Exception:
+                pass
+
+            return _serialize({
                 "date": target_date.isoformat(),
-                "buys": [], "sells": [], "holdings": [],
+                "buys": [], "sells": [], "holdings": holdings,
                 "summary": {
                     "total_buy_amount": 0, "total_sell_amount": 0,
-                    "realized_pnl": 0, "unrealized_pnl": 0,
-                    "total_pnl": 0, "buy_count": 0, "sell_count": 0,
+                    "realized_pnl": 0, "unrealized_pnl": round(total_unrealized),
+                    "total_pnl": round(total_unrealized),
+                    "buy_count": 0, "sell_count": 0,
                     "win_count": 0, "loss_count": 0,
+                    "holdings_count": len(holdings),
                 },
-            }
+            })
 
         buys_raw = [f for f in fills if f.get('sll_buy_dvsn_cd') == '02']
         sells_raw = [f for f in fills if f.get('sll_buy_dvsn_cd') == '01']

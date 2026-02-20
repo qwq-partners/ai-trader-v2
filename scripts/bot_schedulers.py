@@ -257,7 +257,7 @@ class SchedulerMixin:
                             try:
                                 tj = self.trade_journal
                                 if self.broker and hasattr(tj, 'sync_from_kis'):
-                                    await tj.sync_from_kis(self.broker)
+                                    await tj.sync_from_kis(self.broker, engine=self.engine)
                                     self._last_kis_sync_date = today
                                     logger.info("[KIS동기화] 장 마감 후 체결 동기화 완료")
                             except Exception as e:
@@ -926,6 +926,11 @@ class SchedulerMixin:
                                             "news_validation": _confidence_adj,
                                         },
                                     )
+
+                                    # 종목명 캐시에 저장 (매수 시그널/주문 이벤트에 종목명 표시)
+                                    name_cache = getattr(self.engine, '_stock_name_cache', None)
+                                    if name_cache is not None and stock.name and stock.name != stock.symbol:
+                                        name_cache[stock.symbol] = stock.name
 
                                     try:
                                         event = SignalEvent.from_signal(signal, source="live_screening")

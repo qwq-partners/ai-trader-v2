@@ -191,6 +191,17 @@ class TradingEngine:
     # 대시보드 이벤트 로그
     # ============================================================
 
+    def _get_stock_name(self, symbol: str) -> str:
+        """종목명 조회: 포지션 → stock_name_cache → symbol"""
+        pos = self.portfolio.positions.get(symbol)
+        if pos:
+            name = getattr(pos, 'name', '')
+            if name and name != symbol:
+                return name
+        # 봇 레벨 캐시 (run_trader에서 설정)
+        cache = getattr(self, '_stock_name_cache', {})
+        return cache.get(symbol, symbol)
+
     def push_dashboard_event(self, event_type: str, message: str):
         """대시보드 이벤트 로그에 항목 추가"""
         self._dashboard_event_id += 1
@@ -308,14 +319,16 @@ class TradingEngine:
             score = getattr(event, 'score', 0) or 0
             logger.info(f"[엔진] SignalEvent 처리 시작: {symbol} {side}")
             side_label = '매수' if side == OrderSide.BUY else '매도'
-            self.push_dashboard_event("신호", f"{symbol} {side_label} 신호 (점수:{score:.0f})")
+            name = self._get_stock_name(symbol)
+            self.push_dashboard_event("신호", f"{name} {side_label} 신호 (점수:{score:.0f})")
         elif event.type == EventType.FILL:
             symbol = getattr(event, 'symbol', '?')
             side = getattr(event, 'side', '?')
             price = getattr(event, 'price', 0)
             qty = getattr(event, 'quantity', 0)
             side_label = '매수' if side == OrderSide.BUY else '매도'
-            self.push_dashboard_event("체결", f"{symbol} {side_label} {qty}주 @ {float(price):,.0f}원")
+            name = self._get_stock_name(symbol)
+            self.push_dashboard_event("체결", f"{name} {side_label} {qty}주 @ {float(price):,.0f}원")
         elif event.type == EventType.ERROR:
             msg = getattr(event, 'message', str(event))
             self.push_dashboard_event("오류", msg[:100])

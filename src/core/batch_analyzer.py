@@ -258,6 +258,11 @@ class BatchAnalyzer:
                     },
                 )
 
+                # 종목명 캐시에 저장 (매수 시그널/주문 이벤트에 종목명 표시)
+                name_cache = getattr(self._engine, '_stock_name_cache', None)
+                if name_cache is not None and sig.name and sig.name != sig.symbol:
+                    name_cache[sig.symbol] = sig.name
+
                 event = SignalEvent.from_signal(signal, source="batch_analyzer")
                 await self._engine.emit(event)
                 executed += 1

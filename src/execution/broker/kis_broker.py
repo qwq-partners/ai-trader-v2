@@ -1369,7 +1369,17 @@ class KISBroker(BaseBroker):
             if len(items) == 0:
                 break
 
-        return all_items
+        # odno 기반 중복 제거 (페이지네이션 중복 방지)
+        seen = set()
+        deduped = []
+        for item in all_items:
+            odno = str(item.get("ODNO") or item.get("odno", "")).strip()
+            if odno and odno in seen:
+                continue
+            if odno:
+                seen.add(odno)
+            deduped.append(item)
+        return deduped
 
     async def get_all_fills_for_date(self, target_date=None) -> List[Dict]:
         """

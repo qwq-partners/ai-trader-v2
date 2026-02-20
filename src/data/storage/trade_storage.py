@@ -557,7 +557,7 @@ class TradeStorage:
         pnl_pct = (pnl / cost * 100) if cost > 0 else 0.0
         return round(pnl), round(pnl_pct, 4)
 
-    async def sync_from_kis(self, broker):
+    async def sync_from_kis(self, broker, engine=None):
         """
         KIS 당일 체결 내역과 캐시/DB 동기화.
 
@@ -606,6 +606,12 @@ class TradeStorage:
 
                 trade_id = f"KIS_SYNC_{sym}_{today.strftime('%Y%m%d')}"
                 name = f.get("name", "") or f.get("prdt_name", "")
+                # 엔진 포지션에서 전략 정보 추출
+                strategy = "momentum_breakout"  # 장중 스크리닝 기본값
+                if engine:
+                    pos = engine.portfolio.positions.get(sym)
+                    if pos and hasattr(pos, 'strategy') and pos.strategy:
+                        strategy = str(pos.strategy.value) if hasattr(pos.strategy, 'value') else str(pos.strategy)
                 self.record_entry(
                     trade_id=trade_id,
                     symbol=sym,
@@ -613,7 +619,7 @@ class TradeStorage:
                     entry_price=price,
                     entry_quantity=qty,
                     entry_reason="KIS 동기화 복구",
-                    entry_strategy="unknown",
+                    entry_strategy=strategy,
                 )
                 synced += 1
                 logger.info(f"[TradeStorage] KIS 동기화 매수 복구: {sym} {name} {qty}주 @ {price:,.0f}")

@@ -138,7 +138,7 @@ function renderSortedPositions() {
     const positions = lastPositions;
 
     if (!positions || positions.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="10" class="py-8 text-center text-gray-500">보유 포지션 없음</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="11" class="py-8 text-center text-gray-500">보유 포지션 없음</td></tr>';
         return;
     }
 
@@ -185,6 +185,7 @@ function renderSortedPositions() {
             <td class="py-2 pr-3 text-right mono">${formatNumber(pos.current_price)}</td>
             <td class="py-2 pr-3 text-right mono text-gray-400">${formatNumber(pos.avg_price)}</td>
             <td class="py-2 pr-3 text-right mono">${pos.quantity}</td>
+            <td class="py-2 pr-3 text-right mono" style="color:var(--text-secondary);">${formatNumber(pos.market_value || (pos.current_price * pos.quantity))}</td>
             <td class="py-2 pr-3 text-right mono ${pnlCls}">${formatPnl(pos.unrealized_pnl)}</td>
             <td class="py-2 pr-3 text-right mono ${pnlCls}">${formatPct(pos.unrealized_pnl_pct)}</td>
             <td class="py-2 pr-3 text-right mono" style="white-space:nowrap;">${slTp}</td>
@@ -266,14 +267,15 @@ function updatePieChart(cash, stock) {
 
 function addLogEntry(time, type, message) {
     const typeColors = {
-        '신호': 'text-indigo-400',
-        '체결': 'text-emerald-400',
-        '리스크': 'text-amber-400',
-        '오류': 'text-red-400',
-        '시스템': 'text-slate-400',
+        '신호': 'color: #818cf8;',
+        '체결': 'color: #34d399;',
+        '주문': 'color: #60a5fa;',
+        '리스크': 'color: #fbbf24;',
+        '오류': 'color: #f87171;',
+        '시스템': 'color: #94a3b8;',
     };
 
-    const colorClass = typeColors[type] || 'text-gray-400';
+    const colorStyle = typeColors[type] || 'color: #9ca3af;';
 
     logEntries.unshift({ time, type, message });
     if (logEntries.length > MAX_LOG_ENTRIES) {
@@ -283,8 +285,22 @@ function addLogEntry(time, type, message) {
     const logEl = document.getElementById('event-log');
     const entry = document.createElement('div');
     entry.className = 'log-entry';
-    entry.innerHTML = `<span class="text-gray-500 mono text-xs">${time}</span> <span class="${colorClass}">[${type}]</span> ${message}`;
+    entry.style.cssText = 'padding: 3px 0; border-bottom: 1px solid rgba(99,102,241,0.05);';
 
+    const timeSpan = document.createElement('span');
+    timeSpan.className = 'mono';
+    timeSpan.style.cssText = 'color: #6b7280; font-size: 0.75rem; margin-right: 6px;';
+    timeSpan.textContent = time;
+
+    const typeSpan = document.createElement('span');
+    typeSpan.style.cssText = colorStyle + ' font-weight: 600; font-size: 0.78rem; margin-right: 6px;';
+    typeSpan.textContent = '[' + type + ']';
+
+    const msgSpan = document.createElement('span');
+    msgSpan.style.cssText = 'font-size: 0.82rem; color: var(--text-primary);';
+    msgSpan.textContent = message;
+
+    entry.append(timeSpan, typeSpan, msgSpan);
     logEl.prepend(entry);
 
     // 최대 항목 수 유지
@@ -554,32 +570,68 @@ function renderOrderHistory(events) {
         '취소': 'badge-red',
         '폴백': 'badge-yellow',
         '신호': 'badge-purple',
+        '오류': 'badge-red',
+        '리스크': 'badge-yellow',
     };
 
-    // 최신순 정렬, 최대 20건
-    const sorted = [...events].reverse().slice(0, 20);
+    // 매수/매도 강조 색상
+    const sideStyle = {
+        '매수': 'color: var(--accent-blue); font-weight: 600;',
+        '매도': 'font-weight: 600;',
+    };
 
-    const rows = sorted.map(evt => {
+    // 최신순 정렬, 최대 30건
+    const sorted = [...events].reverse().slice(0, 30);
+
+    const fragment = document.createDocumentFragment();
+    sorted.forEach(evt => {
+        const tr = document.createElement('tr');
+        tr.style.borderBottom = '1px solid rgba(99,102,241,0.08)';
+
         const time = evt.time ? formatTime(evt.time) : '--';
         const evtType = evt.type || '--';
         const message = evt.message || '';
 
         let badgeCls = 'badge-blue';
         for (const [key, cls] of Object.entries(typeColors)) {
-            if (evtType.includes(key) || message.includes(key)) {
-                badgeCls = cls;
-                break;
-            }
+            if (evtType === key) { badgeCls = cls; break; }
         }
 
-        return `<tr class="border-b" style="border-color: rgba(99,102,241,0.08);">
-            <td class="py-2 pr-3 mono" style="font-size: 0.78rem; color: var(--text-secondary); white-space: nowrap;">${time}</td>
-            <td class="py-2 pr-3"><span class="badge ${badgeCls}">${evtType}</span></td>
-            <td class="py-2" style="font-size: 0.82rem; color: var(--text-primary);">${message}</td>
-        </tr>`;
-    }).join('');
+        // 시간
+        const tdTime = document.createElement('td');
+        tdTime.className = 'py-2 pr-3 mono';
+        tdTime.style.cssText = 'font-size:0.78rem; color:var(--text-secondary); white-space:nowrap;';
+        tdTime.textContent = time;
 
-    tbody.innerHTML = rows;
+        // 유형 배지
+        const tdType = document.createElement('td');
+        tdType.className = 'py-2 pr-3';
+        tdType.style.whiteSpace = 'nowrap';
+        const badge = document.createElement('span');
+        badge.className = 'badge ' + badgeCls;
+        badge.textContent = evtType;
+        tdType.appendChild(badge);
+
+        // 메시지 (매수/매도 강조)
+        const tdMsg = document.createElement('td');
+        tdMsg.className = 'py-2';
+        tdMsg.style.cssText = 'font-size:0.82rem; color:var(--text-primary);';
+
+        // 메시지에서 매도 손익 강조
+        const isSell = message.includes('매도');
+        if (isSell && evtType === '체결') {
+            tdMsg.style.color = '#f87171';
+        } else if (message.includes('매수') && evtType === '체결') {
+            tdMsg.style.color = 'var(--accent-blue)';
+        }
+        tdMsg.textContent = message;
+
+        tr.append(tdTime, tdType, tdMsg);
+        fragment.appendChild(tr);
+    });
+
+    tbody.textContent = '';
+    tbody.appendChild(fragment);
 }
 
 // ============================================================

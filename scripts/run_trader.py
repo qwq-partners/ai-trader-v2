@@ -187,6 +187,7 @@ class TradingBot(SchedulerMixin):
         self._symbol_signals: Dict[str, Any] = {}
         self._exit_pending_symbols: Set[str] = set()  # ExitManager 매도 중복 방지
         self._exit_pending_timestamps: Dict[str, datetime] = {}  # 매도 pending 타임스탬프
+        self._exit_reasons: Dict[str, str] = {}  # 청산 사유 저장 (symbol → reason)
         self._sell_blocked_symbols: Dict[str, datetime] = {}  # 청산 실패 종목 일시 차단 (NXT 불가 등)
         self._pause_resume_at: Optional[datetime] = None  # 자동 재개 타이머
         self._watch_symbols_lock = asyncio.Lock()
@@ -221,6 +222,8 @@ class TradingBot(SchedulerMixin):
 
         # 종목명 캐시 (symbol → name)
         self.stock_name_cache: Dict[str, str] = {}
+        # 엔진에 종목명 캐시 참조 연결 (대시보드 이벤트 로그용)
+        self.engine._stock_name_cache = self.stock_name_cache
 
         # 시그널 핸들러
         self._setup_signal_handlers()
@@ -571,7 +574,7 @@ class TradingBot(SchedulerMixin):
                     await self.trade_journal.connect()
                     # KIS 당일 체결 동기화
                     if self.broker and hasattr(self.trade_journal, 'sync_from_kis'):
-                        await self.trade_journal.sync_from_kis(self.broker)
+                        await self.trade_journal.sync_from_kis(self.broker, engine=self.engine)
 
                 self.strategy_evolver = get_strategy_evolver()
 
@@ -1103,6 +1106,9 @@ class TradingBot(SchedulerMixin):
                     price=current_price if is_auction else None,
                 )
 
+                # 청산 사유 저장 (체결 시 journal에 전달하기 위해)
+                self._exit_reasons[symbol] = reason
+
                 # ExitManager 전용 pending 선등록 (중복 매도 방지, submit await 중 race condition 차단)
                 self._exit_pending_symbols.add(symbol)
                 self._exit_pending_timestamps[symbol] = datetime.now()
@@ -1128,6 +1134,10 @@ class TradingBot(SchedulerMixin):
                 if success:
                     order_type_str = "LIMIT" if is_auction else "MARKET"
                     logger.info(f"[청산 주문 성공] {symbol} {quantity}주 ({order_type_str}) -> 주문번호: {result}")
+
+                    # 대시보드 이벤트 로그에 청산 주문 추가
+                    name = self.engine._get_stock_name(symbol)
+                    self.engine.push_dashboard_event("주문", f"{name} 매도 {quantity}주 ({reason})")
 
                     # 청산(손절/본전이탈/트레일링) 시 RiskManager에 기록 (재진입 방지)
                     is_loss_exit = ("손절" in reason or "본전 이탈" in reason or "트레일링" in reason)
@@ -1346,6 +1356,10 @@ class TradingBot(SchedulerMixin):
 
             if success:
                 logger.info(f"[주문 성공] {order.symbol} -> 주문번호: {result}")
+                name = self.engine._get_stock_name(order.symbol)
+                side_label = '매수' if order.side.value.upper() == 'BUY' else '매도'
+                price_str = f" @ {float(order.price):,.0f}원" if order.price else ""
+                self.engine.push_dashboard_event("주문", f"{name} {side_label} {order.quantity}주{price_str}")
                 trading_logger.log_order(
                     symbol=order.symbol,
                     side=order.side.value,
@@ -1356,6 +1370,8 @@ class TradingBot(SchedulerMixin):
                 )
             else:
                 logger.error(f"[주문 실패] {order.symbol} - {result}")
+                name = self.engine._get_stock_name(order.symbol)
+                self.engine.push_dashboard_event("오류", f"{name} 주문 실패: {result}")
                 trading_logger.log_order(
                     symbol=order.symbol,
                     side=order.side.value,
@@ -1685,8 +1701,8 @@ class TradingBot(SchedulerMixin):
                     if hasattr(self.strategy_manager, '_indicators'):
                         indicators = self.strategy_manager._indicators.get(fill.symbol, {})
 
-                    # 청산 타입 결정 (reason 문자열 기반 추론)
-                    reason = getattr(fill, 'reason', '') or ''
+                    # 청산 타입 결정: ExitManager에서 저장한 사유 우선, 없으면 fill에서 추론
+                    reason = getattr(fill, 'reason', '') or self._exit_reasons.pop(fill.symbol, '') or ''
                     exit_type = self._infer_exit_type(reason)
 
                     # exit_reason에 상세 사유 포함
