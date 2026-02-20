@@ -433,6 +433,27 @@ class TradeStorage:
                 FROM trade_events te
                 JOIN trades t ON te.trade_id = t.id
                 WHERE te.event_time::date = $1
+                  -- KIS_SYNC BUY 중복 제거: 봇 BUY가 있으면 KIS_SYNC BUY 숨김
+                  AND NOT (
+                    te.trade_id LIKE 'KIS_SYNC_%%'
+                    AND EXISTS (
+                      SELECT 1 FROM trade_events te2
+                      WHERE te2.symbol = te.symbol
+                        AND te2.event_type = te.event_type
+                        AND te2.event_time::date = te.event_time::date
+                        AND te2.trade_id NOT LIKE 'KIS_SYNC_%%'
+                    )
+                  )
+                  -- kis_sync SELL 중복 제거: 봇 SELL이 있으면 kis_sync SELL 숨김
+                  AND NOT (
+                    te.event_type = 'SELL' AND te.exit_type = 'kis_sync'
+                    AND EXISTS (
+                      SELECT 1 FROM trade_events te3
+                      WHERE te3.trade_id = te.trade_id
+                        AND te3.event_type = 'SELL'
+                        AND te3.exit_type IS DISTINCT FROM 'kis_sync'
+                    )
+                  )
             """
             params = [target_date]
 
@@ -594,9 +615,28 @@ class TradeStorage:
 
             synced = 0
 
+            # DB에서 당일 이미 기록된 이벤트 조회 (캐시 불일치 방지)
+            db_buy_symbols = set()
+            db_sell_qty = {}  # trade_id → 총 매도 수량
+            if self._db_available and self.pool:
+                try:
+                    buy_rows = await self.pool.fetch(
+                        "SELECT DISTINCT symbol FROM trade_events WHERE event_type='BUY' AND event_time::date=$1",
+                        today,
+                    )
+                    db_buy_symbols = {r['symbol'] for r in buy_rows}
+
+                    sell_rows = await self.pool.fetch(
+                        "SELECT trade_id, COALESCE(SUM(quantity), 0) as total_qty FROM trade_events WHERE event_type='SELL' AND event_time::date=$1 GROUP BY trade_id",
+                        today,
+                    )
+                    db_sell_qty = {r['trade_id']: int(r['total_qty']) for r in sell_rows}
+                except Exception as e:
+                    logger.warning(f"[TradeStorage] DB 이벤트 조회 실패, 캐시 폴백: {e}")
+
             # 누락 매수 복구
             for sym, buy_fills in buys.items():
-                if sym in cache_trades:
+                if sym in cache_trades or sym in db_buy_symbols:
                     continue
                 f = buy_fills[0]
                 qty = int(f.get("tot_ccld_qty", 0))
@@ -637,9 +677,10 @@ class TradeStorage:
                 if cache_trade.is_closed:
                     continue
 
-                # KIS 총 매도 수량 vs 이미 기록된 매도 수량 비교
+                # KIS 총 매도 수량 vs 이미 기록된 매도 수량 비교 (DB 우선, 캐시 폴백)
                 kis_total_sold = sum(int(f.get("tot_ccld_qty", 0)) for f in sell_fills)
-                already_sold = cache_trade.exit_quantity or 0
+                db_sold = db_sell_qty.get(cache_trade.id, 0)
+                already_sold = max(cache_trade.exit_quantity or 0, db_sold)
                 missing_qty = kis_total_sold - already_sold
 
                 if missing_qty <= 0:
