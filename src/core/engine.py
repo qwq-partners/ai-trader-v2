@@ -770,9 +770,8 @@ class RiskManager:
         # 현금 초과 주문 방지: 주문별 예약 현금 추적 (symbol → 예약 금액)
         self._reserved_by_order: Dict[str, Decimal] = {}
 
-        # 손절 후 재진입 방지: 종목별 손절 시각 (30분간 재진입 차단)
-        self._stop_loss_today: Dict[str, datetime] = {}
-        self._STOP_LOSS_COOLDOWN_SECONDS = 1800  # 30분
+        # 손절 후 재진입 방지: 당일 손절 종목 (자정 리셋)
+        self._stop_loss_today: set = set()
 
         # 동시성 보호: pending 주문 관련 Lock
         self._pending_lock = asyncio.Lock()
@@ -988,23 +987,15 @@ class RiskManager:
             else:
                 del self._order_fail_cooldown[event.symbol]
 
-        # 손절 후 재진입 방지 체크 (매수만, 30분간 차단)
+        # 손절 후 재진입 방지 체크 (매수만, 당일 종일 차단)
         if event.side == OrderSide.BUY and event.symbol in self._stop_loss_today:
-            sl_time = self._stop_loss_today[event.symbol]
-            elapsed = (datetime.now() - sl_time).total_seconds()
-            if elapsed < self._STOP_LOSS_COOLDOWN_SECONDS:
-                logger.debug(
-                    f"[리스크] 손절 재진입 차단: {event.symbol} "
-                    f"(경과 {elapsed/60:.0f}분/{self._STOP_LOSS_COOLDOWN_SECONDS/60:.0f}분)"
-                )
-                trading_logger.log_signal_blocked(
-                    symbol=event.symbol, side=event.side.value,
-                    reason=f"손절재진입차단({elapsed/60:.0f}분)",
-                    price=float(event.price or 0), score=event.score,
-                )
-                return None
-            else:
-                del self._stop_loss_today[event.symbol]
+            logger.info(f"[리스크] 당일 손절 재진입 차단: {event.symbol}")
+            trading_logger.log_signal_blocked(
+                symbol=event.symbol, side=event.side.value,
+                reason="당일손절재진입차단",
+                price=float(event.price or 0), score=event.score,
+            )
+            return None
 
         # 포지션 크기 계산
         if event.side == OrderSide.SELL:

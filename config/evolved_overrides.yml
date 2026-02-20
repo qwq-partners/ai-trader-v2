@@ -17,7 +17,7 @@ momentum_breakout:
   stop_loss_pct: 3.5
   min_volume_ratio: 2.5
   trading_start_time: 09:15
-  min_score: 65.0
+  min_score: 75.0
   min_breakout_pct: 0.8
 theme_chasing:
   stop_loss_pct: 2.5

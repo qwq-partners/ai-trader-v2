@@ -32,10 +32,11 @@ class MomentumConfig(StrategyConfig):
     # 거래량 조건
     volume_surge_ratio: float = 2.0  # 거래량 급증 기준 (평균 대비)
 
-    # 모멘텀 점수 가중치
-    weight_price_momentum: float = 40.0
-    weight_volume_momentum: float = 30.0
+    # 모멘텀 점수 가중치 (리밸런스: 거래량/가격 축소, 추세 품질 신설)
+    weight_price_momentum: float = 30.0
+    weight_volume_momentum: float = 20.0
     weight_high_proximity: float = 20.0
+    weight_trend_quality: float = 20.0
     weight_theme: float = 10.0
 
     # 청산 조건
@@ -78,9 +79,6 @@ class MomentumBreakoutStrategy(BaseStrategy):
         self._last_signal_time: Dict[str, datetime] = {}  # 종목별 마지막 신호 시각
         self._signal_cooldown: int = 180  # 3분 쿨다운 (초) — 5분→3분: 기회 확대
 
-        # 손절 후 재진입 방지
-        self._recently_stopped: Dict[str, datetime] = {}  # 손절한 종목
-        self._stop_penalty: int = 1800  # 30분 페널티 (초)
 
     async def generate_signal(
         self,
@@ -95,14 +93,8 @@ class MomentumBreakoutStrategy(BaseStrategy):
         for s in expired:
             del self._breakout_candidates[s]
 
-        # 만료된 손절 페널티 정리 (메모리 누수 방지)
-        now = datetime.now()
-        expired_stops = [s for s, t in self._recently_stopped.items()
-                         if (now - t).total_seconds() >= self._stop_penalty]
-        for s in expired_stops:
-            del self._recently_stopped[s]
-
         # 만료된 신호 쿨다운 정리 (메모리 누수 방지)
+        now = datetime.now()
         expired_signals = [s for s, t in self._last_signal_time.items()
                            if (now - t).total_seconds() >= self._signal_cooldown]
         for s in expired_signals:
@@ -142,12 +134,6 @@ class MomentumBreakoutStrategy(BaseStrategy):
             if elapsed < self._signal_cooldown:
                 return None  # 쿨다운 중
 
-        # 손절 후 재진입 방지: 페널티 기간 체크
-        if symbol in self._recently_stopped:
-            elapsed = (datetime.now() - self._recently_stopped[symbol]).total_seconds()
-            if elapsed < self._stop_penalty:
-                return None  # 재진입 금지 기간
-
         price = float(current_price)
 
         # 최소 가격 필터
@@ -183,6 +169,19 @@ class MomentumBreakoutStrategy(BaseStrategy):
         change_5d = indicators.get("change_5d", 0)
         if change_5d < 2.0:
             logger.debug(f"[Momentum] {symbol} 5일 모멘텀 부족 ({change_5d:+.1f}% < 2.0%) - 진입 제한")
+            return None
+
+        # RSI 과열 필터: 가짜 돌파 방어
+        rsi = indicators.get("rsi", 0)
+        if rsi and rsi > 75:
+            logger.debug(f"[Momentum] {symbol} RSI 과열 ({rsi:.1f} > 75) - 진입 제한")
+            return None
+
+        # MA 정배열 필터: MA5 > MA20 필수 (하락 추세 돌파는 가짜 돌파 위험)
+        ma5 = indicators.get("ma5", 0)
+        ma20 = indicators.get("ma20", 0)
+        if ma5 and ma20 and ma5 <= ma20:
+            logger.debug(f"[Momentum] {symbol} MA 역배열 (MA5={ma5:.0f} <= MA20={ma20:.0f}) - 진입 제한")
             return None
 
         # 모멘텀 점수 계산 (설정값 사용, 하드코딩 제거)
@@ -240,7 +239,10 @@ class MomentumBreakoutStrategy(BaseStrategy):
         return None
 
     def calculate_score(self, symbol: str) -> float:
-        """모멘텀 점수 계산 (0~100)"""
+        """모멘텀 점수 계산 (0~100)
+
+        배점: 가격(30) + 거래량(20) + 신고가(20) + 추세품질(20) + 테마(10) - 과열감점(10)
+        """
         indicators = self.get_indicators(symbol)
         if not indicators:
             return 0.0
@@ -248,38 +250,37 @@ class MomentumBreakoutStrategy(BaseStrategy):
         score = 0.0
         cfg = self.momentum_config
 
-        # 1. 가격 모멘텀 (40점) — 강도 반영
+        # 1. 가격 모멘텀 (30점)
         change_1d = indicators.get("change_1d", 0)
         change_5d = indicators.get("change_5d", 0)
         change_20d = indicators.get("change_20d", 0)
 
         price_score = 0.0
-        # 당일 모멘텀 (변경: +2% 미만 점수 0, 기준 상향으로 신호 품질 강화)
+        # 당일 모멘텀
         if change_1d >= 5:
-            price_score += 15  # 강한 상승 (5%+)
-        elif change_1d >= 3:
-            price_score += 10  # 중간 상승 (3~5%) - 12->10
-        elif change_1d >= 2:
-            price_score += 5   # 적당한 상승 (2~3%) - 변경: 1%->2%, 7->5점
-        # change_1d < 2%: 점수 0 (변경: 최소 기준 1%->2% 상향)
-
-        # 5일 모멘텀 (변경: +3% 이상 필수, 추세 확인 강화)
-        if change_5d >= 7:
-            price_score += 13
-        elif change_5d >= 3:
-            price_score += 7   # 변경: 2%->3%, 8->7점
-        # change_5d < 3%: 점수 0 (변경: 기존 2%->3% 최소)
-        # 20일 모멘텀 (변경: +5% 이상 필수, 장기 추세 확인)
-        if change_20d >= 10:
             price_score += 12
+        elif change_1d >= 3:
+            price_score += 8
+        elif change_1d >= 2:
+            price_score += 4
+
+        # 5일 모멘텀
+        if change_5d >= 7:
+            price_score += 10
+        elif change_5d >= 3:
+            price_score += 5
+
+        # 20일 모멘텀
+        if change_20d >= 10:
+            price_score += 8
         elif change_20d >= 5:
-            price_score += 6   # 변경: 3%->5%, 7->6점
+            price_score += 4
 
         score += min(price_score, cfg.weight_price_momentum)
 
-        # 2. 거래량 모멘텀 (30점) - 변경: x10->x5, 거래량만으로 높은 점수 방지
+        # 2. 거래량 모멘텀 (20점)
         vol_ratio = indicators.get("vol_ratio", 0)
-        volume_score = min(vol_ratio * 5, cfg.weight_volume_momentum)  # 변경: 2배=10점, 3배=15점
+        volume_score = min(vol_ratio * 4, cfg.weight_volume_momentum)  # 2.5x=10점, 5x=20점
         score += volume_score
 
         # 3. 신고가 근접도 (20점)
@@ -291,12 +292,45 @@ class MomentumBreakoutStrategy(BaseStrategy):
         elif high_proximity > 0.80:
             score += 10
 
-        # 4. 테마 연관성 (10점)
+        # 4. 추세 품질 (20점) — MA정배열 + 가격>VWAP
+        ma5 = indicators.get("ma5", 0)
+        ma20 = indicators.get("ma20", 0)
+        ma60 = indicators.get("ma60", 0)
+        vwap = indicators.get("vwap", 0)
+        # 현재가 추정: high_20d × high_proximity 또는 MA5 폴백
+        high_20d = indicators.get("high_20d", 0)
+        hp = indicators.get("high_proximity", 0)
+        current_price = (high_20d * hp) if (high_20d and hp) else (ma5 if ma5 else 0)
+
+        trend_score = 0.0
+        # MA 정배열: MA5 > MA20 > MA60
+        if ma5 and ma20 and ma60:
+            if ma5 > ma20 > ma60:
+                trend_score += 12  # 완전 정배열
+            elif ma5 > ma20:
+                trend_score += 6   # 단기 정배열
+        # 가격 > VWAP (매수세 우위)
+        if current_price and vwap and current_price > vwap:
+            trend_score += 4
+        # 가격 > MA20 (중기 추세 위)
+        if current_price and ma20 and current_price > ma20:
+            trend_score += 4
+
+        score += min(trend_score, cfg.weight_trend_quality)
+
+        # 5. 테마 연관성 (10점)
         theme_score = self._hot_themes.get(symbol, 0)
         if theme_score > 0:
             score += min(theme_score / 10, cfg.weight_theme)
 
-        return min(score, 100.0)
+        # 6. 과열 감점 — RSI 높을수록 가짜 돌파 위험
+        rsi = indicators.get("rsi", 0)
+        if rsi and rsi >= 70:
+            score -= 15  # RSI 70+ 강한 감점
+        elif rsi and rsi >= 65:
+            score -= 8   # RSI 65~70 중간 감점
+
+        return max(min(score, 100.0), 0.0)
 
     def set_hot_themes(self, theme_scores: Dict[str, float]):
         """핫 테마 종목 설정"""

@@ -819,11 +819,12 @@ class SchedulerMixin:
                             for s in expired:
                                 del self._screening_signal_cooldown[s]
 
-                            # 기보유 + pending 종목
+                            # 기보유 + pending + 당일 손절 종목
                             held = set(self.engine.portfolio.positions.keys())
                             rm = self.engine.risk_manager
                             pending = set(rm._pending_orders) if rm else set()
-                            exclude = held | pending
+                            stopped_today = set(rm._stop_loss_today) if rm and hasattr(rm, '_stop_loss_today') else set()
+                            exclude = held | pending | stopped_today
 
                             # 가용 현금 확인 (포지션 수 제한 없음)
                             available_cash = float(self.engine.get_available_cash())
@@ -831,7 +832,7 @@ class SchedulerMixin:
 
                             logger.info(
                                 f"[스크리닝] 자동진입 체크: 가용현금={available_cash:,.0f} "
-                                f"(보유={len(held)}, pending={len(pending - held)}), "
+                                f"(보유={len(held)}, pending={len(pending - held)}, 손절차단={len(stopped_today)}), "
                                 f"75+후보={sum(1 for s in screened if s.score >= 75)}, "
                                 f"제외={len(exclude)}, 쿨다운={len(self._screening_signal_cooldown)}"
                             )

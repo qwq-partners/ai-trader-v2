@@ -1143,8 +1143,8 @@ class TradingBot(SchedulerMixin):
                     is_loss_exit = ("손절" in reason or "본전 이탈" in reason or "트레일링" in reason)
                     if is_loss_exit and self.engine.risk_manager:
                         if hasattr(self.engine.risk_manager, '_stop_loss_today'):
-                            self.engine.risk_manager._stop_loss_today[symbol] = datetime.now()
-                            logger.info(f"[재진입금지] {symbol} 청산 기록 (30분간 재진입 차단, 사유: {reason})")
+                            self.engine.risk_manager._stop_loss_today.add(symbol)
+                            logger.info(f"[재진입금지] {symbol} 당일 재진입 차단 (사유: {reason})")
 
                     trading_logger.log_order(
                         symbol=symbol,
