@@ -275,6 +275,9 @@ function togglePositionDetail(btn, dateStr) {
 }
 
 function insertPositionDetailRow(afterRow, positions) {
+    // 수익률 내림차순 정렬 (높은→낮은)
+    positions.sort((a, b) => (b.pnl_pct ?? 0) - (a.pnl_pct ?? 0));
+
     const posTable = positions.map(p => {
         const cls = pnlClass(p.pnl);
         return `<tr style="border-bottom: 1px solid var(--border-subtle);">

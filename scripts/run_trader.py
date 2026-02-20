@@ -575,6 +575,9 @@ class TradingBot(SchedulerMixin):
                     # KIS 당일 체결 동기화
                     if self.broker and hasattr(self.trade_journal, 'sync_from_kis'):
                         await self.trade_journal.sync_from_kis(self.broker, engine=self.engine)
+                    # DB 연결 후 포지션 전략/진입시간 복원
+                    if self.engine.portfolio.positions:
+                        await self._restore_position_metadata(self.engine.portfolio.positions)
 
                 self.strategy_evolver = get_strategy_evolver()
 
@@ -741,6 +744,35 @@ class TradingBot(SchedulerMixin):
                 pass  # 이벤트 루프 없음 — 무시
             return False
 
+    async def _restore_position_metadata(self, positions: dict):
+        """DB에서 포지션 전략/진입시간 복원 (KIS API에는 없는 정보)"""
+        if not self.trade_journal or not hasattr(self.trade_journal, 'pool') or not self.trade_journal.pool:
+            return
+        try:
+            rows = await self.trade_journal.pool.fetch(
+                "SELECT symbol, entry_strategy, entry_time FROM trades "
+                "WHERE exit_time IS NULL OR exit_quantity < entry_quantity "
+                "ORDER BY entry_time DESC"
+            )
+            meta = {}
+            for r in rows:
+                sym = r['symbol']
+                if sym not in meta:  # 최신 거래 우선
+                    meta[sym] = (r['entry_strategy'], r['entry_time'])
+            restored = 0
+            for sym, pos in positions.items():
+                if sym in meta:
+                    strategy, entry_time = meta[sym]
+                    if not pos.strategy and strategy:
+                        pos.strategy = strategy
+                    if not pos.entry_time and entry_time:
+                        pos.entry_time = entry_time
+                    restored += 1
+            if restored:
+                logger.info(f"[메타복원] {restored}개 포지션 전략/진입시간 DB 복원")
+        except Exception as e:
+            logger.warning(f"[메타복원] DB 조회 실패: {e}")
+
     async def _load_existing_positions(self):
         """기존 보유 종목 로드 (KIS API에서)"""
         if not self.broker:
@@ -751,6 +783,9 @@ class TradingBot(SchedulerMixin):
 
             if positions:
                 logger.info(f"기존 보유 종목 {len(positions)}개 로드")
+
+                # DB에서 전략/진입시간 복원
+                await self._restore_position_metadata(positions)
 
                 for symbol, position in positions.items():
                     # 엔진 포트폴리오에 추가

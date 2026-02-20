@@ -62,7 +62,7 @@ class EquityTracker:
         compact = date_str.replace("-", "")
         return self.STORAGE_DIR / f"equity_{compact}.json"
 
-    def save_snapshot(self, portfolio, trade_journal, name_cache: Dict[str, str] = None):
+    def save_snapshot(self, portfolio, trade_journal, name_cache: Dict[str, str] = None, db_stats: Dict[str, Any] = None):
         """포트폴리오에서 현재 스냅샷 저장"""
         if name_cache is None:
             name_cache = {}
@@ -92,16 +92,33 @@ class EquityTracker:
                 "pnl_pct": float(pos.unrealized_pnl_pct),
             })
 
-        # 당일 거래 통계
+        # 당일 거래 통계 (DB 통계 우선 사용, 캐시 폴백)
         trades_count = 0
         win_rate = 0.0
-        if trade_journal:
+        realized_pnl = 0.0
+
+        # db_stats가 외부에서 전달되면 사용 (async 호출 시 미리 조회)
+        if db_stats:
+            trades_count = db_stats.get('trades_count', 0)
+            win_rate = db_stats.get('win_rate', 0.0)
+            realized_pnl = db_stats.get('realized_pnl', 0.0)
+        elif trade_journal:
             today_trades = trade_journal.get_today_trades()
             closed_today = [t for t in today_trades if t.is_closed]
             trades_count = len(closed_today)
             if trades_count > 0:
                 wins = sum(1 for t in closed_today if t.is_win)
                 win_rate = wins / trades_count * 100
+                realized_pnl = sum(float(t.pnl or 0) for t in closed_today)
+
+        # daily_pnl: 실현손익이 있으면 미실현 변동분 추가
+        if realized_pnl != 0:
+            unrealized_delta = float(portfolio.total_unrealized_pnl - portfolio.daily_start_unrealized_pnl)
+            effective_pnl = realized_pnl + unrealized_delta
+            pnl_pct = (effective_pnl / initial_capital * 100) if initial_capital > 0 else 0.0
+
+        # 포지션 수익률순 정렬 (높은→낮은)
+        positions_list.sort(key=lambda x: x.get('pnl_pct', 0), reverse=True)
 
         snapshot = EquitySnapshot(
             date=today,

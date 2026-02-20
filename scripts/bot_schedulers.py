@@ -244,8 +244,31 @@ class SchedulerMixin:
                                 name_cache = {}
                                 if hasattr(self, 'dashboard') and self.dashboard:
                                     name_cache = self.dashboard.data_collector._build_name_cache()
+
+                                # DB에서 당일 거래 통계 조회
+                                db_stats = None
+                                tj = self.trade_journal
+                                if tj and hasattr(tj, 'pool') and tj.pool:
+                                    try:
+                                        row = await tj.pool.fetchrow(
+                                            "SELECT COUNT(*) as cnt, "
+                                            "COALESCE(SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END), 0) as wins, "
+                                            "COALESCE(SUM(pnl), 0) as total_pnl "
+                                            "FROM trade_events WHERE event_type='SELL' AND event_time::date=$1",
+                                            date.today(),
+                                        )
+                                        if row and row['cnt'] > 0:
+                                            cnt = row['cnt']
+                                            db_stats = {
+                                                'trades_count': cnt,
+                                                'win_rate': round(row['wins'] / cnt * 100, 1),
+                                                'realized_pnl': float(row['total_pnl']),
+                                            }
+                                    except Exception as e:
+                                        logger.debug(f"[자산추적] DB 통계 조회 실패: {e}")
+
                                 equity_tracker.save_snapshot(
-                                    self.engine.portfolio, self.trade_journal, name_cache
+                                    self.engine.portfolio, self.trade_journal, name_cache, db_stats=db_stats
                                 )
                                 self._last_equity_snapshot_date = today
                                 logger.info("[자산추적] 일일 스냅샷 저장 완료")
@@ -1229,12 +1252,18 @@ class SchedulerMixin:
 
                 # 누락 포지션 추가 (KIS에 있고 봇에 없는 종목)
                 new_symbols = kis_symbols - bot_symbols
+                if new_symbols:
+                    # DB에서 전략/진입시간 복원
+                    new_positions = {s: kis_positions[s] for s in new_symbols}
+                    await self._restore_position_metadata(new_positions)
+
                 for symbol in new_symbols:
                     pos = kis_positions[symbol]
                     portfolio.positions[symbol] = pos
                     logger.info(
                         f"[동기화] 포지션 추가: {symbol} {pos.name} "
-                        f"({pos.quantity}주 @ {pos.avg_price:,.0f}원)"
+                        f"({pos.quantity}주 @ {pos.avg_price:,.0f}원, "
+                        f"전략={pos.strategy or '?'})"
                     )
                     if self.exit_manager:
                         self.exit_manager.register_position(pos)
