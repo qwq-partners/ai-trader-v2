@@ -1224,8 +1224,16 @@ class RiskManager:
         if self.config.hybrid.enabled:
             base_pct, max_pct, pool_equity = self._get_hybrid_params(signal.strategy, equity)
         else:
-            # 기존 방식
-            base_pct = self.config.base_position_pct / 100
+            # 전략별 종목당 비중 차등 적용
+            strategy_position_pct = {
+                StrategyType.SEPA_TREND: 15.0,          # SEPA: 15% (검증된 고승률)
+                StrategyType.MOMENTUM_BREAKOUT: 7.0,    # 모멘텀: 7% (승률 개선 중)
+                StrategyType.RSI2_REVERSAL: 10.0,       # RSI2: 10% (테스트)
+                StrategyType.THEME_CHASING: 7.0,        # 테마: 7%
+                StrategyType.GAP_AND_GO: 7.0,           # 갭: 7%
+            }
+            default_pct = self.config.base_position_pct  # evolved_overrides: 10.0
+            base_pct = strategy_position_pct.get(signal.strategy, default_pct) / 100
             max_pct = self.config.max_position_pct / 100
             pool_equity = equity
 
@@ -1262,13 +1270,9 @@ class RiskManager:
             logger.info(f"[리스크] 일일 매수 한도 도달: {daily_buy_count}/{max_daily_buys}")
             return 0
 
-        # 적응형 사이징: 남은 슬롯에 가용현금을 고르게 배분
-        remaining_slots = max(max_daily_buys - daily_buy_count, 1)
-        adaptive_value = available * Decimal("0.9") / Decimal(str(remaining_slots))
-
-        # 기존 계산과 적응형 중 큰 값 사용 (자본 유휴 방지)
+        # 전략별 비율 기반 포지션 금액 (전략별 상한 존중)
         max_value = equity * Decimal(str(self.config.max_position_pct / 100))
-        position_value = min(max(pct_value, adaptive_value), max_value, available)
+        position_value = min(pct_value, max_value, available)
 
         # 하락장 포지션 축소 (일일 손실 한도 50% 도달 시 포지션 50% 축소)
         effective_pnl = self.engine.portfolio.effective_daily_pnl
