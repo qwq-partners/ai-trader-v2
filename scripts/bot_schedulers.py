@@ -881,14 +881,18 @@ class SchedulerMixin:
                                     and self._daily_entry_count.get(s.symbol, 0) < max_daily_entries
                                 ]
 
-                                # 장중 전략 사전 체크 (불필요한 API 호출 방지)
+                                # 장중 전략 사전 체크 (전략별 시작시간 반영)
                                 _strategy_type = StrategyType.MOMENTUM_BREAKOUT
-                                if "momentum_breakout" in _enabled:
+                                _momentum_start = self.engine.config.raw.get("momentum_breakout", {}).get("trading_start_time", "09:15")
+                                if "momentum_breakout" in _enabled and hour_min >= _momentum_start:
                                     _strategy_type = StrategyType.MOMENTUM_BREAKOUT
                                 elif "theme_chasing" in _enabled:
                                     _strategy_type = StrategyType.THEME_CHASING
                                 elif "gap_and_go" in _enabled:
                                     _strategy_type = StrategyType.GAP_AND_GO
+                                elif "momentum_breakout" in _enabled and hour_min < _momentum_start:
+                                    logger.debug(f"[스크리닝] 모멘텀 시작시간({_momentum_start}) 전 → 자동진입 스킵")
+                                    candidates = []
                                 else:
                                     logger.debug("[스크리닝] 장중 전략 미활성 → 자동진입 스킵")
                                     candidates = []

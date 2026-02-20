@@ -4,6 +4,12 @@ risk_config:
   default_stop_loss_pct: 4.0
   base_position_pct: 10.0
   max_positions: 7
+  strategy_allocation:
+    momentum_breakout: 35.0
+    theme_chasing: 5.0
+    sepa_trend: 50.0
+    gap_and_go: 5.0
+    rsi2_reversal: 5.0
 exit_manager:
   max_stop_pct: 6.0
   min_stop_pct: 3.0
@@ -16,7 +22,7 @@ momentum_breakout:
   enabled: true
   stop_loss_pct: 3.5
   min_volume_ratio: 2.5
-  trading_start_time: 09:15
+  trading_start_time: '10:30'
   min_score: 75.0
   min_breakout_pct: 0.8
 theme_chasing:
@@ -34,3 +40,6 @@ _meta:
   exit_manager.stop_loss_pct:
     source: llm
     timestamp: '2026-02-11T20:31:33.438158'
+  risk_config.strategy_allocation:
+    source: weekly_rebalance
+    timestamp: '2026-02-21T00:00:34.666905'
