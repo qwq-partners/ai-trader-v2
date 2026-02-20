@@ -1877,6 +1877,9 @@ class TradingBot(SchedulerMixin):
             # 7. 자가 진화 스케줄러 실행
             if self.strategy_evolver:
                 tasks.append(asyncio.create_task(self._run_evolution_scheduler(), name="evolution_scheduler"))
+                tasks.append(asyncio.create_task(
+                    self._run_weekly_rebalance_scheduler(), name="weekly_rebalance"
+                ))
 
             # 8. 로그/캐시 정리 스케줄러
             tasks.append(asyncio.create_task(self._run_log_cleanup(), name="log_cleanup"))

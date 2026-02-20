@@ -84,6 +84,13 @@ def create_trading_config(config: Optional[Dict[str, Any]] = None) -> TradingCon
         flex_extra_positions=int(risk_cfg.get("flex_extra_positions", 2)),
         flex_cash_threshold_pct=float(risk_cfg.get("flex_cash_threshold_pct", 10.0)),
         max_positions_per_sector=int(risk_cfg.get("max_positions_per_sector", 3)),
+        strategy_allocation=risk_cfg.get("strategy_allocation", {
+            "momentum_breakout": 60.0,
+            "sepa_trend": 25.0,
+            "rsi2_reversal": 10.0,
+            "theme_chasing": 5.0,
+            "gap_and_go": 5.0,
+        }),
     )
 
     # TradingConfig 생성

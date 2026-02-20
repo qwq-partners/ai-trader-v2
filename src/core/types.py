@@ -319,6 +319,22 @@ class Portfolio:
             return 1.0
         return float(self.cash / self.total_equity)
 
+    def get_strategy_allocation(self, strategy: str) -> Decimal:
+        """특정 전략의 현재 총 배분 금액 (보유 포지션 시장가치 합계)"""
+        return sum(
+            (p.market_value for p in self.positions.values()
+             if p.strategy == strategy),
+            Decimal("0"),
+        )
+
+    def get_all_strategy_allocations(self) -> Dict[str, Decimal]:
+        """전략별 현재 배분 금액"""
+        allocs: Dict[str, Decimal] = {}
+        for pos in self.positions.values():
+            key = pos.strategy or "unknown"
+            allocs[key] = allocs.get(key, Decimal("0")) + pos.market_value
+        return allocs
+
 
 @dataclass
 class Signal:
@@ -485,6 +501,15 @@ class RiskConfig:
 
     # 하이브리드 전략
     hybrid: HybridConfig = field(default_factory=HybridConfig)
+
+    # 전략별 총 예산 배분 (% of total_equity, 0=제한없음)
+    strategy_allocation: Dict[str, float] = field(default_factory=lambda: {
+        "momentum_breakout": 60.0,
+        "sepa_trend": 25.0,
+        "rsi2_reversal": 10.0,
+        "theme_chasing": 5.0,
+        "gap_and_go": 5.0,
+    })
 
 
 @dataclass

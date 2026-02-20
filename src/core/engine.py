@@ -958,6 +958,27 @@ class RiskManager:
                 )
                 return None
 
+        # 전략 예산 한도 조기 차단
+        if event.side == OrderSide.BUY and event.strategy:
+            _alloc = self.config.strategy_allocation
+            _strat_name = event.strategy.value
+            _cap_pct = _alloc.get(_strat_name, 0)
+            if _cap_pct > 0:
+                _equity = self.engine.portfolio.total_equity
+                _budget_cap = _equity * Decimal(str(_cap_pct / 100))
+                _current = self.engine.portfolio.get_strategy_allocation(_strat_name)
+                if _current >= _budget_cap:
+                    logger.info(
+                        f"[리스크] 전략 예산 소진: {_strat_name} "
+                        f"(한도={_budget_cap:,.0f}, 사용={_current:,.0f})"
+                    )
+                    trading_logger.log_signal_blocked(
+                        symbol=event.symbol, side=event.side.value,
+                        reason=f"전략예산소진:{_strat_name}({_cap_pct:.0f}%)",
+                        price=float(event.price or 0), score=event.score,
+                    )
+                    return None
+
         # 주문 실패 쿨다운 체크
         if event.symbol in self._order_fail_cooldown:
             cooldown_start = self._order_fail_cooldown[event.symbol]
@@ -1273,6 +1294,24 @@ class RiskManager:
         # 전략별 비율 기반 포지션 금액 (전략별 상한 존중)
         max_value = equity * Decimal(str(self.config.max_position_pct / 100))
         position_value = min(pct_value, max_value, available)
+
+        # 전략 예산 한도 — 잔여 예산으로 포지션 제한
+        if signal.strategy:
+            _alloc = self.config.strategy_allocation
+            _strat_name = signal.strategy.value
+            _cap_pct = _alloc.get(_strat_name, 0)
+            if _cap_pct > 0:
+                _budget_cap = equity * Decimal(str(_cap_pct / 100))
+                _current = self.engine.portfolio.get_strategy_allocation(_strat_name)
+                _remaining = _budget_cap - _current
+                if _remaining <= 0:
+                    return 0
+                if position_value > _remaining:
+                    logger.info(
+                        f"[리스크] 전략 예산 제한: {_strat_name} "
+                        f"(요청={position_value:,.0f} → 잔여={_remaining:,.0f})"
+                    )
+                    position_value = _remaining
 
         # 하락장 포지션 축소 (일일 손실 한도 50% 도달 시 포지션 50% 축소)
         effective_pnl = self.engine.portfolio.effective_daily_pnl

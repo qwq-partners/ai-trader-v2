@@ -809,6 +809,218 @@ class StrategyEvolver:
         self._save_state()
         return True
 
+    # ============================================================
+    # 주간 전략 예산 리밸런싱
+    # ============================================================
+    _VALID_STRATEGIES = {
+        "momentum_breakout", "sepa_trend", "rsi2_reversal",
+        "theme_chasing", "gap_and_go",
+    }
+    _ALLOC_MIN_PCT = 5.0       # 최소 5% (테스트 기회 보장)
+    _ALLOC_MAX_PCT = 70.0      # 최대 70%
+    _ALLOC_MAX_CHANGE = 15.0   # 주당 ±15%p
+    _ALLOC_MAX_TOTAL = 105.0   # 합계 상한 (동시 진입 여유)
+
+    async def rebalance_strategy_allocation(self) -> Dict[str, Any]:
+        """
+        주간 전략 예산 리밸런싱
+
+        Returns:
+            {"status": "applied|skipped|error", "before": {...}, "after": {...},
+             "reasoning": str}
+        """
+        logger.info("[리밸런싱] 주간 전략 예산 리밸런싱 시작")
+
+        # 1. 현재 배분 조회
+        config_mgr = get_evolved_config_manager()
+        overrides = config_mgr.get_overrides()
+        risk_alloc = (overrides.get("risk_config", {})
+                      .get("strategy_allocation", None))
+        if risk_alloc is None:
+            # 기본값 사용
+            from src.core.types import RiskConfig
+            risk_alloc = dict(RiskConfig().strategy_allocation)
+        current = {k: float(v) for k, v in risk_alloc.items()}
+        logger.info(f"[리밸런싱] 현재 배분: {current}")
+
+        # 2. 지난 주 전략별 성과
+        review = self.reviewer.review_period(7)
+        if review.total_trades < 3:
+            logger.info(f"[리밸런싱] 거래 부족 ({review.total_trades}건 < 3건), 스킵")
+            return {"status": "skipped", "reason": f"거래 부족 ({review.total_trades}건)"}
+
+        # 3. LLM 호출
+        try:
+            from src.utils.llm import get_llm_manager, LLMTask
+
+            llm = get_llm_manager()
+            perf_summary = self._build_perf_summary(review)
+
+            system_prompt = (
+                "당신은 한국 주식 단기매매 봇의 자본 배분 전략가입니다.\n"
+                "지난 1주 전략별 성과를 분석하고, 각 전략의 총예산 비중(%)을 조정하세요.\n\n"
+                "원칙:\n"
+                "- 수익성: 승률 × 평균수익률이 높은 전략에 더 많은 자본 배분\n"
+                "- 안정성: 연속 손실이 적은 전략 선호\n"
+                "- 거래빈도: 거래 기회가 충분한 전략에 배분\n"
+                "- 점진적 변화: 급격한 변경은 위험, 주당 ±15%p 이내\n\n"
+                "제약:\n"
+                "- 각 전략: 최소 5%, 최대 70%\n"
+                "- 합계: ≤ 105% (동시 진입 여유)\n"
+                "- 주당 변경: 각 전략 ±15%p 이내\n\n"
+                "JSON 형식으로 응답:\n"
+                '{ "allocations": {"momentum_breakout": 60, ...}, '
+                '"reasoning": "분석 사유", "confidence": 0.7 }'
+            )
+
+            user_prompt = (
+                f"현재 배분: {json.dumps(current, ensure_ascii=False)}\n\n"
+                f"지난 1주 성과:\n{perf_summary}\n\n"
+                f"전체 요약: 총 {review.total_trades}건, "
+                f"승률 {review.win_rate:.1f}%, "
+                f"손익비 {review.profit_factor:.2f}, "
+                f"총손익 {review.total_pnl:,.0f}원"
+            )
+
+            result = await llm.complete_json(
+                prompt=user_prompt,
+                task=LLMTask.STRATEGY_ANALYSIS,
+                system=system_prompt,
+            )
+        except Exception as e:
+            logger.error(f"[리밸런싱] LLM 호출 실패: {e}")
+            return {"status": "error", "reason": str(e)}
+
+        # 4. LLM 결과 파싱
+        proposed = result.get("allocations")
+        reasoning = result.get("reasoning", "")
+        confidence = result.get("confidence", 0.0)
+
+        if not proposed or not isinstance(proposed, dict):
+            logger.warning(f"[리밸런싱] LLM 응답 형식 오류: {result}")
+            return {"status": "error", "reason": "LLM 응답 형식 오류"}
+
+        if confidence < 0.4:
+            logger.info(f"[리밸런싱] 신뢰도 낮음 ({confidence:.2f} < 0.4), 스킵")
+            return {"status": "skipped", "reason": f"신뢰도 낮음 ({confidence:.2f})"}
+
+        # 5. 가드레일 적용
+        adjusted = self._apply_allocation_guardrails(current, proposed)
+        logger.info(f"[리밸런싱] 조정 결과: {adjusted} (사유: {reasoning})")
+
+        # 변경이 없으면 스킵
+        if all(abs(adjusted.get(k, 0) - current.get(k, 0)) < 0.5
+               for k in set(list(adjusted.keys()) + list(current.keys()))):
+            logger.info("[리밸런싱] 유의미한 변경 없음, 스킵")
+            return {"status": "skipped", "reason": "유의미한 변경 없음"}
+
+        # 6. 영속화
+        try:
+            config_mgr.save_override(
+                "risk_config", "strategy_allocation", adjusted, "weekly_rebalance"
+            )
+        except Exception as e:
+            logger.error(f"[리밸런싱] 영속화 실패: {e}")
+
+        # 7. 런타임 반영
+        risk_config = self._get_component_config("risk_config")
+        if risk_config and hasattr(risk_config, "strategy_allocation"):
+            risk_config.strategy_allocation = adjusted
+
+        # 8. 이력 저장
+        self._save_rebalance_history(current, adjusted, reasoning)
+
+        logger.info("[리밸런싱] 전략 예산 리밸런싱 완료")
+        return {
+            "status": "applied",
+            "before": current,
+            "after": adjusted,
+            "reasoning": reasoning,
+            "confidence": confidence,
+        }
+
+    def _build_perf_summary(self, review: ReviewResult) -> str:
+        """전략별 성과 요약 텍스트 생성"""
+        lines = []
+        for strat, perf in review.strategy_performance.items():
+            trades = perf.get("trades", 0)
+            wr = perf.get("win_rate", 0)
+            pnl = perf.get("total_pnl", 0)
+            avg = perf.get("avg_pnl_pct", 0)
+            lines.append(
+                f"- {strat}: {trades}건, 승률 {wr:.1f}%, "
+                f"평균수익률 {avg:.2f}%, 총손익 {pnl:,.0f}원"
+            )
+        return "\n".join(lines) if lines else "전략별 성과 데이터 없음"
+
+    def _apply_allocation_guardrails(
+        self, current: Dict[str, float], proposed: Dict[str, float]
+    ) -> Dict[str, float]:
+        """가드레일 적용: min/max/change/total 제한"""
+        adjusted: Dict[str, float] = {}
+
+        # 현재 키 + 제안 키 합집합 (유효 전략만)
+        all_keys = (set(current.keys()) | set(proposed.keys())) & self._VALID_STRATEGIES
+
+        for key in all_keys:
+            old = current.get(key, 0.0)
+            new = float(proposed.get(key, old))
+
+            # min/max 클램프
+            new = max(self._ALLOC_MIN_PCT, min(self._ALLOC_MAX_PCT, new))
+
+            # 주당 변경 제한
+            delta = new - old
+            if abs(delta) > self._ALLOC_MAX_CHANGE:
+                new = old + (self._ALLOC_MAX_CHANGE if delta > 0 else -self._ALLOC_MAX_CHANGE)
+
+            adjusted[key] = round(new, 1)
+
+        # 합계 상한 체크 — 초과 시 비례 축소
+        total = sum(adjusted.values())
+        if total > self._ALLOC_MAX_TOTAL:
+            ratio = self._ALLOC_MAX_TOTAL / total
+            adjusted = {k: round(v * ratio, 1) for k, v in adjusted.items()}
+            # 축소 후에도 최소값 보장
+            for k in adjusted:
+                adjusted[k] = max(self._ALLOC_MIN_PCT, adjusted[k])
+
+        return adjusted
+
+    def _save_rebalance_history(
+        self, before: Dict[str, float], after: Dict[str, float], reasoning: str
+    ):
+        """리밸런싱 이력 저장 (최근 52주 보관)"""
+        history_path = Path(os.path.expanduser(
+            "~/.cache/ai_trader/evolution/rebalance_history.json"
+        ))
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+
+        entries = []
+        if history_path.exists():
+            try:
+                entries = json.loads(history_path.read_text(encoding="utf-8"))
+            except Exception:
+                entries = []
+
+        entries.append({
+            "timestamp": datetime.now().isoformat(),
+            "before": before,
+            "after": after,
+            "reasoning": reasoning,
+        })
+
+        # 최근 52주만 보관
+        entries = entries[-52:]
+
+        try:
+            history_path.write_text(
+                json.dumps(entries, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.warning(f"[리밸런싱] 이력 저장 실패: {e}")
+
 
 # 싱글톤
 _strategy_evolver: Optional[StrategyEvolver] = None

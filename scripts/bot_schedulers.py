@@ -347,6 +347,69 @@ class SchedulerMixin:
         except Exception as e:
             logger.error(f"거래 리뷰 스케줄러 오류: {e}")
 
+    async def _run_weekly_rebalance_scheduler(self):
+        """매주 토요일 00:00 전략 예산 리밸런싱"""
+        last_rebalance_week: Optional[int] = None
+
+        try:
+            while self.running:
+                now = datetime.now()
+
+                # 토요일(weekday=5) 00:00~00:15
+                if (now.weekday() == 5 and now.hour == 0
+                        and 0 <= now.minute < 15):
+                    iso_week = now.isocalendar()[1]
+                    if last_rebalance_week != iso_week:
+                        logger.info("[리밸런싱] 주간 전략 예산 리밸런싱 실행")
+                        try:
+                            result = await self.strategy_evolver.rebalance_strategy_allocation()
+                            last_rebalance_week = iso_week
+
+                            status = result.get("status", "unknown")
+                            if status == "applied":
+                                before = result.get("before", {})
+                                after = result.get("after", {})
+                                reasoning = result.get("reasoning", "")
+
+                                lines = ["📊 주간 전략 예산 리밸런싱\n변경 내역:"]
+                                all_keys = set(list(before.keys()) + list(after.keys()))
+                                for k in sorted(all_keys):
+                                    old_v = before.get(k, 0)
+                                    new_v = after.get(k, 0)
+                                    diff = new_v - old_v
+                                    arrow = "🔼" if diff > 0 else "🔽" if diff < 0 else "➡️"
+                                    lines.append(
+                                        f"  {arrow} {k}: {old_v:.0f}% → {new_v:.0f}% "
+                                        f"({diff:+.1f}%p)"
+                                    )
+                                if reasoning:
+                                    lines.append(f"사유: {reasoning}")
+
+                                await send_alert("\n".join(lines))
+                                logger.info(f"[리밸런싱] 완료: {status}")
+                            elif status == "skipped":
+                                reason = result.get("reason", "")
+                                logger.info(f"[리밸런싱] 스킵: {reason}")
+                            else:
+                                reason = result.get("reason", "")
+                                logger.warning(f"[리밸런싱] 결과: {status} - {reason}")
+
+                        except Exception as e:
+                            logger.error(f"[리밸런싱] 실행 오류: {e}")
+                            import traceback
+                            await self._send_error_alert(
+                                "ERROR", "주간 리밸런싱 오류",
+                                traceback.format_exc()
+                            )
+                            last_rebalance_week = iso_week
+
+                await asyncio.sleep(60)
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"주간 리밸런싱 스케줄러 오류: {e}")
+
     async def _run_stock_master_refresh(self):
         """
         종목 마스터 갱신 스케줄러
