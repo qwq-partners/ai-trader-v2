@@ -373,10 +373,15 @@ class StockScreener:
                 "FID_COND_SCR_DIV_CODE": "10301",  # 신고가
                 "FID_INPUT_ISCD": "0000",
                 "FID_DIV_CLS_CODE": "0",
-                "FID_RANK_SORT_CLS_CODE": "0",     # 정렬 구분 (필수)
+                "FID_BLNG_CLS_CODE": "0",
+                "FID_TRGT_CLS_CODE": "111111111",
+                "FID_TRGT_EXLS_CLS_CODE": "000000",
+                "FID_RANK_SORT_CLS_CODE": "0",
                 "FID_INPUT_CNT_1": "0",
                 "FID_INPUT_PRICE_1": "0",
                 "FID_INPUT_PRICE_2": "0",
+                "FID_VOL_CNT": "0",
+                "FID_INPUT_DATE_1": "",
             }
 
             async with session.get(url, headers=headers, params=params) as resp:
