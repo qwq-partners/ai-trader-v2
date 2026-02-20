@@ -172,13 +172,6 @@ function renderSortedPositions() {
             }
         }
 
-        // 손절/목표
-        const slTp = (pos.stop_loss || pos.take_profit)
-            ? `<span style="color:var(--accent-red);font-size:0.72rem;">${pos.stop_loss ? formatNumber(pos.stop_loss) : '--'}</span>` +
-              `<span style="color:var(--text-muted);font-size:0.72rem;"> / </span>` +
-              `<span style="color:var(--accent-green);font-size:0.72rem;">${pos.take_profit ? formatNumber(pos.take_profit) : '--'}</span>`
-            : '--';
-
         return `<tr class="border-b" style="border-color:rgba(99,102,241,0.08)">
             <td class="py-2 pr-3 font-medium text-white" style="white-space:nowrap;">${pos.name || pos.symbol} <span style="color:var(--text-muted); font-size:0.72rem; font-weight:400;">${pos.symbol}</span></td>
             <td class="py-2 pr-3" style="font-size:0.75rem; color:var(--accent-purple);">${stName}</td>
@@ -188,7 +181,6 @@ function renderSortedPositions() {
             <td class="py-2 pr-3 text-right mono" style="color:var(--text-secondary);">${formatNumber(pos.market_value || (pos.current_price * pos.quantity))}</td>
             <td class="py-2 pr-3 text-right mono ${pnlCls}">${formatPnl(pos.unrealized_pnl)}</td>
             <td class="py-2 pr-3 text-right mono ${pnlCls}">${formatPct(pos.unrealized_pnl_pct)}</td>
-            <td class="py-2 pr-3 text-right mono" style="white-space:nowrap;">${slTp}</td>
             <td class="py-2 pr-3 mono" style="font-size:0.75rem; color:var(--text-secondary);">${holdStr}</td>
             <td class="py-2">${stageLabel}</td>
         </tr>`;
