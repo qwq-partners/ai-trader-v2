@@ -49,12 +49,15 @@ async function loadTradeData(dateStr, type) {
 
         // 정산 데이터 있으면 정산 기반 요약, 없으면 이벤트 기반
         if (settlement && !settlement.error) {
-            renderSettlementSummary(settlement.summary);
+            renderSettlementSummary(settlement);
             renderHoldings(settlement.holdings);
         } else {
             renderEventSummary(events);
             hideHoldings();
         }
+
+        // 청산유형별 금액 요약 테이블
+        renderExitTypeSummary(events);
 
         updateFilterCounts(dateStr);
     } catch (e) {
@@ -86,7 +89,9 @@ async function updateFilterCounts(dateStr) {
 // 정산 기반 요약 (KIS 데이터 사용)
 // ============================================================
 
-function renderSettlementSummary(s) {
+function renderSettlementSummary(settlement) {
+    if (!settlement) return;
+    const s = settlement.summary;
     if (!s) return;
     const el = (id) => document.getElementById(id);
 
@@ -98,9 +103,18 @@ function renderSettlementSummary(s) {
     unrealized.textContent = formatPnl(s.unrealized_pnl);
     unrealized.className = 'stat-value mono ' + pnlClass(s.unrealized_pnl);
 
-    const total = el('s-total-pnl');
-    total.textContent = formatPnl(s.total_pnl);
-    total.className = 'stat-value mono ' + pnlClass(s.total_pnl);
+    // 익절/손절 합계 — sells 배열에서 계산
+    const sells = settlement.sells || [];
+    const tpTotal = sells.reduce((acc, t) => acc + ((t.pnl || 0) > 0 ? (t.pnl || 0) : 0), 0);
+    const slTotal = sells.reduce((acc, t) => acc + ((t.pnl || 0) < 0 ? (t.pnl || 0) : 0), 0);
+
+    const tpEl = el('s-tp-total');
+    tpEl.textContent = tpTotal > 0 ? formatPnl(tpTotal) : '--';
+    tpEl.className = 'stat-value mono ' + (tpTotal > 0 ? 'text-profit' : '');
+
+    const slEl = el('s-sl-total');
+    slEl.textContent = slTotal < 0 ? formatPnl(slTotal) : '--';
+    slEl.className = 'stat-value mono ' + (slTotal < 0 ? 'text-loss' : '');
 
     // 승/패
     const wl = el('s-winloss');
@@ -115,8 +129,6 @@ function renderSettlementSummary(s) {
     wl.appendChild(winSpan);
     wl.appendChild(sep);
     wl.appendChild(lossSpan);
-
-    el('s-buysell').textContent = `${s.buy_count} / ${s.sell_count}`;
 }
 
 // ============================================================
@@ -141,10 +153,17 @@ function renderEventSummary(events) {
     unrealized.textContent = holding.length > 0 ? formatPnl(holdPnl) : '--';
     unrealized.className = 'stat-value mono ' + pnlClass(holdPnl);
 
-    const totalPnl = sellPnl + holdPnl;
-    const total = el('s-total-pnl');
-    total.textContent = (sells.length > 0 || holding.length > 0) ? formatPnl(totalPnl) : '--';
-    total.className = 'stat-value mono ' + pnlClass(totalPnl);
+    // 익절/손절 합계
+    const tpTotal = sells.reduce((acc, e) => acc + ((e.pnl || 0) > 0 ? (e.pnl || 0) : 0), 0);
+    const slTotal = sells.reduce((acc, e) => acc + ((e.pnl || 0) < 0 ? (e.pnl || 0) : 0), 0);
+
+    const tpEl = el('s-tp-total');
+    tpEl.textContent = tpTotal > 0 ? formatPnl(tpTotal) : '--';
+    tpEl.className = 'stat-value mono ' + (tpTotal > 0 ? 'text-profit' : '');
+
+    const slEl = el('s-sl-total');
+    slEl.textContent = slTotal < 0 ? formatPnl(slTotal) : '--';
+    slEl.className = 'stat-value mono ' + (slTotal < 0 ? 'text-loss' : '');
 
     // 승/패
     const wins = sells.filter(e => (e.pnl || 0) > 0).length;
@@ -165,8 +184,6 @@ function renderEventSummary(events) {
     } else {
         wl.textContent = '--';
     }
-
-    el('s-buysell').textContent = `${buys.length} / ${sells.length}`;
 }
 
 // ============================================================
@@ -447,6 +464,73 @@ function renderExitTypeChart(events) {
     };
 
     Plotly.react('exit-type-chart', data, layout, { displayModeBar: false, responsive: true });
+}
+
+// ============================================================
+// 청산 유형별 금액 요약 테이블
+// ============================================================
+
+function renderExitTypeSummary(events) {
+    const container = document.getElementById('exit-type-summary');
+    const tbody = document.getElementById('exit-type-tbody');
+    const sells = events.filter(e => e.event_type === 'SELL' && e.exit_type);
+
+    if (sells.length === 0) {
+        container.style.display = 'none';
+        return;
+    }
+
+    container.style.display = 'block';
+    tbody.textContent = '';
+
+    const labelMap = {
+        take_profit: '익절', first_take_profit: '1차익절', second_take_profit: '2차익절',
+        third_take_profit: '3차익절', stop_loss: '손절', trailing: '트레일링',
+        breakeven: '본전', manual: '수동', kis_sync: '동기화',
+    };
+
+    // exit_type별 그룹핑
+    const groups = {};
+    sells.forEach(e => {
+        const type = e.exit_type;
+        if (!groups[type]) groups[type] = { count: 0, pnlSum: 0, pctSum: 0 };
+        groups[type].count++;
+        groups[type].pnlSum += (e.pnl || 0);
+        groups[type].pctSum += (e.pnl_pct || 0);
+    });
+
+    const fragment = document.createDocumentFragment();
+    for (const [type, g] of Object.entries(groups)) {
+        const avgPct = g.count > 0 ? g.pctSum / g.count : 0;
+        const pnlCls = g.pnlSum > 0 ? 'text-profit' : g.pnlSum < 0 ? 'text-loss' : '';
+
+        const tr = document.createElement('tr');
+        tr.style.borderBottom = '1px solid var(--border-subtle)';
+
+        const tdType = document.createElement('td');
+        tdType.style.cssText = 'padding:8px 12px 8px 0; font-size:0.85rem; font-weight:500;';
+        tdType.textContent = labelMap[type] || type;
+
+        const tdCount = document.createElement('td');
+        tdCount.style.cssText = 'padding:8px 12px 8px 0; text-align:right; font-size:0.85rem;';
+        tdCount.className = 'mono';
+        tdCount.textContent = g.count + '건';
+
+        const tdPnl = document.createElement('td');
+        tdPnl.style.cssText = 'padding:8px 12px 8px 0; text-align:right; font-size:0.85rem; font-weight:600;';
+        tdPnl.className = 'mono ' + pnlCls;
+        tdPnl.textContent = formatPnl(g.pnlSum);
+
+        const tdAvgPct = document.createElement('td');
+        tdAvgPct.style.cssText = 'padding:8px 0; text-align:right; font-size:0.85rem;';
+        tdAvgPct.className = 'mono ' + (avgPct > 0 ? 'text-profit' : avgPct < 0 ? 'text-loss' : '');
+        tdAvgPct.textContent = formatPct(avgPct);
+
+        tr.append(tdType, tdCount, tdPnl, tdAvgPct);
+        fragment.appendChild(tr);
+    }
+
+    tbody.appendChild(fragment);
 }
 
 // ============================================================

@@ -189,16 +189,16 @@
                 <div id="s-unrealized" class="stat-value">--</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">총 손익</div>
-                <div id="s-total-pnl" class="stat-value">--</div>
+                <div class="stat-label">익절 합계</div>
+                <div id="s-tp-total" class="stat-value">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">손절 합계</div>
+                <div id="s-sl-total" class="stat-value">--</div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">승 / 패</div>
                 <div id="s-winloss" class="stat-value">--</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">매수 / 매도</div>
-                <div id="s-buysell" class="stat-value">--</div>
             </div>
         </div>
 
@@ -209,6 +209,21 @@
                 청산 유형별 분포
             </div>
             <div id="exit-type-chart" style="height: 220px;"></div>
+            <div id="exit-type-summary" style="margin-top: 16px; display: none;">
+                <div style="overflow-x: auto;">
+                    <table style="width: 100%; text-align: left; border-collapse: collapse;">
+                        <thead>
+                            <tr style="border-bottom: 1px solid var(--border-subtle);">
+                                <th style="padding: 0 12px 10px 0;">유형</th>
+                                <th style="padding: 0 12px 10px 0; text-align: right;">건수</th>
+                                <th style="padding: 0 12px 10px 0; text-align: right;">금액 합계</th>
+                                <th style="padding: 0 0 10px 0; text-align: right;">평균 수익률</th>
+                            </tr>
+                        </thead>
+                        <tbody id="exit-type-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
         </div>
 
         <!-- Trade events table -->

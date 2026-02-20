@@ -144,6 +144,8 @@ function renderStrategyChart(byStrategy) {
         theme_chasing: '테마추종',
         gap_and_go: '갭상승',
         mean_reversion: '평균회귀',
+        sepa_trend: 'SEPA',
+        rsi2_reversal: 'RSI2',
     };
 
     const labels = keys.map(k => strategyNames[k] || k);
@@ -194,9 +196,14 @@ function renderExitPnlChart(byExitType) {
 
     const exitLabels = {
         take_profit: '익절',
+        first_take_profit: '1차익절',
+        second_take_profit: '2차익절',
+        third_take_profit: '3차익절',
         stop_loss: '손절',
         trailing: '트레일링',
+        breakeven: '본전',
         manual: '수동',
+        kis_sync: '동기화',
     };
 
     const labels = keys.map(k => exitLabels[k] || k);
@@ -236,7 +243,14 @@ function renderStrategyTable(byStrategy) {
     const keys = Object.keys(byStrategy);
 
     if (keys.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" class="py-8 text-center text-gray-500">데이터 없음</td></tr>';
+        tbody.textContent = '';
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 6;
+        td.style.cssText = 'padding:40px 0; text-align:center; color:var(--text-muted); font-size:0.85rem;';
+        td.textContent = '데이터 없음';
+        tr.appendChild(td);
+        tbody.appendChild(tr);
         return;
     }
 
@@ -245,23 +259,62 @@ function renderStrategyTable(byStrategy) {
         theme_chasing: '테마 추종',
         gap_and_go: '갭상승 추종',
         mean_reversion: '평균 회귀',
+        sepa_trend: 'SEPA 추세',
+        rsi2_reversal: 'RSI2 반전',
     };
 
-    const rows = keys.map(k => {
+    const fragment = document.createDocumentFragment();
+    keys.forEach(k => {
         const s = byStrategy[k];
         const pnlCls = s.total_pnl > 0 ? 'text-profit' : s.total_pnl < 0 ? 'text-loss' : '';
         const wrCls = s.win_rate >= 50 ? 'text-profit' : 'text-loss';
+        const losses = (s.trades || 0) - (s.wins || 0);
+        const avgPct = s.avg_pnl_pct != null ? s.avg_pnl_pct : (s.trades > 0 ? (s.total_pnl / s.trades) : 0);
+        const avgCls = avgPct > 0 ? 'text-profit' : avgPct < 0 ? 'text-loss' : '';
 
-        return `<tr class="border-b" style="border-color:rgba(99,102,241,0.08)">
-            <td class="py-2 pr-4 font-medium text-white">${strategyNames[k] || k}</td>
-            <td class="py-2 pr-4 text-right mono">${s.trades}</td>
-            <td class="py-2 pr-4 text-right mono">${s.wins}</td>
-            <td class="py-2 pr-4 text-right mono ${wrCls}">${s.win_rate.toFixed(1)}%</td>
-            <td class="py-2 pr-4 text-right mono ${pnlCls}">${formatPnl(s.total_pnl)}</td>
-        </tr>`;
-    }).join('');
+        const tr = document.createElement('tr');
+        tr.className = 'border-b';
+        tr.style.borderColor = 'rgba(99,102,241,0.08)';
 
-    tbody.innerHTML = rows;
+        const tdName = document.createElement('td');
+        tdName.className = 'py-2 pr-4 font-medium';
+        tdName.style.color = '#fff';
+        tdName.textContent = strategyNames[k] || k;
+
+        const tdTrades = document.createElement('td');
+        tdTrades.className = 'py-2 pr-4 text-right mono';
+        tdTrades.textContent = s.trades;
+
+        const tdWL = document.createElement('td');
+        tdWL.className = 'py-2 pr-4 text-right mono';
+        const winSpan = document.createElement('span');
+        winSpan.className = 'text-profit';
+        winSpan.textContent = s.wins;
+        const lossSpan = document.createElement('span');
+        lossSpan.className = 'text-loss';
+        lossSpan.textContent = losses;
+        tdWL.appendChild(winSpan);
+        tdWL.appendChild(document.createTextNode(' / '));
+        tdWL.appendChild(lossSpan);
+
+        const tdWR = document.createElement('td');
+        tdWR.className = 'py-2 pr-4 text-right mono ' + wrCls;
+        tdWR.textContent = s.win_rate.toFixed(1) + '%';
+
+        const tdPnl = document.createElement('td');
+        tdPnl.className = 'py-2 pr-4 text-right mono ' + pnlCls;
+        tdPnl.textContent = formatPnl(s.total_pnl);
+
+        const tdAvg = document.createElement('td');
+        tdAvg.className = 'py-2 text-right mono ' + avgCls;
+        tdAvg.textContent = formatPct(avgPct);
+
+        tr.append(tdName, tdTrades, tdWL, tdWR, tdPnl, tdAvg);
+        fragment.appendChild(tr);
+    });
+
+    tbody.textContent = '';
+    tbody.appendChild(fragment);
 }
 
 // 탭 이벤트
