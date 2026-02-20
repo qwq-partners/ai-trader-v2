@@ -111,8 +111,21 @@ class EquityTracker:
                 win_rate = wins / trades_count * 100
                 realized_pnl = sum(float(t.pnl or 0) for t in closed_today)
 
-        # daily_pnl: 실현손익이 있으면 미실현 변동분 추가
-        if realized_pnl != 0:
+        # daily_pnl: 전일 스냅샷 대비 총자산 변동으로 계산 (엔진 재시작 무관)
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        prev_snapshot = self.get_snapshot(yesterday)
+        if not prev_snapshot:
+            # 주말/공휴일 → 최근 스냅샷 탐색 (최대 5일)
+            for d in range(2, 6):
+                prev_date = (date.today() - timedelta(days=d)).isoformat()
+                prev_snapshot = self.get_snapshot(prev_date)
+                if prev_snapshot:
+                    break
+        if prev_snapshot and prev_snapshot.total_equity > 0:
+            effective_pnl = total_equity - prev_snapshot.total_equity
+            pnl_pct = (effective_pnl / prev_snapshot.total_equity * 100)
+        elif realized_pnl != 0:
+            # 이전 스냅샷 없으면 실현+미실현 변동 폴백
             unrealized_delta = float(portfolio.total_unrealized_pnl - portfolio.daily_start_unrealized_pnl)
             effective_pnl = realized_pnl + unrealized_delta
             pnl_pct = (effective_pnl / initial_capital * 100) if initial_capital > 0 else 0.0
