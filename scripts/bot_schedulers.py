@@ -951,7 +951,28 @@ class SchedulerMixin:
 
                                     # 전략 핵심 필터 (generate_signal 우회 보완)
                                     if _strategy_type == StrategyType.MOMENTUM_BREAKOUT:
-                                        # MA20 모멘텀 체크 (reasons에서 추출)
+                                        # 1) vol_ratio 체크 — 수급 있으면 임계 완화
+                                        _vol_ratio = 0.0
+                                        for reason in stock.reasons:
+                                            if "거래량" in reason and "배" in reason:
+                                                try:
+                                                    _vol_ratio = float(reason.split("거래량")[1].split("배")[0].strip())
+                                                except Exception:
+                                                    pass
+                                        # reasons 파싱 실패 시 ScreenedStock.volume_ratio 폴백
+                                        if _vol_ratio == 0.0 and stock.volume_ratio > 0:
+                                            _vol_ratio = stock.volume_ratio
+                                        # 수급 유무 판별
+                                        _has_supply = any("기관" in r or "외국인" in r for r in stock.reasons)
+                                        _vol_threshold = 1.5 if _has_supply else 2.5
+                                        if _vol_ratio > 0 and _vol_ratio < _vol_threshold:
+                                            logger.debug(
+                                                f"[스크리닝] {stock.symbol} 탈락: 거래량 부족 "
+                                                f"({_vol_ratio:.1f}배 < {_vol_threshold}배, 수급={'있음' if _has_supply else '없음'})"
+                                            )
+                                            continue
+
+                                        # 2) MA20 모멘텀 체크 (기존)
                                         _has_momentum = False
                                         for reason in stock.reasons:
                                             if "MA20" in reason:
@@ -965,6 +986,30 @@ class SchedulerMixin:
                                         if not _has_momentum and rt_change < 3.0:
                                             logger.debug(f"[스크리닝] {stock.symbol} 탈락: 모멘텀 부족 (등락률 {rt_change:+.1f}%)")
                                             continue
+
+                                        # 3) 과열 RSI 체크 (reasons에서 RSI 정보 있으면)
+                                        _rsi_blocked = False
+                                        for reason in stock.reasons:
+                                            if "RSI" in reason:
+                                                try:
+                                                    _rsi_val = float(reason.split("RSI")[1].replace(":", "").strip().split()[0])
+                                                    if _rsi_val > 75:
+                                                        _rsi_blocked = True
+                                                except Exception:
+                                                    pass
+                                        if _rsi_blocked:
+                                            logger.debug(f"[스크리닝] {stock.symbol} 탈락: RSI 과열 (> 75)")
+                                            continue
+
+                                        # 4) 장초반 수급 필터: 11시 전 수급 미확인 종목은 점수 85+ 필수
+                                        _now_hour = datetime.now().hour
+                                        if _now_hour < 11 and not _has_supply:
+                                            if stock.score < 85:
+                                                logger.debug(
+                                                    f"[스크리닝] {stock.symbol} 탈락: 장초반 수급부재 "
+                                                    f"(점수 {stock.score:.0f} < 85)"
+                                                )
+                                                continue
 
                                     # === 뉴스/공시 검증 ===
                                     _confidence_adj = 0.0

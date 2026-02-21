@@ -110,6 +110,10 @@ class StockScreener:
         self.max_change_pct = 15.0         # 최대 등락률 (과열 제외)
         self.min_trading_value = 100000000 # 최소 거래대금 1억원 (유동성 확보)
 
+        # 수급 누적 이력 (5분 주기 스크리닝마다 기록, 당일 한정)
+        self._sd_history: Dict[str, List[Dict]] = {}  # symbol -> [{ts, foreign, inst}]
+        self._sd_history_date: Optional[str] = None    # 날짜 변경 시 리셋
+
     def set_stock_master(self, stock_master):
         """stock_master 인스턴스 설정 (런타임에서 주입)"""
         self._stock_master = stock_master
@@ -254,97 +258,63 @@ class StockScreener:
             return stocks
 
     # ============================================================
-    # 등락률 상위 종목
+    # 기관 순매수 상위 종목
     # ============================================================
 
-    async def screen_top_gainers(self, limit: int = 30) -> List[ScreenedStock]:
+    async def screen_institutional_buying(self, limit: int = 20) -> List[ScreenedStock]:
         """
-        등락률 상위 종목 스크리닝
+        기관 순매수 상위 종목 스크리닝
 
-        상승률 상위 종목 (1% ~ 15%)
+        FHPTJ04400000 API로 기관 순매수 상위 조회 (코스피 + 코스닥)
         """
-        cache_key = "top_gainers"
+        cache_key = "institutional_buying"
         if self._is_cache_valid(cache_key):
-            return self._cache[cache_key]
+            return self._cache[cache_key][:limit]
 
         stocks = []
+        kmd = self._kis_market_data or get_kis_market_data()
+
         try:
-            session = await self._get_session()
-            headers = await self._get_headers("FHPST01710000")  # 거래량 순위와 동일한 TR
+            raw_kospi = await kmd.fetch_foreign_institution(market="0001", investor="2")
+            raw_kosdaq = await kmd.fetch_foreign_institution(market="0002", investor="2")
+            raw = raw_kospi + raw_kosdaq
 
-            url = f"{self._token_manager.base_url}/uapi/domestic-stock/v1/quotations/volume-rank"
+            for item in raw:
+                symbol = item.get("symbol", "")
+                name = item.get("name", "")
+                price = item.get("price", 0)
+                change_pct = item.get("change_pct", 0)
+                volume = item.get("volume", 0)
+                net_buy_qty = item.get("net_buy_qty", 0)
+                trading_value = volume * price
 
-            params = {
-                "FID_COND_MRKT_DIV_CODE": "J",
-                "FID_COND_SCR_DIV_CODE": "20101",  # 상승률 순
-                "FID_INPUT_ISCD": "0000",
-                "FID_DIV_CLS_CODE": "0",
-                "FID_BLNG_CLS_CODE": "0",
-                "FID_TRGT_CLS_CODE": "111111111",
-                "FID_TRGT_EXLS_CLS_CODE": "000000",
-                "FID_INPUT_PRICE_1": "0",
-                "FID_INPUT_PRICE_2": "0",
-                "FID_VOL_CNT": "0",
-                "FID_INPUT_DATE_1": "",
-            }
+                if price < 1000 or net_buy_qty <= 0:
+                    continue
+                if trading_value < self.min_trading_value:
+                    continue
+                if self._is_etf_etn(name):
+                    logger.debug(f"[스크리닝] ETF/ETN 제외: {name}({symbol})")
+                    continue
 
-            async with session.get(url, headers=headers, params=params) as resp:
-                if resp.status != 200:
-                    logger.error(f"등락률 순위 조회 실패: {resp.status}")
-                    return stocks
+                score = min(60 + change_pct * 3, 100)
 
-                data = await resp.json()
-
-                if data.get("rt_cd") != "0":
-                    logger.warning(f"등락률 순위 API 오류: {data.get('msg1')}")
-                    return stocks
-
-                output = data.get("output", [])
-
-                for item in output[:limit]:
-                    symbol = item.get("mksc_shrn_iscd", "").zfill(6)
-                    name = item.get("hts_kor_isnm", "")
-                    price = float(item.get("stck_prpr", 0) or 0)
-                    change_pct = float(item.get("prdy_ctrt", 0) or 0)
-                    volume = int(item.get("acml_vol", 0) or 0)
-
-                    # 거래대금 계산
-                    trading_value = volume * price
-
-                    # 필터링
-                    if price < 1000:  # 1,000원 미만 동전주 항상 제외
-                        continue
-                    if change_pct < self.min_change_pct:
-                        continue
-                    if trading_value < self.min_trading_value:  # 거래대금 1억 미만 제외
-                        continue
-                    if change_pct > self.max_change_pct:
-                        continue
-                    # ETF/ETN/파생상품 제외
-                    if self._is_etf_etn(name):
-                        logger.debug(f"[스크리닝] ETF/ETN 제외: {name}({symbol})")
-                        continue
-
-                    score = min(change_pct * 8, 100)
-
-                    stocks.append(ScreenedStock(
-                        symbol=symbol,
-                        name=name,
-                        price=price,
-                        change_pct=change_pct,
-                        volume=volume,
-                        score=score,
-                        reasons=[f"등락률 {change_pct:+.2f}%"],
-                    ))
+                stocks.append(ScreenedStock(
+                    symbol=symbol,
+                    name=name,
+                    price=price,
+                    change_pct=change_pct,
+                    volume=volume,
+                    score=score,
+                    reasons=[f"기관 순매수 {net_buy_qty:,}주"],
+                ))
 
             stocks.sort(key=lambda x: x.score, reverse=True)
             self._update_cache(cache_key, stocks)
-
-            logger.info(f"[Screener] 등락률 상위 종목 {len(stocks)}개 발굴")
-            return stocks
+            logger.info(f"[Screener] 기관 순매수 {len(stocks)}개 발굴")
+            return stocks[:limit]
 
         except Exception as e:
-            logger.error(f"등락률 스크리닝 오류: {e}")
+            logger.error(f"기관 순매수 스크리닝 오류: {e}")
             return stocks
 
     # ============================================================
@@ -711,6 +681,29 @@ class StockScreener:
                         bonus -= 5
                         reasons.append(f"MA20하회({ma_position:.1f}%)")
 
+                    # RSI-14 계산 (bot_schedulers 자동진입 필터용)
+                    if len(closes) >= 15:
+                        gains = []
+                        losses = []
+                        for _i in range(-14, 0):
+                            _diff = closes[_i] - closes[_i - 1]
+                            if _diff > 0:
+                                gains.append(_diff)
+                                losses.append(0)
+                            else:
+                                gains.append(0)
+                                losses.append(abs(_diff))
+                        _avg_gain = sum(gains) / 14
+                        _avg_loss = sum(losses) / 14
+                        if _avg_loss > 0:
+                            _rs = _avg_gain / _avg_loss
+                            _rsi_14 = 100 - (100 / (1 + _rs))
+                            reasons.append(f"RSI:{_rsi_14:.1f}")
+                            if _rsi_14 > 75:
+                                bonus -= 10
+                            elif _rsi_14 > 70:
+                                bonus -= 5
+
                     if bonus != 0:
                         all_stocks[symbol].score += bonus
                         all_stocks[symbol].reasons.extend(reasons)
@@ -881,6 +874,126 @@ class StockScreener:
 
         except Exception as e:
             logger.warning(f"[Screener] 변동성 필터 전체 오류 (무시): {e}")
+
+    async def _apply_spdi_filter(self, all_stocks: Dict[str, "ScreenedStock"]):
+        """
+        수급-가격 괴리 필터 (SPDI: Supply-Price Divergence Index)
+
+        수급(기관/외국인)과 가격 변동의 방향 교차 분석:
+        A. 수급↑ + 가격 횡보/소폭 → 물량 소화 중 → 고득점 (SEPA형 기회)
+        B. 수급↑ + 가격 급등 → 이미 늦음 → 소폭 감점
+        C. 수급없음 + 가격 급등 → 개인 단발 급등 → 강한 감점 (모멘텀 손실 원인)
+        """
+        try:
+            spdi_applied = 0
+            for symbol, stock in all_stocks.items():
+                change = stock.change_pct
+                has_foreign = any("외국인" in r for r in stock.reasons)
+                has_inst = any("기관" in r for r in stock.reasons)
+                has_supply = has_foreign or has_inst
+                has_dual = has_foreign and has_inst
+
+                if has_supply and 0 < change <= 3.0:
+                    # 유형 A: 수급 있는데 가격 조용 → 최고 기회
+                    bonus = 20 if has_dual else 12
+                    stock.score += bonus
+                    stock.reasons.append(f"SPDI↑ 수급선행(가격{change:+.1f}%)")
+                    spdi_applied += 1
+                elif not has_supply and change >= 5.0:
+                    # 유형 C: 수급 없는 급등 → 개인 단발 → 강한 감점
+                    stock.score = max(stock.score - 20, 0)
+                    stock.reasons.append(f"SPDI↓ 수급부재급등(가격{change:+.1f}%)")
+                    spdi_applied += 1
+                elif has_supply and change >= 8.0:
+                    # 유형 B: 수급+급등 동시 → 후행 타이밍
+                    stock.score = max(stock.score - 8, 0)
+                    stock.reasons.append(f"SPDI중립 수급후행(가격{change:+.1f}%)")
+                    spdi_applied += 1
+
+            if spdi_applied:
+                logger.info(f"[Screener] SPDI 필터 {spdi_applied}개 적용")
+        except Exception as e:
+            logger.warning(f"[Screener] SPDI 필터 오류 (무시): {e}")
+
+    async def _apply_inst_sell_blacklist(self, all_stocks: Dict[str, "ScreenedStock"]):
+        """
+        기관 순매도 블랙리스트
+
+        기관이 5만주 이상 대량 매도 중인 종목에 강한 감점.
+        fetch_foreign_institution 캐시를 활용하므로 추가 API 호출 없음.
+        """
+        kmd = self._kis_market_data or get_kis_market_data()
+        try:
+            raw_kospi = await kmd.fetch_foreign_institution(market="0001", investor="2")
+            raw_kosdaq = await kmd.fetch_foreign_institution(market="0002", investor="2")
+
+            blacklisted = 0
+            for item in raw_kospi + raw_kosdaq:
+                net_buy = item.get("net_buy_qty", 0)
+                symbol = item.get("symbol", "")
+                if net_buy < -50000 and symbol in all_stocks:
+                    all_stocks[symbol].score = max(all_stocks[symbol].score - 25, 0)
+                    all_stocks[symbol].reasons.append(f"기관대량매도({net_buy:,}주)")
+                    blacklisted += 1
+
+            if blacklisted:
+                logger.info(f"[Screener] 기관 순매도 블랙리스트 {blacklisted}개 적용")
+        except Exception as e:
+            logger.debug(f"[Screener] 기관 순매도 블랙리스트 오류 (무시): {e}")
+
+    def _record_supply_demand(self, all_stocks: Dict[str, "ScreenedStock"]):
+        """수급 데이터 누적 기록 (5분 주기 호출)"""
+        from datetime import date as _date
+        today_str = _date.today().isoformat()
+        if self._sd_history_date != today_str:
+            self._sd_history.clear()
+            self._sd_history_date = today_str
+
+        now = datetime.now()
+        for symbol, stock in all_stocks.items():
+            has_foreign = any("외국인" in r for r in stock.reasons)
+            has_inst = any("기관" in r for r in stock.reasons)
+            if has_foreign or has_inst:
+                if symbol not in self._sd_history:
+                    self._sd_history[symbol] = []
+                self._sd_history[symbol].append({
+                    "ts": now,
+                    "foreign": 1 if has_foreign else 0,
+                    "inst": 1 if has_inst else 0,
+                })
+                # 최대 36회(3시간) 유지
+                if len(self._sd_history[symbol]) > 36:
+                    self._sd_history[symbol] = self._sd_history[symbol][-36:]
+
+    async def _apply_supply_accumulation_bonus(self, all_stocks: Dict[str, "ScreenedStock"]):
+        """수급 누적 보너스: 연속 3회 이상 수급 잡힌 종목에 보너스"""
+        try:
+            bonus_count = 0
+            for symbol, stock in all_stocks.items():
+                history = self._sd_history.get(symbol, [])
+                if len(history) < 3:
+                    continue
+                # 최근 3회 연속 수급 존재 여부
+                recent = history[-3:]
+                consecutive = all(
+                    (h["foreign"] + h["inst"]) > 0 for h in recent
+                )
+                if consecutive:
+                    # 연속 횟수에 비례한 보너스 (3회=+5, 6회=+10, 최대 +15)
+                    streak = 0
+                    for h in reversed(history):
+                        if (h["foreign"] + h["inst"]) > 0:
+                            streak += 1
+                        else:
+                            break
+                    bonus = min(streak * 2, 15)
+                    stock.score += bonus
+                    stock.reasons.append(f"수급누적{streak}회(+{bonus})")
+                    bonus_count += 1
+            if bonus_count:
+                logger.info(f"[Screener] 수급 누적 보너스 {bonus_count}개 적용")
+        except Exception as e:
+            logger.debug(f"[Screener] 수급 누적 보너스 오류 (무시): {e}")
 
     # ============================================================
     # 네이버 금융 크롤링 (백업 데이터 소스)
@@ -1286,7 +1399,7 @@ class StockScreener:
         # ============================================================
         kis_results = await asyncio.gather(
             self.screen_volume_surge(limit=20),
-            self.screen_top_gainers(limit=20),
+            self.screen_institutional_buying(limit=20),
             self.screen_new_highs(limit=15),
             self.screen_fluctuation_rank(limit=20),
             self.screen_foreign_buying(limit=20),
@@ -1303,6 +1416,29 @@ class StockScreener:
                 kis_success = True
                 for stock in res:
                     merge_stock(stock, weight)
+
+        # ── 수급 복합 보너스: 외국인+기관 동시 순매수 ──
+        try:
+            foreign_set = set()
+            inst_set = set()
+            for res in kis_results:
+                if isinstance(res, list):
+                    for stock in res:
+                        if any("외국인" in r for r in stock.reasons):
+                            foreign_set.add(stock.symbol)
+                        if any("기관" in r for r in stock.reasons):
+                            inst_set.add(stock.symbol)
+
+            dual_buying = foreign_set & inst_set
+            for symbol in dual_buying:
+                if symbol in all_stocks:
+                    all_stocks[symbol].score += 10
+                    all_stocks[symbol].reasons.append("외국인+기관 동시 순매수")
+                    logger.debug(f"[Screener] {symbol} 수급 복합 보너스 +10")
+            if dual_buying:
+                logger.info(f"[Screener] 수급 복합 보너스 {len(dual_buying)}개 적용")
+        except Exception as e:
+            logger.debug(f"[Screener] 수급 복합 보너스 계산 오류: {e}")
 
         # ============================================================
         # 2. 네이버 금융 크롤링 (병렬 호출, KIS 실패 시 주력)
@@ -1394,6 +1530,22 @@ class StockScreener:
         # 7. 변동성 필터 (ATR 기반 고변동성 종목 감점)
         # ============================================================
         await self._apply_volatility_filter(all_stocks)
+
+        # ============================================================
+        # 7-1. 수급-가격 괴리 필터 (SPDI)
+        # ============================================================
+        await self._apply_spdi_filter(all_stocks)
+
+        # ============================================================
+        # 7-2. 기관 순매도 블랙리스트
+        # ============================================================
+        await self._apply_inst_sell_blacklist(all_stocks)
+
+        # ============================================================
+        # 7-3. 수급 누적 이력 기록 + 연속 수급 보너스
+        # ============================================================
+        self._record_supply_demand(all_stocks)
+        await self._apply_supply_accumulation_bonus(all_stocks)
 
         # ============================================================
         # 8. 결과 정리

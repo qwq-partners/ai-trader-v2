@@ -142,10 +142,11 @@ class SwingScreener:
             except Exception as e:
                 logger.warning(f"[스윙스크리너] 등락률 순위 조회 실패: {e}")
 
-            # 외국인 순매수
+            # 외국인 순매수 (코스피 + 코스닥)
             try:
-                foreign = await self._kis_market_data.fetch_foreign_institution(investor="1")
-                for item in foreign[:30]:
+                foreign_kospi = await self._kis_market_data.fetch_foreign_institution(market="0001", investor="1")
+                foreign_kosdaq = await self._kis_market_data.fetch_foreign_institution(market="0002", investor="1")
+                for item in (foreign_kospi + foreign_kosdaq)[:50]:
                     symbol = item.get("symbol", item.get("stck_shrn_iscd", ""))
                     name = item.get("name", item.get("hts_kor_isnm", symbol))
                     if symbol and not self._should_exclude(name):
@@ -155,10 +156,11 @@ class SwingScreener:
             except Exception as e:
                 logger.debug(f"[스윙스크리너] 외국인 순매수 조회 실패: {e}")
 
-            # 기관 순매수
+            # 기관 순매수 (코스피 + 코스닥)
             try:
-                inst = await self._kis_market_data.fetch_foreign_institution(investor="2")
-                for item in inst[:30]:
+                inst_kospi = await self._kis_market_data.fetch_foreign_institution(market="0001", investor="2")
+                inst_kosdaq = await self._kis_market_data.fetch_foreign_institution(market="0002", investor="2")
+                for item in (inst_kospi + inst_kosdaq)[:50]:
                     symbol = item.get("symbol", item.get("stck_shrn_iscd", ""))
                     name = item.get("name", item.get("hts_kor_isnm", symbol))
                     if symbol and not self._should_exclude(name):
@@ -352,6 +354,43 @@ class SwingScreener:
         | 재무 | 20% | PER/PBR/ROE |
         | 섹터 | 10% | 섹터 모멘텀 |
         """
+        # ── 수급 데이터 일괄 조회 (LCI용) ──
+        supply_demand: Dict[str, Dict[str, int]] = {}  # symbol -> {foreign_net_buy, inst_net_buy}
+        if self._kis_market_data:
+            try:
+                fi_results = await asyncio.gather(
+                    self._kis_market_data.fetch_foreign_institution(market="0001", investor="1"),
+                    self._kis_market_data.fetch_foreign_institution(market="0002", investor="1"),
+                    self._kis_market_data.fetch_foreign_institution(market="0001", investor="2"),
+                    self._kis_market_data.fetch_foreign_institution(market="0002", investor="2"),
+                    return_exceptions=True,
+                )
+                # 외국인 (index 0,1)
+                for res in fi_results[:2]:
+                    if isinstance(res, list):
+                        for item in res:
+                            sym = item.get("symbol", "")
+                            if sym not in supply_demand:
+                                supply_demand[sym] = {"foreign_net_buy": 0, "inst_net_buy": 0}
+                            supply_demand[sym]["foreign_net_buy"] += item.get("net_buy_qty", 0)
+                # 기관 (index 2,3)
+                for res in fi_results[2:]:
+                    if isinstance(res, list):
+                        for item in res:
+                            sym = item.get("symbol", "")
+                            if sym not in supply_demand:
+                                supply_demand[sym] = {"foreign_net_buy": 0, "inst_net_buy": 0}
+                            supply_demand[sym]["inst_net_buy"] += item.get("net_buy_qty", 0)
+                logger.info(f"[스윙스크리너] 수급 데이터 조회: {len(supply_demand)}종목")
+            except Exception as e:
+                logger.warning(f"[스윙스크리너] 수급 데이터 조회 실패: {e}")
+
+        # ── 후보별 수급 데이터 주입 ──
+        for candidate in candidates:
+            sd = supply_demand.get(candidate.symbol, {})
+            candidate.indicators["foreign_net_buy"] = sd.get("foreign_net_buy", 0)
+            candidate.indicators["inst_net_buy"] = sd.get("inst_net_buy", 0)
+
         for candidate in candidates:
             ind = candidate.indicators
 
@@ -481,4 +520,14 @@ class SwingScreener:
                 c.indicators["lci"] = None
             else:
                 lci = 0.5 * z_foreign[i] + 0.5 * z_inst[i]
+
+                # 수급 가속도: 외국인+기관 동시 순매수 시 LCI 부스트
+                foreign_val = all_foreign[i]
+                inst_val = all_inst[i]
+                if foreign_val > 0 and inst_val > 0:
+                    # 양쪽 다 순매수 → 가속도 보너스 (LCI 0.3~0.5 추가)
+                    accel = min(0.3 + (z_foreign[i] + z_inst[i]) * 0.1, 0.5)
+                    lci += max(accel, 0)
+                    c.indicators["supply_accel"] = round(accel, 3)
+
                 c.indicators["lci"] = round(lci, 3)
