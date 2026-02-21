@@ -71,10 +71,10 @@ class SwingScreener:
             f"[스윙스크리너] 필터 결과: RSI2={len(rsi2_candidates)}개, SEPA={len(sepa_candidates)}개"
         )
 
-        # 4단계: LCI z-score 계산 + 수급/재무 점수
+        # 4단계: 수급/재무 점수 + LCI z-score 계산
         all_candidates = rsi2_candidates + sepa_candidates
-        self._compute_lci_zscore(all_candidates)
         scored = await self._apply_composite_score(all_candidates)
+        self._compute_lci_zscore(scored)  # 수급 데이터 주입 후 LCI 계산
 
         # 점수 순 정렬
         scored.sort(key=lambda c: c.score, reverse=True)
@@ -391,24 +391,25 @@ class SwingScreener:
             candidate.indicators["foreign_net_buy"] = sd.get("foreign_net_buy", 0)
             candidate.indicators["inst_net_buy"] = sd.get("inst_net_buy", 0)
 
+        # 밸류에이션 일괄 조회 (배치 API 활용)
+        if self._kis_market_data:
+            try:
+                symbols = [c.symbol for c in candidates]
+                valuations = await self._kis_market_data.fetch_batch_valuations(symbols)
+                for candidate in candidates:
+                    val = valuations.get(candidate.symbol)
+                    if val:
+                        candidate.indicators["per"] = val.get("per", 0)
+                        candidate.indicators["pbr"] = val.get("pbr", 0)
+                        candidate.indicators["roe"] = val.get("roe", 0)
+                logger.debug(f"[스윙스크리너] 밸류에이션 일괄 조회: {len(valuations)}종목")
+            except Exception as e:
+                logger.debug(f"[스윙스크리너] 밸류에이션 일괄 조회 실패: {e}")
+
         for candidate in candidates:
-            ind = candidate.indicators
-
-            # 수급 데이터 보강
-            if self._kis_market_data:
-                try:
-                    valuation = await self._kis_market_data.fetch_stock_valuation(candidate.symbol)
-                    if valuation:
-                        ind["per"] = valuation.get("per", 0)
-                        ind["pbr"] = valuation.get("pbr", 0)
-                        ind["roe"] = valuation.get("roe", 0)
-                    await asyncio.sleep(0.1)  # rate limit
-                except Exception:
-                    pass
-
             # 점수는 전략의 generate_batch_signals에서 계산하므로
             # 여기서는 기본 기술적 점수만 설정
-            score = self._base_technical_score(ind, candidate.strategy)
+            score = self._base_technical_score(candidate.indicators, candidate.strategy)
             candidate.score = score
 
         return candidates
@@ -522,12 +523,10 @@ class SwingScreener:
                 lci = 0.5 * z_foreign[i] + 0.5 * z_inst[i]
 
                 # 수급 가속도: 외국인+기관 동시 순매수 시 LCI 부스트
-                foreign_val = all_foreign[i]
-                inst_val = all_inst[i]
-                if foreign_val > 0 and inst_val > 0:
-                    # 양쪽 다 순매수 → 가속도 보너스 (LCI 0.3~0.5 추가)
-                    accel = min(0.3 + (z_foreign[i] + z_inst[i]) * 0.1, 0.5)
-                    lci += max(accel, 0)
+                if all_foreign[i] > 0 and all_inst[i] > 0:
+                    raw_accel = 0.3 + (z_foreign[i] + z_inst[i]) * 0.1
+                    accel = max(0, min(raw_accel, 0.5))  # 0~0.5 클램프
+                    lci += accel
                     c.indicators["supply_accel"] = round(accel, 3)
 
                 c.indicators["lci"] = round(lci, 3)

@@ -9,6 +9,7 @@ run_trader.py의 TradingBot에서 상속하여 사용.
 import asyncio
 import aiohttp
 import os
+import re
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -953,57 +954,55 @@ class SchedulerMixin:
                                     if _strategy_type == StrategyType.MOMENTUM_BREAKOUT:
                                         # 1) vol_ratio 체크 — 수급 있으면 임계 완화
                                         _vol_ratio = 0.0
+                                        _vol_match = None
                                         for reason in stock.reasons:
-                                            if "거래량" in reason and "배" in reason:
-                                                try:
-                                                    _vol_ratio = float(reason.split("거래량")[1].split("배")[0].strip())
-                                                except Exception:
-                                                    pass
+                                            _vol_match = re.search(r"거래량\s*([\d.]+)배", reason)
+                                            if _vol_match:
+                                                _vol_ratio = float(_vol_match.group(1))
+                                                break
                                         # reasons 파싱 실패 시 ScreenedStock.volume_ratio 폴백
                                         if _vol_ratio == 0.0 and stock.volume_ratio > 0:
                                             _vol_ratio = stock.volume_ratio
-                                        # 수급 유무 판별
-                                        _has_supply = any("기관" in r or "외국인" in r for r in stock.reasons)
+                                        # 수급 유무 판별 (순매수만, 매도 제외)
+                                        _has_supply = any(
+                                            ("기관" in r or "외국인" in r) and "매도" not in r
+                                            for r in stock.reasons
+                                        )
                                         _vol_threshold = 1.5 if _has_supply else 2.5
-                                        if _vol_ratio > 0 and _vol_ratio < _vol_threshold:
+                                        # vol_ratio 미확인(=0) 시 차단 (거래량 검증 불가)
+                                        if _vol_ratio <= 0:
+                                            logger.debug(f"[스크리닝] {stock.symbol} 탈락: 거래량 비율 미확인")
+                                            continue
+                                        if _vol_ratio < _vol_threshold:
                                             logger.debug(
                                                 f"[스크리닝] {stock.symbol} 탈락: 거래량 부족 "
                                                 f"({_vol_ratio:.1f}배 < {_vol_threshold}배, 수급={'있음' if _has_supply else '없음'})"
                                             )
                                             continue
 
-                                        # 2) MA20 모멘텀 체크 (기존)
+                                        # 2) MA20 모멘텀 체크
                                         _has_momentum = False
-                                        for reason in stock.reasons:
-                                            if "MA20" in reason:
-                                                try:
-                                                    _ma20_pct = float(reason.split("MA20")[1].replace("+", "").replace("%", "").strip())
-                                                    if _ma20_pct >= 2.0:
-                                                        _has_momentum = True
-                                                except Exception:
-                                                    _has_momentum = True  # 파싱 실패 시 통과
-                                                break
+                                        _ma_match = re.search(r"MA20[+]?([\d.]+)%", " ".join(stock.reasons))
+                                        if _ma_match:
+                                            if float(_ma_match.group(1)) >= 2.0:
+                                                _has_momentum = True
                                         if not _has_momentum and rt_change < 3.0:
                                             logger.debug(f"[스크리닝] {stock.symbol} 탈락: 모멘텀 부족 (등락률 {rt_change:+.1f}%)")
                                             continue
 
-                                        # 3) 과열 RSI 체크 (reasons에서 RSI 정보 있으면)
+                                        # 3) 과열 RSI 체크 (정규식 파싱)
                                         _rsi_blocked = False
-                                        for reason in stock.reasons:
-                                            if "RSI" in reason:
-                                                try:
-                                                    _rsi_val = float(reason.split("RSI")[1].replace(":", "").strip().split()[0])
-                                                    if _rsi_val > 75:
-                                                        _rsi_blocked = True
-                                                except Exception:
-                                                    pass
+                                        _rsi_match = re.search(r"RSI[:\s]*([\d.]+)", " ".join(stock.reasons))
+                                        if _rsi_match:
+                                            _rsi_val = float(_rsi_match.group(1))
+                                            if _rsi_val > 75:
+                                                _rsi_blocked = True
                                         if _rsi_blocked:
                                             logger.debug(f"[스크리닝] {stock.symbol} 탈락: RSI 과열 (> 75)")
                                             continue
 
                                         # 4) 장초반 수급 필터: 11시 전 수급 미확인 종목은 점수 85+ 필수
-                                        _now_hour = datetime.now().hour
-                                        if _now_hour < 11 and not _has_supply:
+                                        if now.hour < 11 and not _has_supply:
                                             if stock.score < 85:
                                                 logger.debug(
                                                     f"[스크리닝] {stock.symbol} 탈락: 장초반 수급부재 "

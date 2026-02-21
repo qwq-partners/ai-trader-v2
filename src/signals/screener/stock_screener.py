@@ -30,6 +30,7 @@ from loguru import logger
 from ...utils.kis_token_manager import get_token_manager
 from ...data.providers.kis_market_data import KISMarketData, get_kis_market_data
 from ...indicators.atr import calculate_atr
+from ...indicators.technical import TechnicalIndicators
 
 
 # ============================================================
@@ -52,6 +53,8 @@ class ScreenedStock:
     score: float = 0
     reasons: List[str] = field(default_factory=list)
     screened_at: datetime = field(default_factory=datetime.now)
+    has_foreign_buying: bool = False  # 외국인 순매수
+    has_inst_buying: bool = False     # 기관 순매수
 
     def __hash__(self):
         return hash(self.symbol)
@@ -304,8 +307,10 @@ class StockScreener:
                     price=price,
                     change_pct=change_pct,
                     volume=volume,
+                    volume_ratio=item.get("volume_ratio", 1.0),
                     score=score,
                     reasons=[f"기관 순매수 {net_buy_qty:,}주"],
+                    has_inst_buying=True,
                 ))
 
             stocks.sort(key=lambda x: x.score, reverse=True)
@@ -524,8 +529,10 @@ class StockScreener:
                     price=price,
                     change_pct=change_pct,
                     volume=volume,
+                    volume_ratio=item.get("volume_ratio", 1.0),
                     score=score,
                     reasons=[f"외국인 순매수 {net_buy_qty:,}주"],
+                    has_foreign_buying=True,
                 ))
 
             stocks.sort(key=lambda x: x.score, reverse=True)
@@ -617,7 +624,7 @@ class StockScreener:
         except Exception as e:
             logger.warning(f"[Screener] 재무 건전성 평가 오류 (무시): {e}")
 
-    async def _apply_momentum_filter(self, all_stocks: Dict[str, "ScreenedStock"]):
+    async def _apply_momentum_filter(self, all_stocks: Dict[str, "ScreenedStock"], daily_cache: Optional[Dict] = None):
         """
         모멘텀 지속성 검증 및 점수 조정
 
@@ -634,11 +641,18 @@ class StockScreener:
             # 점수 높은 순으로 상위 20개만 확인 (API 부하 감소)
             symbols = sorted(all_stocks.keys(), key=lambda s: all_stocks[s].score, reverse=True)[:20]
 
+            if daily_cache is None:
+                daily_cache = {}
+
             momentum_applied = 0
             for symbol in symbols:
                 try:
-                    # 최근 30일 일봉 조회
-                    daily_prices = await self._broker.get_daily_prices(symbol, days=30)
+                    # 최근 30일 일봉 조회 (캐시 우선)
+                    if symbol in daily_cache:
+                        daily_prices = daily_cache[symbol]
+                    else:
+                        daily_prices = await self._broker.get_daily_prices(symbol, days=30)
+                        daily_cache[symbol] = daily_prices
                     if len(daily_prices) < 20:
                         continue
 
@@ -681,28 +695,14 @@ class StockScreener:
                         bonus -= 5
                         reasons.append(f"MA20하회({ma_position:.1f}%)")
 
-                    # RSI-14 계산 (bot_schedulers 자동진입 필터용)
-                    if len(closes) >= 15:
-                        gains = []
-                        losses = []
-                        for _i in range(-14, 0):
-                            _diff = closes[_i] - closes[_i - 1]
-                            if _diff > 0:
-                                gains.append(_diff)
-                                losses.append(0)
-                            else:
-                                gains.append(0)
-                                losses.append(abs(_diff))
-                        _avg_gain = sum(gains) / 14
-                        _avg_loss = sum(losses) / 14
-                        if _avg_loss > 0:
-                            _rs = _avg_gain / _avg_loss
-                            _rsi_14 = 100 - (100 / (1 + _rs))
-                            reasons.append(f"RSI:{_rsi_14:.1f}")
-                            if _rsi_14 > 75:
-                                bonus -= 10
-                            elif _rsi_14 > 70:
-                                bonus -= 5
+                    # RSI-14 계산 (Wilder's Smoothing, bot_schedulers 자동진입 필터용)
+                    _rsi_14 = TechnicalIndicators._rsi(closes, 14)
+                    if _rsi_14 is not None:
+                        reasons.append(f"RSI:{_rsi_14:.1f}")
+                        if _rsi_14 > 75:
+                            bonus -= 10
+                        elif _rsi_14 > 70:
+                            bonus -= 5
 
                     if bonus != 0:
                         all_stocks[symbol].score += bonus
@@ -798,7 +798,7 @@ class StockScreener:
         except Exception as e:
             logger.warning(f"[Screener] 섹터 분산 조정 오류 (무시): {e}")
 
-    async def _apply_volatility_filter(self, all_stocks: Dict[str, "ScreenedStock"]):
+    async def _apply_volatility_filter(self, all_stocks: Dict[str, "ScreenedStock"], daily_cache: Optional[Dict] = None):
         """
         변동성 필터 (ATR 기반)
 
@@ -817,11 +817,18 @@ class StockScreener:
             # 점수 높은 순으로 상위 20개만 확인 (API 부하 감소)
             symbols = sorted(all_stocks.keys(), key=lambda s: all_stocks[s].score, reverse=True)[:20]
 
+            if daily_cache is None:
+                daily_cache = {}
+
             volatility_applied = 0
             for symbol in symbols:
                 try:
-                    # 최근 30일 일봉 조회
-                    daily_prices = await self._broker.get_daily_prices(symbol, days=30)
+                    # 최근 30일 일봉 조회 (캐시 우선)
+                    if symbol in daily_cache:
+                        daily_prices = daily_cache[symbol]
+                    else:
+                        daily_prices = await self._broker.get_daily_prices(symbol, days=30)
+                        daily_cache[symbol] = daily_prices
                     if len(daily_prices) < 20:
                         continue
 
@@ -888,10 +895,8 @@ class StockScreener:
             spdi_applied = 0
             for symbol, stock in all_stocks.items():
                 change = stock.change_pct
-                has_foreign = any("외국인" in r for r in stock.reasons)
-                has_inst = any("기관" in r for r in stock.reasons)
-                has_supply = has_foreign or has_inst
-                has_dual = has_foreign and has_inst
+                has_supply = stock.has_foreign_buying or stock.has_inst_buying
+                has_dual = stock.has_foreign_buying and stock.has_inst_buying
 
                 if has_supply and 0 < change <= 3.0:
                     # 유형 A: 수급 있는데 가격 조용 → 최고 기회
@@ -951,21 +956,19 @@ class StockScreener:
 
         now = datetime.now()
         for symbol, stock in all_stocks.items():
-            has_foreign = any("외국인" in r for r in stock.reasons)
-            has_inst = any("기관" in r for r in stock.reasons)
-            if has_foreign or has_inst:
+            if stock.has_foreign_buying or stock.has_inst_buying:
                 if symbol not in self._sd_history:
                     self._sd_history[symbol] = []
                 self._sd_history[symbol].append({
                     "ts": now,
-                    "foreign": 1 if has_foreign else 0,
-                    "inst": 1 if has_inst else 0,
+                    "foreign": 1 if stock.has_foreign_buying else 0,
+                    "inst": 1 if stock.has_inst_buying else 0,
                 })
                 # 최대 36회(3시간) 유지
                 if len(self._sd_history[symbol]) > 36:
                     self._sd_history[symbol] = self._sd_history[symbol][-36:]
 
-    async def _apply_supply_accumulation_bonus(self, all_stocks: Dict[str, "ScreenedStock"]):
+    def _apply_supply_accumulation_bonus(self, all_stocks: Dict[str, "ScreenedStock"]):
         """수급 누적 보너스: 연속 3회 이상 수급 잡힌 종목에 보너스"""
         try:
             bonus_count = 0
@@ -973,19 +976,14 @@ class StockScreener:
                 history = self._sd_history.get(symbol, [])
                 if len(history) < 3:
                     continue
-                # 최근 3회 연속 수급 존재 여부
-                recent = history[-3:]
-                consecutive = all(
-                    (h["foreign"] + h["inst"]) > 0 for h in recent
-                )
-                if consecutive:
-                    # 연속 횟수에 비례한 보너스 (3회=+5, 6회=+10, 최대 +15)
-                    streak = 0
-                    for h in reversed(history):
-                        if (h["foreign"] + h["inst"]) > 0:
-                            streak += 1
-                        else:
-                            break
+                # 연속 수급 횟수 계산 (역순 탐색)
+                streak = 0
+                for h in reversed(history):
+                    if (h["foreign"] + h["inst"]) > 0:
+                        streak += 1
+                    else:
+                        break
+                if streak >= 3:
                     bonus = min(streak * 2, 15)
                     stock.score += bonus
                     stock.reasons.append(f"수급누적{streak}회(+{bonus})")
@@ -1393,6 +1391,11 @@ class StockScreener:
                 all_stocks[stock.symbol].score += stock.score * weight
                 all_stocks[stock.symbol].reasons.extend(stock.reasons)
                 source_counts[stock.symbol] += 1
+                # 수급 플래그 병합 (OR)
+                if stock.has_foreign_buying:
+                    all_stocks[stock.symbol].has_foreign_buying = True
+                if stock.has_inst_buying:
+                    all_stocks[stock.symbol].has_inst_buying = True
 
         # ============================================================
         # 1. KIS API 스크리닝 (병렬 호출)
@@ -1417,26 +1420,16 @@ class StockScreener:
                 for stock in res:
                     merge_stock(stock, weight)
 
-        # ── 수급 복합 보너스: 외국인+기관 동시 순매수 ──
+        # ── 수급 복합 보너스: 외국인+기관 동시 순매수 (플래그 기반) ──
         try:
-            foreign_set = set()
-            inst_set = set()
-            for res in kis_results:
-                if isinstance(res, list):
-                    for stock in res:
-                        if any("외국인" in r for r in stock.reasons):
-                            foreign_set.add(stock.symbol)
-                        if any("기관" in r for r in stock.reasons):
-                            inst_set.add(stock.symbol)
-
-            dual_buying = foreign_set & inst_set
-            for symbol in dual_buying:
-                if symbol in all_stocks:
-                    all_stocks[symbol].score += 10
-                    all_stocks[symbol].reasons.append("외국인+기관 동시 순매수")
-                    logger.debug(f"[Screener] {symbol} 수급 복합 보너스 +10")
-            if dual_buying:
-                logger.info(f"[Screener] 수급 복합 보너스 {len(dual_buying)}개 적용")
+            dual_count = 0
+            for symbol, stock in all_stocks.items():
+                if stock.has_foreign_buying and stock.has_inst_buying:
+                    stock.score += 10
+                    stock.reasons.append("외국인+기관 동시 순매수")
+                    dual_count += 1
+            if dual_count:
+                logger.info(f"[Screener] 수급 복합 보너스 {dual_count}개 적용")
         except Exception as e:
             logger.debug(f"[Screener] 수급 복합 보너스 계산 오류: {e}")
 
@@ -1517,9 +1510,10 @@ class StockScreener:
         await self._apply_valuation_bonus(all_stocks)
 
         # ============================================================
-        # 5. 모멘텀 지속성 검증 (5일/20일 추세)
+        # 5. 모멘텀 지속성 검증 (5일/20일 추세) — 일봉 캐시 공유
         # ============================================================
-        await self._apply_momentum_filter(all_stocks)
+        _daily_cache: Dict[str, list] = {}
+        await self._apply_momentum_filter(all_stocks, daily_cache=_daily_cache)
 
         # ============================================================
         # 6. 섹터/업종 분산 조정 (특정 섹터 쏠림 방지)
@@ -1527,9 +1521,9 @@ class StockScreener:
         await self._apply_sector_diversity(all_stocks)
 
         # ============================================================
-        # 7. 변동성 필터 (ATR 기반 고변동성 종목 감점)
+        # 7. 변동성 필터 (ATR 기반 고변동성 종목 감점) — 일봉 캐시 재사용
         # ============================================================
-        await self._apply_volatility_filter(all_stocks)
+        await self._apply_volatility_filter(all_stocks, daily_cache=_daily_cache)
 
         # ============================================================
         # 7-1. 수급-가격 괴리 필터 (SPDI)
@@ -1545,7 +1539,7 @@ class StockScreener:
         # 7-3. 수급 누적 이력 기록 + 연속 수급 보너스
         # ============================================================
         self._record_supply_demand(all_stocks)
-        await self._apply_supply_accumulation_bonus(all_stocks)
+        self._apply_supply_accumulation_bonus(all_stocks)
 
         # ============================================================
         # 8. 결과 정리
