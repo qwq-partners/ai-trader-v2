@@ -53,8 +53,8 @@ class LLMConfig:
     openai_model_heavy: str = "gpt-5.2"
     # Light: 빠른 분류, 테마 탐지에 사용
     openai_model_light: str = "gpt-5-mini"
-    gemini_model_heavy: str = "gemini-2.5-pro"
-    gemini_model_light: str = "gemini-2.5-flash-lite"
+    gemini_model_heavy: str = "gemini-3.1-pro"
+    gemini_model_light: str = "gemini-3-flash"
 
     # 타임아웃 (Thinking 모델은 추론에 시간이 걸림)
     timeout_seconds: int = 120
