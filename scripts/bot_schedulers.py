@@ -169,6 +169,12 @@ class SchedulerMixin:
                             self.engine.risk_manager._pending_timestamps.clear()
                             self.engine.risk_manager._pending_sides.clear()
 
+                        # 엔진 주문 예약 현금 및 폴백 횟수 초기화 (전일 잔여 예약 방지)
+                        if hasattr(self.engine, '_reserved_by_order'):
+                            self.engine._reserved_by_order.clear()
+                        if hasattr(self.engine, '_pending_fallback_count'):
+                            self.engine._pending_fallback_count.clear()
+
                         # 거래 로거 일일 기록 플러시 및 초기화
                         trading_logger.flush()
                         trading_logger._daily_records.clear()

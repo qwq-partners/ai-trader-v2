@@ -33,18 +33,18 @@ function renderThemes(themes) {
         const scorePct = Math.min(theme.score, 100);
 
         const keywords = (theme.keywords || []).slice(0, 5).map(k =>
-            `<span class="badge badge-purple">${k}</span>`
+            `<span class="badge badge-purple">${esc(k)}</span>`
         ).join(' ');
 
         const stocks = (theme.related_stocks || []).slice(0, 6).map(s =>
-            `<span class="text-xs mono text-gray-400">${s}</span>`
+            `<span class="text-xs mono text-gray-400">${esc(s)}</span>`
         ).join(', ');
 
         const timeStr = theme.detected_at ? formatTime(theme.detected_at) : '--';
 
         return `<div class="card p-4 theme-card">
             <div class="flex items-start justify-between mb-2">
-                <h3 class="font-semibold text-white">${theme.name}</h3>
+                <h3 class="font-semibold text-white">${esc(theme.name)}</h3>
                 <span class="mono text-lg font-bold" style="color:${scoreColor}">${theme.score.toFixed(0)}</span>
             </div>
             <div class="score-bar mb-3">
@@ -74,10 +74,10 @@ function renderScreening(results) {
     const rows = results.slice(0, 50).map(s => {
         const changeCls = s.change_pct > 0 ? 'text-profit' : s.change_pct < 0 ? 'text-loss' : '';
         const scoreBadge = s.score >= 80 ? 'badge-green' : s.score >= 60 ? 'badge-yellow' : 'badge-blue';
-        const reasons = (s.reasons || []).slice(0, 3).join(', ');
+        const reasons = (s.reasons || []).slice(0, 3).map(r => esc(r)).join(', ');
 
         return `<tr class="border-b hover:bg-dark-700/30" style="border-color:#31324420">
-            <td class="py-2 pr-3 font-medium text-white">${s.symbol} ${s.name ? `<span class="text-xs text-gray-500">${s.name}</span>` : ''}</td>
+            <td class="py-2 pr-3 font-medium text-white">${esc(s.symbol)} ${s.name ? `<span class="text-xs text-gray-500">${esc(s.name)}</span>` : ''}</td>
             <td class="py-2 pr-3 text-right mono">${formatNumber(s.price)}</td>
             <td class="py-2 pr-3 text-right mono ${changeCls}">${formatPct(s.change_pct)}</td>
             <td class="py-2 pr-3 text-right mono">${s.volume_ratio ? s.volume_ratio.toFixed(1) + 'x' : '--'}</td>

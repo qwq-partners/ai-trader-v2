@@ -369,10 +369,10 @@ class ExitManager:
     ) -> Optional[Tuple[str, int, str]]:
         """분할 익절 체크 (3단계, 전략별 목표 우선)"""
 
-        # 전략별 익절 목표 (None이면 글로벌 config)
-        first_pct = state.first_exit_pct or self.config.first_exit_pct
-        second_pct = state.second_exit_pct or self.config.second_exit_pct
-        third_pct = state.third_exit_pct or self.config.third_exit_pct
+        # 전략별 익절 목표 (None이면 글로벌 config, 0.0도 유효한 값으로 취급)
+        first_pct = state.first_exit_pct if state.first_exit_pct is not None else self.config.first_exit_pct
+        second_pct = state.second_exit_pct if state.second_exit_pct is not None else self.config.second_exit_pct
+        third_pct = state.third_exit_pct if state.third_exit_pct is not None else self.config.third_exit_pct
 
         # 1차 익절
         if state.current_stage == ExitStage.NONE:

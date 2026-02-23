@@ -144,6 +144,13 @@ function formatDuration(seconds) {
     return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
 }
 
+function esc(str) {
+    if (str == null) return '';
+    const d = document.createElement('div');
+    d.textContent = String(str);
+    return d.innerHTML;
+}
+
 function sessionLabel(session) {
     const map = {
         'pre_market': '프리장',

@@ -469,11 +469,12 @@ class TradingEngine:
             pos.quantity -= fill.quantity
 
             # 매도 비용 계산 (수수료 + 거래세 0.20%, fee_calculator 기준 통일)
-            sell_fee = get_fee_calculator().calculate_sell_fee(fill.total_value)
+            fee_calc = get_fee_calculator()
+            sell_fee = fee_calc.calculate_sell_fee(fill.total_value)
+            buy_fee = fee_calc.calculate_buy_fee(pos.avg_price * fill.quantity)
 
-            # 실현 손익 = (매도가 - 평균단가) × 수량 - 매도비용(수수료+거래세)
-            # fill.commission은 브로커 계산 매도수수료인데 sell_fee와 중복이므로 제외
-            realized_pnl = (fill.price - pos.avg_price) * fill.quantity - sell_fee
+            # 실현 손익 = (매도가 - 평균단가) × 수량 - 매수수수료 - 매도비용(수수료+거래세)
+            realized_pnl = (fill.price - pos.avg_price) * fill.quantity - buy_fee - sell_fee
 
             # 현금 증가 = 매도 대금 - 매도비용
             self.portfolio.cash += fill.total_value - sell_fee
@@ -770,9 +771,6 @@ class RiskManager:
         # 현금 초과 주문 방지: 주문별 예약 현금 추적 (symbol → 예약 금액)
         self._reserved_by_order: Dict[str, Decimal] = {}
 
-        # 손절 후 재진입 방지: 당일 손절 종목 (자정 리셋)
-        self._stop_loss_today: set = set()
-
         # 동시성 보호: pending 주문 관련 Lock
         self._pending_lock = asyncio.Lock()
 
@@ -810,7 +808,7 @@ class RiskManager:
         _SELL_TIMEOUT = 90  # 매도 지정가 미체결 타임아웃
         stale_sells = []
         stale_buys = []
-        for s, t in self._pending_timestamps.items():
+        for s, t in list(self._pending_timestamps.items()):
             elapsed = (now - t).total_seconds()
             is_sell = self._pending_sides.get(s) == OrderSide.SELL
             if is_sell and elapsed >= _SELL_TIMEOUT:
@@ -986,16 +984,6 @@ class RiskManager:
                 return None  # 쿨다운 중 - 조용히 무시
             else:
                 del self._order_fail_cooldown[event.symbol]
-
-        # 손절 후 재진입 방지 체크 (매수만, 당일 종일 차단)
-        if event.side == OrderSide.BUY and event.symbol in self._stop_loss_today:
-            logger.info(f"[리스크] 당일 손절 재진입 차단: {event.symbol}")
-            trading_logger.log_signal_blocked(
-                symbol=event.symbol, side=event.side.value,
-                reason="당일손절재진입차단",
-                price=float(event.price or 0), score=event.score,
-            )
-            return None
 
         # 포지션 크기 계산
         if event.side == OrderSide.SELL:

@@ -277,8 +277,9 @@ class RiskManager:
         effective_pnl = getattr(portfolio, 'effective_daily_pnl', portfolio.daily_pnl)
         daily_pnl_pct = float(effective_pnl / equity * 100)
 
-        # 1단계: -3% ~ -5% → 방어적 전략만 허용
-        if -5.0 < daily_pnl_pct <= -self.config.daily_max_loss_pct:
+        # 1단계: 손실한도 ~ hard_stop → 방어적 전략만 허용
+        hard_stop_pct = max(self.config.daily_max_loss_pct * 2.5, 5.0)
+        if -hard_stop_pct < daily_pnl_pct <= -self.config.daily_max_loss_pct:
             # 방어적 전략은 허용 (역추세, 저평가 대형주)
             defensive_strategies = {'mean_reversion', 'defensive', 'value_large_cap'}
             if strategy_type in defensive_strategies:
@@ -294,8 +295,8 @@ class RiskManager:
                 )
                 return True  # 차단
 
-        # 2단계: -5% 이상 → 완전 차단
-        if daily_pnl_pct <= -5.0:
+        # 2단계: hard_stop 이상 → 완전 차단
+        if daily_pnl_pct <= -hard_stop_pct:
             logger.warning(f"[차등리스크] 손실 {daily_pnl_pct:.1f}% → 모든 전략 차단")
             return True
 
@@ -458,8 +459,8 @@ class RiskManager:
             "daily_trades": self.daily_stats.trades,
             "consecutive_losses": self.daily_stats.consecutive_losses,
             "win_rate": (
-                self.daily_stats.wins / self.daily_stats.trades * 100
-                if self.daily_stats.trades > 0 else 0
+                self.daily_stats.wins / max(1, self.daily_stats.wins + self.daily_stats.losses) * 100
+                if (self.daily_stats.wins + self.daily_stats.losses) > 0 else 0
             ),
             "total_pnl": float(self.daily_stats.total_pnl),
         }

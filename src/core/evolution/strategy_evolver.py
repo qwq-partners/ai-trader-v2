@@ -640,20 +640,21 @@ class StrategyEvolver:
     # ============================================================
 
     def _apply_change(self, change_dict: Dict, review: ReviewResult):
-        """변경 적용"""
+        """변경 적용 (영속화 먼저 → 성공 시 런타임 적용)"""
         strategy_name = change_dict["strategy"]
         param_name = change_dict["parameter"]
         new_value = change_dict["new_value"]
 
-        # 실제 파라미터 설정
-        self._set_param_value(strategy_name, param_name, new_value)
-
-        # 영속화
+        # 영속화 먼저 (실패 시 런타임 변경도 취소)
         try:
             config_mgr = get_evolved_config_manager()
             config_mgr.save_override(strategy_name, param_name, new_value, source=change_dict.get("source", "rule"))
         except Exception as e:
-            logger.warning(f"[진화] 영속화 실패 (런타임 변경은 유지): {e}")
+            logger.error(f"[진화] 영속화 실패, 변경 취소: {e}")
+            return
+
+        # 영속화 성공 후 런타임 적용
+        self._set_param_value(strategy_name, param_name, new_value)
 
         # 활성 변경으로 등록
         change = ParameterChange(

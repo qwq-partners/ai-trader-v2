@@ -14,6 +14,7 @@ AI Trading Bot v2 - 배치 분석 엔진
     → REST API 현재가 → ExitManager 체크 → 청산 주문
 """
 
+import asyncio
 import json
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
@@ -282,7 +283,6 @@ class BatchAnalyzer:
                 )
 
                 # Rate limit
-                import asyncio
                 await asyncio.sleep(0.5)
 
             except Exception as e:
@@ -290,6 +290,10 @@ class BatchAnalyzer:
                 skipped += 1
 
         logger.info(f"[배치분석] 실행 완료: 발행={executed}개, 스킵={skipped}개")
+
+        # 실행 완료 후 시그널 파일 비우기 (재시작 시 중복 방지)
+        self._pending = []
+        self._save_json()
 
     async def monitor_positions(self):
         """[매 30분] 보유 포지션 시세 갱신 + 청산 체크"""
@@ -334,6 +338,7 @@ class BatchAnalyzer:
                         )
                         event = SignalEvent.from_signal(signal, source="position_monitor")
                         await self._engine.emit(event)
+                        continue  # 청산 시그널 발행 시 보유기간 체크 스킵
 
                 # 보유기간 초과 강제 청산
                 if pos.entry_time:
@@ -356,7 +361,6 @@ class BatchAnalyzer:
                         event = SignalEvent.from_signal(signal, source="position_monitor")
                         await self._engine.emit(event)
 
-                import asyncio
                 await asyncio.sleep(0.2)  # rate limit
 
             except Exception as e:

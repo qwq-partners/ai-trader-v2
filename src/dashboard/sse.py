@@ -65,7 +65,7 @@ class SSEManager:
         payload_bytes = payload.encode("utf-8")
 
         disconnected = set()
-        for client in self._clients:
+        for client in list(self._clients):  # 스냅샷 (await 중 add/discard 방지)
             try:
                 await client.write(payload_bytes)
             except (ConnectionResetError, ConnectionError,

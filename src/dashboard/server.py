@@ -99,6 +99,9 @@ class DashboardServer:
 
     async def start(self):
         """서버 시작"""
+        # 종목 마스터 사전 로드 (이벤트 루프 블로킹 방지)
+        await DashboardDataCollector._load_stock_master()
+
         self._app = self._create_app()
         self._runner = web.AppRunner(self._app)
         await self._runner.setup()

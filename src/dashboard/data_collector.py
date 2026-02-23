@@ -4,6 +4,7 @@ AI Trading Bot v2 - 대시보드 데이터 수집기
 봇의 런타임 데이터를 JSON 변환하여 API/SSE에 제공합니다.
 """
 
+import asyncio
 import json
 from datetime import datetime, date, timedelta
 from decimal import Decimal
@@ -47,7 +48,6 @@ class DashboardDataCollector:
         # 외부 계좌 캐시
         self._ext_accounts_cache: Optional[list] = None
         self._ext_accounts_cache_ts: Optional[datetime] = None
-        import asyncio
         self._ext_accounts_lock = asyncio.Lock()
 
     # ----------------------------------------------------------
@@ -211,8 +211,8 @@ class DashboardDataCollector:
     # ----------------------------------------------------------
 
     @classmethod
-    def _load_stock_master(cls) -> None:
-        """종목 마스터 로드 (클래스 레벨, 1회만 실행)"""
+    def _load_stock_master_sync(cls) -> None:
+        """종목 마스터 동기 로드 (pykrx 블로킹 I/O)"""
         if cls._stock_master_loaded or not PYKRX_AVAILABLE:
             return
 
@@ -238,15 +238,22 @@ class DashboardDataCollector:
         except Exception as e:
             logger.error(f"Failed to load stock master: {e}")
 
+    @classmethod
+    async def _load_stock_master(cls) -> None:
+        """종목 마스터 비동기 로드 (이벤트 루프 블로킹 방지)"""
+        if cls._stock_master_loaded or not PYKRX_AVAILABLE:
+            return
+        await asyncio.to_thread(cls._load_stock_master_sync)
+
     def _build_name_cache(self) -> Dict[str, str]:
         """종목명 캐시 구축 (60초 TTL, 봇 캐시 + 포지션 + 스크리너 + pykrx 마스터)"""
         now = datetime.now()
         if self._name_cache_updated and (now - self._name_cache_updated).total_seconds() < 60:
             return self._name_cache
 
-        # 종목 마스터 로드 (1회만)
+        # 종목 마스터 로드 (1회만, sync 폴백)
         if not self._stock_master_loaded:
-            self._load_stock_master()
+            self._load_stock_master_sync()
 
         cache: Dict[str, str] = {}
 

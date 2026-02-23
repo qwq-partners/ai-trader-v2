@@ -9,6 +9,7 @@ default.yml은 절대 수정하지 않습니다.
 출처 추적: _meta 섹션에 source(evolution|manual|rollback), timestamp 기록
 """
 
+import copy
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -55,9 +56,10 @@ class EvolvedConfigManager:
         """evolved_overrides.yml 저장"""
         try:
             self._config_dir.mkdir(parents=True, exist_ok=True)
+            snapshot = copy.deepcopy(self._overrides)
             with open(self._override_file, "w", encoding="utf-8") as f:
                 yaml.dump(
-                    self._overrides,
+                    snapshot,
                     f,
                     default_flow_style=False,
                     allow_unicode=True,

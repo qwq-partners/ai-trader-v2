@@ -281,7 +281,7 @@ function insertPositionDetailRow(afterRow, positions) {
     const posTable = positions.map(p => {
         const cls = pnlClass(p.pnl);
         return `<tr style="border-bottom: 1px solid var(--border-subtle);">
-            <td class="py-1 pr-3" style="font-size:0.78rem; font-weight:500; color:var(--text-primary); white-space:nowrap;">${p.name || p.symbol} <span style="color:var(--text-muted); font-size:0.65rem;">${p.symbol}</span></td>
+            <td class="py-1 pr-3" style="font-size:0.78rem; font-weight:500; color:var(--text-primary); white-space:nowrap;">${esc(p.name || p.symbol)} <span style="color:var(--text-muted); font-size:0.65rem;">${esc(p.symbol)}</span></td>
             <td class="py-1 pr-3 text-right mono" style="font-size:0.78rem;">${p.quantity}</td>
             <td class="py-1 pr-3 text-right mono" style="font-size:0.78rem; color:var(--text-secondary);">${formatNumber(p.avg_price)}</td>
             <td class="py-1 pr-3 text-right mono" style="font-size:0.78rem;">${formatNumber(p.current_price)}</td>

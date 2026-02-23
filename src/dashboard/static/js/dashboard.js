@@ -173,7 +173,7 @@ function renderSortedPositions() {
         }
 
         return `<tr class="border-b" style="border-color:rgba(99,102,241,0.08)">
-            <td class="py-2 pr-3 font-medium text-white" style="white-space:nowrap;">${pos.name || pos.symbol} <span style="color:var(--text-muted); font-size:0.72rem; font-weight:400;">${pos.symbol}</span></td>
+            <td class="py-2 pr-3 font-medium text-white" style="white-space:nowrap;">${esc(pos.name || pos.symbol)} <span style="color:var(--text-muted); font-size:0.72rem; font-weight:400;">${esc(pos.symbol)}</span></td>
             <td class="py-2 pr-3" style="font-size:0.75rem; color:var(--accent-purple);">${stName}</td>
             <td class="py-2 pr-3 text-right mono">${formatNumber(pos.current_price)}</td>
             <td class="py-2 pr-3 text-right mono text-gray-400">${formatNumber(pos.avg_price)}</td>
@@ -331,8 +331,8 @@ function renderPendingOrders(orders) {
         return `<div style="background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 12px 16px;">
             <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
                 <div style="display: flex; align-items: center; gap: 8px;">
-                    <span style="font-weight: 600; font-size: 0.88rem; color: var(--text-primary);">${o.name || o.symbol}</span>
-                    <span style="font-size: 0.72rem; color: var(--text-muted);">${o.symbol}</span>
+                    <span style="font-weight: 600; font-size: 0.88rem; color: var(--text-primary);">${esc(o.name || o.symbol)}</span>
+                    <span style="font-size: 0.72rem; color: var(--text-muted);">${esc(o.symbol)}</span>
                     <span class="badge ${sideCls}">${sideLabel}</span>
                 </div>
                 <span class="mono" style="font-size: 0.78rem; color: var(--text-secondary);">${o.quantity}주</span>
@@ -421,15 +421,15 @@ function renderHealthChecks(checks, failedOnly) {
             rolling_perf: '\ub864\ub9c1 \uc131\uacfc',
         };
         const label = nameMap[c.name] || c.name;
-        const valStr = c.value != null ? `<span class="mono" style="font-size:0.72rem; color:var(--text-secondary);">${typeof c.value === 'number' ? c.value.toFixed(1) : c.value}</span>` : '';
+        const valStr = c.value != null ? `<span class="mono" style="font-size:0.72rem; color:var(--text-secondary);">${typeof c.value === 'number' ? c.value.toFixed(1) : esc(c.value)}</span>` : '';
 
         return `<div style="background:${bg}; border:1px solid ${border}; border-radius:10px; padding:10px 12px;">
             <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
                 <span style="font-size:0.75rem;">${icon}</span>
-                <span style="font-size:0.78rem; font-weight:500; color:${isOk ? 'var(--text-primary)' : color};">${label}</span>
+                <span style="font-size:0.78rem; font-weight:500; color:${isOk ? 'var(--text-primary)' : color};">${esc(label)}</span>
                 ${valStr}
             </div>
-            <div style="font-size:0.72rem; color:${isOk ? 'var(--text-muted)' : color};">${c.message}</div>
+            <div style="font-size:0.72rem; color:${isOk ? 'var(--text-muted)' : color};">${esc(c.message)}</div>
         </div>`;
     }).join('');
 
@@ -471,7 +471,7 @@ function renderExternalAccounts(accounts) {
             posRows = positions.map(p => {
                 const cls = pnlClass(p.pnl);
                 return `<tr style="border-bottom:1px solid var(--border-subtle);">
-                    <td class="py-1 pr-3" style="font-size:0.82rem; font-weight:500; color:var(--text-primary); white-space:nowrap;">${p.name || p.symbol} <span style="color:var(--text-muted); font-size:0.68rem;">${p.symbol}</span></td>
+                    <td class="py-1 pr-3" style="font-size:0.82rem; font-weight:500; color:var(--text-primary); white-space:nowrap;">${esc(p.name || p.symbol)} <span style="color:var(--text-muted); font-size:0.68rem;">${esc(p.symbol)}</span></td>
                     <td class="py-1 pr-3 text-right mono" style="font-size:0.82rem;">${formatNumber(p.current_price)}</td>
                     <td class="py-1 pr-3 text-right mono" style="font-size:0.82rem; color:var(--text-secondary);">${formatNumber(p.avg_price)}</td>
                     <td class="py-1 pr-3 text-right mono" style="font-size:0.82rem;">${p.qty}</td>
@@ -487,8 +487,8 @@ function renderExternalAccounts(accounts) {
         return `<div class="card" style="padding: 24px; margin-bottom: 16px;">
             <div class="card-header">
                 <span class="dot" style="background: var(--accent-purple); box-shadow: 0 0 8px var(--accent-purple);"></span>
-                ${acct.name} 계좌
-                <span style="margin-left: 8px; font-size: 0.68rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; letter-spacing: 0;">${acct.cano}</span>
+                ${esc(acct.name)} 계좌
+                <span style="margin-left: 8px; font-size: 0.68rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; letter-spacing: 0;">${esc(acct.cano)}</span>
                 ${hasError ? '<span class="badge badge-red" style="margin-left:auto;">오류</span>' : `<span style="margin-left:auto; font-size:0.7rem; color:var(--text-muted); font-family:\'JetBrains Mono\',monospace; background:var(--bg-elevated); padding:3px 10px; border-radius:6px; border:1px solid var(--border-subtle);">${positions.length}종목</span>`}
             </div>
 
@@ -514,7 +514,7 @@ function renderExternalAccounts(accounts) {
 
             <!-- 포지션 테이블 -->
             ${hasError ? `<div style="padding:12px; background:rgba(248,113,113,0.06); border:1px solid rgba(248,113,113,0.12); border-radius:8px; margin-bottom:12px;">
-                <div style="color:var(--accent-red); font-size:0.78rem;">조회 실패: ${acct.error}</div>
+                <div style="color:var(--accent-red); font-size:0.78rem;">조회 실패: ${esc(acct.error)}</div>
             </div>` : ''}
 
             ${positions.length > 0 ? `<div style="overflow-x:auto;">
@@ -657,7 +657,7 @@ function renderPremarket(data) {
         const bgCls = s.pre_change_pct >= 0 ? 'rgba(52,211,153,0.06)' : 'rgba(248,113,113,0.06)';
         const borderCls = s.pre_change_pct >= 0 ? 'rgba(52,211,153,0.12)' : 'rgba(248,113,113,0.12)';
         return `<div style="background:${bgCls}; border:1px solid ${borderCls}; border-radius:10px; padding:10px 12px;">
-            <div style="font-size:0.78rem; font-weight:500; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${s.name || s.symbol}</div>
+            <div style="font-size:0.78rem; font-weight:500; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(s.name || s.symbol)}</div>
             <div style="display:flex; justify-content:space-between; align-items:baseline; margin-top:4px;">
                 <span class="mono" style="font-size:0.82rem;">${formatNumber(s.pre_price)}</span>
                 <span class="mono ${cls}" style="font-size:0.82rem; font-weight:600;">${formatPct(s.pre_change_pct)}</span>

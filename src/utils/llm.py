@@ -87,12 +87,18 @@ class LLMUsage:
         self.output_tokens += output_tokens
 
         # 비용 추정 (대략적)
-        if "gpt-4" in model:
+        if "gpt-5" in model:
+            self.estimated_cost_usd += (input_tokens * 0.003 + output_tokens * 0.015) / 1000
+        elif "gpt-4" in model:
             self.estimated_cost_usd += (input_tokens * 0.01 + output_tokens * 0.03) / 1000
         elif "gpt-3.5" in model:
             self.estimated_cost_usd += (input_tokens * 0.0005 + output_tokens * 0.0015) / 1000
         elif "gemini" in model:
-            self.estimated_cost_usd += (input_tokens * 0.000075 + output_tokens * 0.0003) / 1000
+            # gemini-3-flash-preview, gemini-2.5-pro 등
+            if "pro" in model:
+                self.estimated_cost_usd += (input_tokens * 0.00125 + output_tokens * 0.005) / 1000
+            else:
+                self.estimated_cost_usd += (input_tokens * 0.000075 + output_tokens * 0.0003) / 1000
 
 
 @dataclass
