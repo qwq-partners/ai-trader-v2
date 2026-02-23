@@ -222,6 +222,108 @@ class TelegramNotifier:
 
         return success
 
+    async def send_photo(
+        self,
+        photo,
+        caption: str = "",
+        parse_mode: str = "HTML",
+        chat_id: str = None,
+        disable_notification: bool = False,
+    ) -> bool:
+        """
+        이미지(사진) 전송
+
+        Args:
+            photo: 전송할 이미지. 아래 형식 모두 지원:
+                   - str: 로컬 파일 경로 ("/path/to/chart.png")
+                   - str: Telegram file_id 또는 URL ("https://...")
+                   - bytes / BytesIO: 메모리 내 이미지 데이터
+            caption: 이미지 설명 (최대 1024자)
+            parse_mode: 캡션 파싱 모드 ("HTML" 또는 "Markdown")
+            chat_id: 전송 대상 (None이면 alert_chat_id 사용)
+            disable_notification: 알림 음소거 여부
+
+        Returns:
+            전송 성공 여부
+        """
+        if not self.is_configured:
+            logger.warning("텔레그램 설정이 완료되지 않았습니다")
+            return False
+
+        target_chat_id = chat_id or self.alert_chat_id or self.chat_id
+        if not target_chat_id:
+            logger.warning("텔레그램 chat_id가 설정되지 않았습니다")
+            return False
+
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendPhoto"
+
+        try:
+            if not self._session or self._session.closed:
+                self._session = aiohttp.ClientSession()
+
+            import io
+            if isinstance(photo, (bytes, io.IOBase)):
+                # 바이너리 데이터 → multipart 업로드
+                photo_data = photo if isinstance(photo, bytes) else photo.read()
+                form = aiohttp.FormData()
+                form.add_field("chat_id", str(target_chat_id))
+                form.add_field("photo", photo_data, filename="chart.png", content_type="image/png")
+                if caption:
+                    form.add_field("caption", caption[:1024])
+                    form.add_field("parse_mode", parse_mode)
+                form.add_field("disable_notification", str(disable_notification).lower())
+                async with self._session.post(url, data=form, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                    if resp.status == 200:
+                        logger.debug("텔레그램 사진 전송 성공 (binary)")
+                        return True
+                    data = await resp.json()
+                    logger.error(f"텔레그램 사진 전송 실패: {data}")
+                    return False
+
+            elif isinstance(photo, str) and not photo.startswith("http") and not photo.startswith("Ag"):
+                # 로컬 파일 경로 → multipart 업로드
+                from pathlib import Path
+                path = Path(photo)
+                if not path.exists():
+                    logger.error(f"텔레그램 사진 파일 없음: {photo}")
+                    return False
+                form = aiohttp.FormData()
+                form.add_field("chat_id", str(target_chat_id))
+                form.add_field("photo", path.read_bytes(), filename=path.name, content_type="image/png")
+                if caption:
+                    form.add_field("caption", caption[:1024])
+                    form.add_field("parse_mode", parse_mode)
+                form.add_field("disable_notification", str(disable_notification).lower())
+                async with self._session.post(url, data=form, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                    if resp.status == 200:
+                        logger.debug(f"텔레그램 사진 전송 성공 (file: {path.name})")
+                        return True
+                    data = await resp.json()
+                    logger.error(f"텔레그램 사진 전송 실패: {data}")
+                    return False
+
+            else:
+                # URL 또는 Telegram file_id → JSON 전송
+                payload = {
+                    "chat_id": target_chat_id,
+                    "photo": photo,
+                    "disable_notification": disable_notification,
+                }
+                if caption:
+                    payload["caption"] = caption[:1024]
+                    payload["parse_mode"] = parse_mode
+                async with self._session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status == 200:
+                        logger.debug("텔레그램 사진 전송 성공 (URL/file_id)")
+                        return True
+                    data = await resp.json()
+                    logger.error(f"텔레그램 사진 전송 실패: {data}")
+                    return False
+
+        except Exception as e:
+            logger.error(f"텔레그램 사진 전송 오류: {e}")
+            return False
+
     async def close(self):
         """세션 정리"""
         if self._session and not self._session.closed:
@@ -308,3 +410,22 @@ async def send_telegram(text: str, **kwargs) -> bool:
 async def send_alert(text: str, **kwargs) -> bool:
     """에러/경고 알림 발송 (편의 함수)"""
     return await get_telegram_notifier().send_alert(text, **kwargs)
+
+
+async def send_photo(photo, caption: str = "", **kwargs) -> bool:
+    """텔레그램 이미지 전송 (편의 함수)
+
+    Usage:
+        # 로컬 파일
+        await send_photo("/path/to/chart.png", caption="삼성전기 차트")
+
+        # URL
+        await send_photo("https://example.com/chart.png", caption="차트")
+
+        # bytes / BytesIO (matplotlib 등)
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png')
+        buf.seek(0)
+        await send_photo(buf, caption="<b>매수 신호</b> 삼성전기")
+    """
+    return await get_telegram_notifier().send_photo(photo, caption=caption, **kwargs)
