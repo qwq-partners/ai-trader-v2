@@ -1,9 +1,6 @@
 """
-미국증시 마감 리포트 — 차트 이미지 생성 (v2)
-
-레이아웃:
-  상단: 주요 지수 카드 (2행 × 3열, 색상 배경)
-  하단: S&P 500 섹터 히트맵 (treemap)
+미국증시 마감 리포트 — 차트 이미지 생성 v3
+가독성 우선 설계: 큰 폰트, 충분한 여백, 높은 DPI
 """
 
 from __future__ import annotations
@@ -14,310 +11,232 @@ from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-# ── 섹터 ETF 메타 (표시명 / S&P500 비중) ─────────────────────────────────────
+# ── 섹터 ETF 메타 ─────────────────────────────────────────────────────────────
 SECTOR_META: Dict[str, Dict] = {
-    "XLK":  {"name": "Tech",        "full": "Technology",        "weight": 29.0},
-    "XLF":  {"name": "Finance",     "full": "Financials",        "weight": 13.0},
-    "XLV":  {"name": "Health",      "full": "Health Care",       "weight": 12.0},
-    "XLY":  {"name": "Disc.",       "full": "Cons. Discret.",    "weight": 11.0},
-    "XLC":  {"name": "Comm.",       "full": "Comm. Services",    "weight":  9.0},
-    "XLI":  {"name": "Indust.",     "full": "Industrials",       "weight":  8.0},
-    "XLP":  {"name": "Staples",     "full": "Cons. Staples",     "weight":  6.0},
-    "XLE":  {"name": "Energy",      "full": "Energy",            "weight":  4.0},
-    "XLB":  {"name": "Materials",   "full": "Materials",         "weight":  3.0},
-    "XLRE": {"name": "Real Est.",   "full": "Real Estate",       "weight":  2.5},
-    "XLU":  {"name": "Utilities",   "full": "Utilities",         "weight":  2.5},
+    "XLK":  {"name": "Technology",     "weight": 29.0},
+    "XLF":  {"name": "Financials",     "weight": 13.0},
+    "XLV":  {"name": "Health Care",    "weight": 12.0},
+    "XLY":  {"name": "Cons. Discret.", "weight": 11.0},
+    "XLC":  {"name": "Comm. Svcs",     "weight":  9.0},
+    "XLI":  {"name": "Industrials",    "weight":  8.0},
+    "XLP":  {"name": "Cons. Staples",  "weight":  6.0},
+    "XLE":  {"name": "Energy",         "weight":  4.0},
+    "XLB":  {"name": "Materials",      "weight":  3.0},
+    "XLRE": {"name": "Real Estate",    "weight":  2.5},
+    "XLU":  {"name": "Utilities",      "weight":  2.5},
 }
 
-# 표시할 지수 순서
 INDEX_ORDER = [
-    ("^GSPC",  "S&P 500"),
-    ("^IXIC",  "NASDAQ"),
-    ("^DJI",   "DOW"),
-    ("^RUT",   "Russell 2K"),
-    ("^SOX",   "SOX"),
-    ("^VIX",   "VIX"),
+    ("^GSPC", "S&P 500"),
+    ("^IXIC", "NASDAQ"),
+    ("^DJI",  "DOW"),
+    ("^RUT",  "Russell 2K"),
+    ("^SOX",  "SOX"),
+    ("^VIX",  "VIX"),
 ]
 
-# ── 색상 팔레트 ───────────────────────────────────────────────────────────────
-BG           = "#0d1117"
-CARD_BG      = "#161b22"
-DIVIDER      = "#30363d"
-TEXT_PRI     = "#e6edf3"
-TEXT_SEC     = "#8b949e"
+# ── 색상 ─────────────────────────────────────────────────────────────────────
+BG       = "#0d1117"
+DIVIDER  = "#30363d"
+TEXT_PRI = "#e6edf3"
+TEXT_SEC = "#8b949e"
 
-# 수익률 기반 카드 색상
+
 def _card_colors(pct: float):
-    """등락률 → (카드 배경, 강조 테두리, % 텍스트 색상)"""
-    if pct >= 1.5:
-        return "#0d2818", "#2ea043", "#3fb950"
-    if pct >= 0.3:
-        return "#0d2011", "#1c6b32", "#26a641"
-    if pct > -0.3:
-        return "#161b22", "#30363d", "#8b949e"
-    if pct > -1.5:
-        return "#2d1117", "#6e1c1c", "#f85149"
-    return "#3d0b0b", "#da3633", "#ff7b72"
+    if pct >= 1.5:  return "#0d2818", "#2ea043", "#3fb950"
+    if pct >= 0.3:  return "#0d2011", "#1a5c2a", "#26a641"
+    if pct > -0.3:  return "#1c2128", "#30363d", "#8b949e"
+    if pct > -1.5:  return "#2d1117", "#6e1c1c", "#f85149"
+    return              "#3d0b0b",  "#da3633", "#ff7b72"
 
-def _heatmap_color(pct: float) -> str:
-    """섹터 히트맵 색상 — 선명한 레드↔그린"""
-    clamp = max(-4.0, min(4.0, pct))
-    if clamp >= 0:
-        t = clamp / 4.0
+
+def _heat(pct: float) -> str:
+    """등락률 → 선명한 레드↔그린"""
+    c = max(-4.0, min(4.0, pct))
+    if c >= 0:
+        t = c / 4.0
         r = int(13  + (0   - 13 ) * t)
-        g = int(27  + (180 - 27 ) * t)
+        g = int(27  + (190 - 27 ) * t)
         b = int(18  + (50  - 18 ) * t)
     else:
-        t = (-clamp) / 4.0
+        t = (-c) / 4.0
         r = int(13  + (218 - 13 ) * t)
         g = int(27  + (54  - 27 ) * t)
         b = int(18  + (51  - 18 ) * t)
     return f"#{r:02x}{g:02x}{b:02x}"
 
-def _lum(hex_color: str) -> float:
-    h = hex_color.lstrip("#")
-    r, g, b = int(h[0:2],16), int(h[2:4],16), int(h[4:6],16)
+
+def _lum(h: str) -> float:
+    h = h.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     return (0.299*r + 0.587*g + 0.114*b) / 255
 
 
 def _setup_font():
-    """한글 폰트 설정 → font properties 반환"""
     import os, matplotlib.font_manager as fm, matplotlib
-    candidates = [
+    for fp in [
         "/home/user/.local/share/fonts/NotoSansKR.ttf",
         "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-    ]
-    for fp in candidates:
+    ]:
         if os.path.exists(fp):
             fm.fontManager.addfont(fp)
-            prop = fm.FontProperties(fname=fp)
-            matplotlib.rcParams["font.family"] = prop.get_name()
+            p = fm.FontProperties(fname=fp)
+            matplotlib.rcParams["font.family"] = p.get_name()
             matplotlib.rcParams["axes.unicode_minus"] = False
-            return prop
+            return p
     return None
 
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Chart 1: 지수 카드 + 섹터 ETF 히트맵
+# ═════════════════════════════════════════════════════════════════════════════
 
 def generate_us_market_chart(
     quotes: Dict[str, Any],
     date_str: str = "",
     avg_pct: float = 0.0,
 ) -> Optional[io.BytesIO]:
-    """
-    미국증시 차트 이미지 생성
-
-    Args:
-        quotes:   {symbol: {price, change_pct, ...}} — fetch_us_market_summary() 반환값
-        date_str: 날짜 문자열 (헤더 표시)
-        avg_pct:  지수 평균 등락률
-
-    Returns:
-        PNG BytesIO (실패 시 None)
-    """
     try:
-        import matplotlib
-        matplotlib.use("Agg")
+        import matplotlib; matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        import matplotlib.patches as mpatches
-        import matplotlib.patheffects as pe
-        import squarify
-        import numpy as np
+        import matplotlib.patches as mp
+        import squarify, numpy as np
 
         _setup_font()
 
-        # ── 캔버스 ────────────────────────────────────────────────────────
-        FIG_W, FIG_H = 14, 9.5
-        fig = plt.figure(figsize=(FIG_W, FIG_H), facecolor=BG, dpi=110)
+        FW, FH = 16, 10
+        fig = plt.figure(figsize=(FW, FH), facecolor=BG, dpi=130)
 
-        # ── 타이틀 ────────────────────────────────────────────────────────
-        if avg_pct >= 1.0:
-            mood, mood_c = "▲  강세 마감", "#3fb950"
-        elif avg_pct <= -1.0:
-            mood, mood_c = "▼  약세 마감", "#ff7b72"
-        else:
-            mood, mood_c = "●  보합 마감", "#8b949e"
+        # 타이틀
+        if avg_pct >= 1.0:   mood, mc = "▲  강세 마감", "#3fb950"
+        elif avg_pct <= -1.0: mood, mc = "▼  약세 마감", "#ff7b72"
+        else:                 mood, mc = "●  보합 마감", "#8b949e"
 
-        fig.text(0.04, 0.965, f"미국증시 마감  —  {date_str}",
-                 color=TEXT_PRI, fontsize=15, fontweight="bold", va="top")
-        fig.text(0.96, 0.965, mood,
-                 color=mood_c, fontsize=13, fontweight="bold", va="top", ha="right")
+        fig.text(0.04, 0.967, f"미국증시 마감  —  {date_str}",
+                 color=TEXT_PRI, fontsize=17, fontweight="bold", va="top")
+        fig.text(0.96, 0.967, mood,
+                 color=mc, fontsize=15, fontweight="bold", va="top", ha="right")
 
-        # 가로 구분선
-        fig.add_artist(plt.Line2D([0.04, 0.96], [0.935, 0.935],
+        fig.add_artist(plt.Line2D([0.04, 0.96], [0.932, 0.932],
                                   transform=fig.transFigure,
-                                  color=DIVIDER, linewidth=0.8))
+                                  color=DIVIDER, linewidth=1.0))
 
-        # ═══════════════════════════════════════════════════════════════════
-        # 상단: 지수 카드 (2행 × 3열)
-        # ═══════════════════════════════════════════════════════════════════
-        CARD_ROWS, CARD_COLS = 2, 3
-        CARD_Y0   = 0.60   # 카드 영역 하단 (figure 좌표)
-        CARD_Y1   = 0.925  # 카드 영역 상단
-        CARD_X0   = 0.04
-        CARD_X1   = 0.96
-        PAD_X     = 0.012
-        PAD_Y     = 0.012
+        # ── 지수 카드 (2행 × 3열) ─────────────────────────────────────────
+        CX0, CX1 = 0.04, 0.96
+        CY0, CY1 = 0.595, 0.925
+        COLS, ROWS = 3, 2
+        PX, PY = 0.014, 0.014
+        cw = (CX1 - CX0 - PX * (COLS-1)) / COLS
+        ch = (CY1 - CY0 - PY * (ROWS-1)) / ROWS
 
-        card_w = (CARD_X1 - CARD_X0 - PAD_X * (CARD_COLS - 1)) / CARD_COLS
-        card_h = (CARD_Y1 - CARD_Y0 - PAD_Y * (CARD_ROWS - 1)) / CARD_ROWS
+        for i, (sym, label) in enumerate(INDEX_ORDER):
+            row, col = divmod(i, COLS)
+            cx = CX0 + col * (cw + PX)
+            cy = CY1 - (row+1)*ch - row*PY
 
-        for idx, (sym, label) in enumerate(INDEX_ORDER):
-            row, col = divmod(idx, CARD_COLS)
-            cx = CARD_X0 + col * (card_w + PAD_X)
-            cy = CARD_Y1 - (row + 1) * card_h - row * PAD_Y   # 위에서 아래로
-
-            q = quotes.get(sym)
-            pct   = q["change_pct"] if q else 0.0
-            price = q["price"]      if q else 0.0
-
+            q = quotes.get(sym, {})
+            pct   = q.get("change_pct", 0.0)
+            price = q.get("price", 0.0)
             bg_c, border_c, pct_c = _card_colors(pct)
 
-            # 카드 배경
-            card_rect = mpatches.FancyBboxPatch(
-                (cx, cy), card_w, card_h,
-                boxstyle="round,pad=0.005",
+            fig.add_artist(mp.FancyBboxPatch(
+                (cx, cy), cw, ch,
+                boxstyle="round,pad=0.004",
                 transform=fig.transFigure,
-                facecolor=bg_c,
-                edgecolor=border_c,
-                linewidth=1.5,
-                clip_on=False,
-                zorder=2,
-            )
-            fig.add_artist(card_rect)
+                facecolor=bg_c, edgecolor=border_c,
+                linewidth=1.8, clip_on=False, zorder=2,
+            ))
 
-            # 지수명
-            fig.text(cx + 0.014, cy + card_h - 0.012,
-                     label, color=TEXT_SEC, fontsize=10,
-                     fontweight="normal", va="top", transform=fig.transFigure)
+            # 지수명 (소)
+            fig.text(cx + 0.013, cy + ch - 0.011,
+                     label, color=TEXT_SEC, fontsize=11,
+                     va="top", transform=fig.transFigure)
 
-            # % 변동 (크게)
-            sign = "+" if pct > 0 else ""
+            # 등락률 (대 — 핵심)
+            sign  = "+" if pct > 0 else ""
             arrow = "▲" if pct > 0 else ("▼" if pct < 0 else "●")
-            fig.text(cx + card_w / 2, cy + card_h / 2 + 0.016,
+            fig.text(cx + cw/2, cy + ch/2 + ch*0.08,
                      f"{arrow}  {sign}{pct:.2f}%",
-                     color=pct_c, fontsize=17, fontweight="bold",
+                     color=pct_c, fontsize=21, fontweight="bold",
                      ha="center", va="center", transform=fig.transFigure)
 
             # 현재가
-            if sym == "^VIX":
-                price_str = f"{price:.2f}"
-            elif price >= 10000:
-                price_str = f"{price:,.0f}"
-            else:
-                price_str = f"{price:,.2f}"
-            fig.text(cx + card_w / 2, cy + 0.014,
-                     price_str, color=TEXT_SEC, fontsize=9,
+            pstr = f"{price:.2f}" if sym == "^VIX" else (
+                   f"{price:,.0f}" if price >= 10000 else f"{price:,.2f}")
+            fig.text(cx + cw/2, cy + 0.012,
+                     pstr, color=TEXT_SEC, fontsize=10,
                      ha="center", va="bottom", transform=fig.transFigure,
                      fontfamily="monospace")
 
-        # ── 구분선 ────────────────────────────────────────────────────────
-        fig.add_artist(plt.Line2D([0.04, 0.96], [0.585, 0.585],
+        # ── 섹터 ETF 히트맵 ───────────────────────────────────────────────
+        fig.add_artist(plt.Line2D([0.04, 0.96], [0.582, 0.582],
                                   transform=fig.transFigure,
-                                  color=DIVIDER, linewidth=0.8))
-
-        # 소제목
-        fig.text(0.04, 0.575, "S&P 500  Sector Heatmap",
+                                  color=DIVIDER, linewidth=1.0))
+        fig.text(0.04, 0.572, "S&P 500  Sector ETF",
                  color=TEXT_SEC, fontsize=10, va="top")
 
-        # ═══════════════════════════════════════════════════════════════════
-        # 하단: 섹터 히트맵
-        # ═══════════════════════════════════════════════════════════════════
-        # 절대 좌표 axes (figure-level)
-        MAP_L  = 0.04
-        MAP_R  = 0.96
-        MAP_B  = 0.04
-        MAP_T  = 0.555
-        map_w  = MAP_R - MAP_L
-        map_h  = MAP_T - MAP_B
+        ax = fig.add_axes([0.04, 0.045, 0.92, 0.515], facecolor=BG)
+        ax.set_xlim(0, 100); ax.set_ylim(0, 100); ax.axis("off")
 
-        ax = fig.add_axes([MAP_L, MAP_B, map_w, map_h], facecolor=BG)
-        ax.set_xlim(0, 100)
-        ax.set_ylim(0, 100)
-        ax.axis("off")
-
-        # 섹터 데이터
         sec_items = []
         for sym, meta in SECTOR_META.items():
-            q    = quotes.get(sym)
-            pct  = q["change_pct"] if q else 0.0
-            sec_items.append({
-                "sym":    sym,
-                "name":   meta["name"],
-                "full":   meta["full"],
-                "weight": meta["weight"],
-                "pct":    pct,
-                "color":  _heatmap_color(pct),
-            })
+            q   = quotes.get(sym, {})
+            pct = q.get("change_pct", 0.0)
+            sec_items.append({"sym": sym, "name": meta["name"],
+                               "weight": meta["weight"], "pct": pct,
+                               "color": _heat(pct)})
 
-        sizes  = [s["weight"] for s in sec_items]
-        rects  = squarify.squarify(
-            squarify.normalize_sizes(sizes, 100, 100),
-            x=0, y=0, dx=100, dy=100,
-        )
+        rects = squarify.squarify(
+            squarify.normalize_sizes([s["weight"] for s in sec_items], 100, 100),
+            x=0, y=0, dx=100, dy=100)
 
         for rect, item in zip(rects, sec_items):
             x, y, w, h = rect["x"], rect["y"], rect["dx"], rect["dy"]
-            GAP = 0.6
-
-            patch = mpatches.FancyBboxPatch(
-                (x + GAP, y + GAP), w - GAP*2, h - GAP*2,
+            G = 0.5
+            ax.add_patch(mp.FancyBboxPatch(
+                (x+G, y+G), w-G*2, h-G*2,
                 boxstyle="round,pad=0.0",
-                facecolor=item["color"],
-                edgecolor=BG,
-                linewidth=2,
-                zorder=2,
-            )
-            ax.add_patch(patch)
+                facecolor=item["color"], edgecolor=BG, linewidth=2.0, zorder=2))
 
-            tc = "#ffffff" if _lum(item["color"]) < 0.50 else "#0d1117"
-            cx_, cy_ = x + w/2, y + h/2
+            tc   = "#fff" if _lum(item["color"]) < 0.48 else "#0d1117"
             sign = "+" if item["pct"] > 0 else ""
-            pct_str = f"{sign}{item['pct']:.2f}%"
+            pstr = f"{sign}{item['pct']:.2f}%"
 
-            # 블록 크기에 따라 폰트 조절
-            base_fs = min(w, h) * 1.05
-            name_fs = max(7.5, min(14, base_fs * 0.65))
-            pct_fs  = max(8.5, min(16, base_fs * 0.75))
-
-            if w > 8 and h > 8:
-                # 섹터명 + 등락률 두 줄
-                ax.text(cx_, cy_ + h * 0.10, item["name"],
+            # 이름 + % (블록이 충분히 클 때만)
+            if w > 9 and h > 9:
+                nfs = max(9,  min(16, min(w,h) * 0.80))
+                pfs = max(10, min(18, min(w,h) * 0.90))
+                ax.text(x+w/2, y+h/2+h*0.09, item["name"],
                         ha="center", va="center", color=tc,
-                        fontsize=name_fs, fontweight="bold", zorder=3)
-                ax.text(cx_, cy_ - h * 0.14, pct_str,
+                        fontsize=nfs, fontweight="bold", zorder=3)
+                ax.text(x+w/2, y+h/2-h*0.13, pstr,
                         ha="center", va="center", color=tc,
-                        fontsize=pct_fs, zorder=3,
-                        alpha=0.92)
+                        fontsize=pfs, zorder=3)
             elif w > 5 and h > 5:
-                ax.text(cx_, cy_, f"{item['name']}\n{pct_str}",
+                fs = max(8, min(13, min(w,h) * 0.80))
+                ax.text(x+w/2, y+h/2, f"{item['name']}\n{pstr}",
                         ha="center", va="center", color=tc,
-                        fontsize=max(6, name_fs*0.8),
-                        fontweight="bold", zorder=3,
-                        linespacing=1.3)
+                        fontsize=fs, fontweight="bold",
+                        zorder=3, linespacing=1.25)
 
-        # ── 색상 범례 ─────────────────────────────────────────────────────
-        LEG_Y    = -7
-        LEG_H    =  4
-        n_steps  = 40
-        step_w   = 100 / n_steps
-        for i in range(n_steps):
-            p = -4.0 + i * (8.0 / n_steps)
-            ax.add_patch(mpatches.Rectangle(
-                (i * step_w, LEG_Y), step_w, LEG_H,
-                facecolor=_heatmap_color(p), edgecolor="none", zorder=2,
-            ))
-        ax.text(0,   LEG_Y - 1.5, "-4%", ha="left",   va="top", color=TEXT_SEC, fontsize=8)
-        ax.text(50,  LEG_Y - 1.5, "0",   ha="center", va="top", color=TEXT_SEC, fontsize=8)
-        ax.text(100, LEG_Y - 1.5, "+4%", ha="right",  va="top", color=TEXT_SEC, fontsize=8)
-        ax.set_ylim(LEG_Y - 5, 100)
+        # 범례
+        N = 40
+        for i in range(N):
+            ax.add_patch(mp.Rectangle(
+                (i*(100/N), -7), 100/N, 4,
+                facecolor=_heat(-4.0 + i*(8.0/N)), edgecolor="none", zorder=2))
+        ax.text(0,   -9, "−4%", ha="left",   va="top", color=TEXT_SEC, fontsize=9)
+        ax.text(50,  -9, "0",   ha="center", va="top", color=TEXT_SEC, fontsize=9)
+        ax.text(100, -9, "+4%", ha="right",  va="top", color=TEXT_SEC, fontsize=9)
+        ax.set_ylim(-14, 100)
 
-        # ── 저장 ─────────────────────────────────────────────────────────
         buf = io.BytesIO()
-        plt.savefig(buf, format="png", dpi=110, bbox_inches="tight",
+        plt.savefig(buf, format="png", dpi=130, bbox_inches="tight",
                     facecolor=BG, edgecolor="none")
         plt.close(fig)
         buf.seek(0)
-        logger.info("[차트] 미국증시 차트 생성 완료")
+        logger.info("[차트] 지수/섹터 ETF 차트 생성 완료")
         return buf
 
     except Exception as e:
@@ -325,175 +244,157 @@ def generate_us_market_chart(
         return None
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# Chart 2: S&P 500 개별 종목 히트맵 (finviz 스타일 중첩 treemap)
+# ═════════════════════════════════════════════════════════════════════════════
+
+# 가독성을 위해 섹터당 상위 4~5개만 표시
+SP500_DISPLAY: Dict[str, list] = {
+    "XLK":  [("AAPL","Apple",15.0),("MSFT","Microsoft",13.5),
+              ("NVDA","NVIDIA",11.0),("AVGO","Broadcom",3.5),("ORCL","Oracle",2.0)],
+    "XLF":  [("BRK-B","Berkshire",4.5),("JPM","JPMorgan",4.2),
+              ("V","Visa",4.0),("MA","Mastercard",3.5),("BAC","BofA",2.0)],
+    "XLV":  [("LLY","Lilly",5.0),("UNH","UnitedHlth",4.2),
+              ("JNJ","J&J",2.5),("ABBV","AbbVie",2.2),("MRK","Merck",2.0)],
+    "XLY":  [("AMZN","Amazon",8.5),("TSLA","Tesla",4.2),
+              ("HD","Home Depot",2.2),("MCD","McDonald's",1.5)],
+    "XLC":  [("GOOG","Alphabet",9.0),("META","Meta",7.5),
+              ("NFLX","Netflix",2.5),("DIS","Disney",1.5)],
+    "XLI":  [("GE","GE Aero",2.1),("CAT","Caterpillar",1.9),
+              ("RTX","RTX",1.8),("UNP","Union Pac.",1.6),("HON","Honeywell",1.3)],
+    "XLP":  [("WMT","Walmart",3.2),("COST","Costco",2.8),
+              ("PG","P&G",2.6),("KO","Coca-Cola",2.0)],
+    "XLE":  [("XOM","ExxonMobil",2.8),("CVX","Chevron",2.2),
+              ("COP","ConocoPhil",1.3)],
+    "XLB":  [("LIN","Linde",1.6),("SHW","Sherwin-W.",0.9),("APD","Air Prod.",0.7)],
+    "XLRE": [("PLD","Prologis",0.9),("AMT","Amer. Tower",0.8),("EQIX","Equinix",0.6)],
+    "XLU":  [("NEE","NextEra",1.0),("DUK","Duke En.",0.6),("SO","Southern",0.5)],
+}
+
+
 def generate_sp500_map(
     stock_quotes: Dict[str, Any],
     date_str: str = "",
 ) -> Optional[io.BytesIO]:
-    """
-    S&P 500 개별 종목 히트맵 (finviz 스타일 중첩 treemap)
-
-    섹터 → 종목 2단계 계층 구조:
-    - 외부 사각형: 섹터 (S&P500 비중에 비례)
-    - 내부 사각형: 개별 종목 (섹터 내 시총 비중)
-    - 색상: 개별 종목 등락률
-
-    Args:
-        stock_quotes: {symbol: {price, change_pct, name}} — fetch_sp500_stocks() 반환값
-        date_str:     헤더 날짜 문자열
-
-    Returns:
-        PNG BytesIO (실패 시 None)
-    """
     try:
-        from ..data.providers.us_market_data import SP500_STOCKS
-
-        import matplotlib
-        matplotlib.use("Agg")
+        import matplotlib; matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        import matplotlib.patches as mpatches
+        import matplotlib.patches as mp
         import squarify
 
         _setup_font()
 
-        FIG_W, FIG_H = 15, 9
-        fig = plt.figure(figsize=(FIG_W, FIG_H), facecolor=BG, dpi=110)
+        FW, FH = 16, 10
+        fig = plt.figure(figsize=(FW, FH), facecolor=BG, dpi=130)
 
-        # ── 타이틀 ────────────────────────────────────────────────────────
-        fig.text(0.03, 0.97, f"S&P 500 Map  —  {date_str}",
-                 color=TEXT_PRI, fontsize=14, fontweight="bold", va="top")
-        fig.text(0.97, 0.97, "size ∝ market cap  |  color = % change",
-                 color=TEXT_SEC, fontsize=9, va="top", ha="right")
+        # 타이틀
+        fig.text(0.03, 0.97, f"S&P 500  Map  —  {date_str}",
+                 color=TEXT_PRI, fontsize=17, fontweight="bold", va="top")
+        fig.text(0.97, 0.97, "size ∝ market cap   color = daily % change",
+                 color=TEXT_SEC, fontsize=10, va="top", ha="right")
 
-        # ── 메인 axes (섹터 treemap 영역) ────────────────────────────────
-        ax = fig.add_axes([0.01, 0.02, 0.98, 0.91], facecolor=BG)
-        ax.set_xlim(0, 100)
-        ax.set_ylim(0, 100)
-        ax.axis("off")
+        ax = fig.add_axes([0.01, 0.03, 0.98, 0.90], facecolor=BG)
+        ax.set_xlim(0, 100); ax.set_ylim(0, 100); ax.axis("off")
 
-        # ── 섹터 외곽 사각형 계산 ─────────────────────────────────────────
-        sec_keys   = list(SP500_STOCKS.keys())          # ETF 심볼 순서
-        sec_meta   = {k: SECTOR_META[k] for k in sec_keys}
-        sec_weights = [sec_meta[k]["weight"] for k in sec_keys]
+        sec_keys    = list(SP500_DISPLAY.keys())
+        sec_weights = [SECTOR_META[k]["weight"] for k in sec_keys]
 
         sec_rects = squarify.squarify(
             squarify.normalize_sizes(sec_weights, 100, 100),
-            x=0, y=0, dx=100, dy=100,
-        )
+            x=0, y=0, dx=100, dy=100)
 
-        OUTER_GAP = 0.8   # 섹터 간격
-        INNER_GAP = 0.35  # 종목 간격
+        OG = 0.7    # 섹터 외부 갭
+        IG = 0.4    # 종목 내부 갭
+        LH_RATIO = 0.14  # 섹터 레이블 높이 비율
 
         for sec_rect, sec_key in zip(sec_rects, sec_keys):
-            SX  = sec_rect["x"]  + OUTER_GAP
-            SY  = sec_rect["y"]  + OUTER_GAP
-            SDX = sec_rect["dx"] - OUTER_GAP * 2
-            SDY = sec_rect["dy"] - OUTER_GAP * 2
-
-            if SDX <= 0 or SDY <= 0:
+            SX  = sec_rect["x"]  + OG
+            SY  = sec_rect["y"]  + OG
+            SDX = sec_rect["dx"] - OG * 2
+            SDY = sec_rect["dy"] - OG * 2
+            if SDX < 1 or SDY < 1:
                 continue
 
-            # 섹터 배경 (어두운 테두리 효과)
-            ax.add_patch(mpatches.FancyBboxPatch(
+            # 섹터 배경
+            ax.add_patch(mp.FancyBboxPatch(
                 (SX, SY), SDX, SDY,
                 boxstyle="square,pad=0",
-                facecolor="#1c2128",
-                edgecolor="#30363d",
-                linewidth=1.0,
-                zorder=1,
-            ))
+                facecolor="#1c2128", edgecolor="#21262d",
+                linewidth=1.2, zorder=1))
 
-            # 섹터명 레이블 영역 높이
-            LABEL_H = min(SDY * 0.12, 4.0)
-            LABEL_H = max(LABEL_H, 2.2)
-
-            # 섹터명
-            sec_name = sec_meta[sec_key]["name"]
-            ax.text(SX + SDX * 0.5, SY + SDY - LABEL_H * 0.45,
-                    sec_name,
+            # 섹터 레이블 영역
+            LH = max(min(SDY * LH_RATIO, 5.5), 2.8)
+            ax.text(SX + SDX*0.5, SY + SDY - LH*0.45,
+                    SECTOR_META[sec_key]["name"],
                     ha="center", va="center", color=TEXT_PRI,
-                    fontsize=max(6, min(10, SDX * 0.55)),
+                    fontsize=max(6.5, min(11, SDX * 0.50)),
                     fontweight="bold", zorder=4, clip_on=True)
 
-            # ── 종목 내부 treemap ─────────────────────────────────────────
-            stocks = SP500_STOCKS[sec_key]  # [(sym, name, weight), ...]
-            stock_weights = [w for _, _, w in stocks]
-            INNER_Y = SY
-            INNER_H = SDY - LABEL_H
+            # 종목 treemap
+            stocks  = SP500_DISPLAY[sec_key]
+            weights = [w for _, _, w in stocks]
+            IH      = SDY - LH          # 종목 영역 높이
 
-            if INNER_H <= 0:
+            if IH < 1:
                 continue
 
             stock_rects = squarify.squarify(
-                squarify.normalize_sizes(stock_weights, SDX, INNER_H),
-                x=SX, y=INNER_Y, dx=SDX, dy=INNER_H,
-            )
+                squarify.normalize_sizes(weights, SDX, IH),
+                x=SX, y=SY, dx=SDX, dy=IH)
 
-            for sr, (sym, disp_name, _) in zip(stock_rects, stocks):
-                IX  = sr["x"]  + INNER_GAP
-                IY  = sr["y"]  + INNER_GAP
-                IDX = sr["dx"] - INNER_GAP * 2
-                IDY = sr["dy"] - INNER_GAP * 2
-
-                if IDX <= 0.5 or IDY <= 0.5:
+            for sr, (sym, dname, _) in zip(stock_rects, stocks):
+                IX  = sr["x"]  + IG
+                IY  = sr["y"]  + IG
+                IDX = sr["dx"] - IG * 2
+                IDY = sr["dy"] - IG * 2
+                if IDX < 0.8 or IDY < 0.8:
                     continue
 
                 q    = stock_quotes.get(sym, {})
                 pct  = q.get("change_pct", 0.0)
-                clr  = _heatmap_color(pct)
-                tc   = "#ffffff" if _lum(clr) < 0.50 else "#0d1117"
+                clr  = _heat(pct)
+                tc   = "#ffffff"   # 항상 흰색 (다크 배경 전제)
 
-                ax.add_patch(mpatches.FancyBboxPatch(
+                ax.add_patch(mp.FancyBboxPatch(
                     (IX, IY), IDX, IDY,
                     boxstyle="round,pad=0.0",
-                    facecolor=clr,
-                    edgecolor=BG,
-                    linewidth=1.2,
-                    zorder=2,
-                ))
+                    facecolor=clr, edgecolor=BG,
+                    linewidth=1.5, zorder=2))
 
-                sign   = "+" if pct > 0 else ""
-                pct_str = f"{sign}{pct:.1f}%"
+                sign = "+" if pct > 0 else ""
+                pstr = f"{sign}{pct:.1f}%"
+                md   = min(IDX, IDY)
 
-                # 블록 크기에 따라 텍스트 배치 조정
-                min_dim = min(IDX, IDY)
-                tick_fs = max(5.5, min(13, min_dim * 0.75))
-                pct_fs  = max(5.0, min(11, min_dim * 0.62))
-
-                if IDX > 4.5 and IDY > 4.5:
+                # 가독성 기준: 블록이 충분히 클 때만 텍스트
+                if IDX > 6 and IDY > 6:
                     # 티커 + % 두 줄
-                    ax.text(IX + IDX/2, IY + IDY/2 + IDY*0.10,
-                            sym,
+                    tfs = max(9, min(16, md * 0.72))
+                    pfs = max(9, min(15, md * 0.65))
+                    ax.text(IX+IDX/2, IY+IDY/2+IDY*0.12, sym,
                             ha="center", va="center", color=tc,
-                            fontsize=tick_fs, fontweight="bold",
-                            zorder=3, clip_on=True)
-                    ax.text(IX + IDX/2, IY + IDY/2 - IDY*0.12,
-                            pct_str,
+                            fontsize=tfs, fontweight="bold", zorder=3, clip_on=True)
+                    ax.text(IX+IDX/2, IY+IDY/2-IDY*0.14, pstr,
                             ha="center", va="center", color=tc,
-                            fontsize=pct_fs, alpha=0.92,
-                            zorder=3, clip_on=True)
-                elif IDX > 2.5 and IDY > 2.5:
-                    # 공간 부족 → 한 줄 (티커만)
-                    ax.text(IX + IDX/2, IY + IDY/2,
-                            sym,
+                            fontsize=pfs, zorder=3, clip_on=True)
+                elif IDX > 3.5 and IDY > 3.5:
+                    # 티커만
+                    tfs = max(7.5, min(12, md * 0.68))
+                    ax.text(IX+IDX/2, IY+IDY/2, sym,
                             ha="center", va="center", color=tc,
-                            fontsize=max(5, tick_fs * 0.8), fontweight="bold",
-                            zorder=3, clip_on=True)
+                            fontsize=tfs, fontweight="bold", zorder=3, clip_on=True)
 
-        # ── 색상 범례 ─────────────────────────────────────────────────────
-        # figure 하단 얇은 그라데이션 바
+        # 색상 범례
         N = 50
         for i in range(N):
-            p = -4.0 + i * (8.0 / N)
-            fig.add_axes([0.03 + i * (0.44 / N), 0.005, 0.44/N, 0.015],
-                         facecolor=_heatmap_color(p)).set_axis_off()
-        fig.text(0.03,  0.024, "−4%", color=TEXT_SEC, fontsize=7.5, va="bottom")
-        fig.text(0.25,  0.024, "0",   color=TEXT_SEC, fontsize=7.5, va="bottom",
-                 ha="center")
-        fig.text(0.47,  0.024, "+4%", color=TEXT_SEC, fontsize=7.5, va="bottom",
-                 ha="right")
+            p = -4.0 + i * (8.0/N)
+            fig.add_axes([0.03 + i*(0.44/N), 0.005, 0.44/N, 0.018],
+                         facecolor=_heat(p)).set_axis_off()
+        fig.text(0.03,  0.027, "−4%", color=TEXT_SEC, fontsize=9, va="bottom")
+        fig.text(0.25,  0.027, "0",   color=TEXT_SEC, fontsize=9, va="bottom", ha="center")
+        fig.text(0.475, 0.027, "+4%", color=TEXT_SEC, fontsize=9, va="bottom")
 
         buf = io.BytesIO()
-        plt.savefig(buf, format="png", dpi=110, bbox_inches="tight",
+        plt.savefig(buf, format="png", dpi=130, bbox_inches="tight",
                     facecolor=BG, edgecolor="none")
         plt.close(fig)
         buf.seek(0)
