@@ -227,7 +227,8 @@ class DailyReviewer:
             trades = db_trades
         else:
             trades = trade_journal.get_trades_by_date(target_date)
-        closed_trades = [t for t in trades if t.is_closed]
+        # 부분 청산도 포함 (exit_time이 있으면 매도 이력 있음)
+        closed_trades = [t for t in trades if t.exit_time is not None]
 
         logger.info(
             f"[거래리뷰] 거래 리포트 생성: {target_date} "
