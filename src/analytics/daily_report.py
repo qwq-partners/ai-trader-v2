@@ -774,11 +774,72 @@ class DailyReportGenerator:
         report = "\n".join(lines)
 
         if send_telegram:
-            success = await self.telegram.send_report(report)
-            if success:
-                logger.info("[레포트] 미국증시 레포트 발송 완료")
+            # ── 1) 차트 이미지 생성 후 전송 (caption = 지수 요약) ──────────
+            chart_sent = False
+            try:
+                from .us_market_chart import generate_us_market_chart
+                from ..utils.telegram import send_photo as tg_send_photo
+
+                chart_buf = generate_us_market_chart(
+                    quotes=quotes,
+                    date_str=date_str,
+                    avg_pct=avg_pct,
+                )
+                if chart_buf:
+                    caption_lines = [f"🇺🇸 <b>미국증시 마감</b>  {date_str}  {mood}", ""]
+                    caption_lines.extend(idx_lines)
+                    caption = "\n".join(caption_lines)[:1024]
+
+                    chart_sent = await tg_send_photo(
+                        chart_buf, caption=caption, parse_mode="HTML"
+                    )
+                    if chart_sent:
+                        logger.info("[레포트] 미국증시 차트 이미지 발송 완료")
+                    else:
+                        logger.warning("[레포트] 차트 이미지 발송 실패")
+            except Exception as chart_err:
+                logger.error(f"[레포트] 차트 생성/전송 오류: {chart_err}")
+
+            # ── 2) 텍스트 리포트 전송 ─────────────────────────────────────
+            # 차트 전송 성공 시 → 섹터 영향 + 포인트만 (중복 지수 생략)
+            # 차트 전송 실패 시 → 전체 report 텍스트 전송
+            if chart_sent:
+                detail_lines = []
+                if bt_lines:
+                    detail_lines.append("<b>■ 빅테크</b>")
+                    for i in range(0, len(bt_lines), 4):
+                        detail_lines.append("  " + "  ".join(bt_lines[i:i + 4]))
+                    detail_lines.append("")
+                if sector_signals:
+                    detail_lines.append("<b>■ 한국 시장 영향</b>")
+                    for theme, sig in sorted(
+                        sector_signals.items(),
+                        key=lambda x: abs(x[1]["boost"]),
+                        reverse=True,
+                    ):
+                        boost = sig["boost"]
+                        avg_s = sig["us_avg_pct"]
+                        movers = sig.get("top_movers", [])
+                        icon = "🔺" if boost > 0 else "🔻"
+                        movers_str = ", ".join(movers[:3])
+                        detail_lines.append(
+                            f"  {icon} <b>{theme}</b> (부스트 {boost:+d}점)"
+                        )
+                        detail_lines.append(
+                            f"      평균 {avg_s:+.1f}%  {movers_str}"
+                        )
+                    detail_lines.append("")
+                detail_lines.append("<b>■ 오늘의 포인트</b>")
+                detail_lines.append(f"  {market_msg}")
+                if detail_lines:
+                    await self.telegram.send_report("\n".join(detail_lines))
             else:
-                logger.error("[레포트] 미국증시 레포트 발송 실패")
+                # 차트 없이 텍스트 전체 전송 (fallback)
+                success = await self.telegram.send_report(report)
+                if success:
+                    logger.info("[레포트] 미국증시 텍스트 레포트 발송 완료")
+                else:
+                    logger.error("[레포트] 미국증시 레포트 발송 실패")
 
         return report
 
