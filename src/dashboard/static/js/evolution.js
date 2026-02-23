@@ -501,10 +501,39 @@ async function applyParameterChange(event, idx) {
 }
 
 // ----------------------------------------------------------
+// 자동 진화 상태 배지 업데이트
+// ----------------------------------------------------------
+async function loadEvoStatus() {
+    try {
+        const data = await api('/api/evolution');
+        const badge = document.getElementById('evo-status-badge');
+        if (!badge) return;
+        if (data.auto_evolution_enabled) {
+            badge.style.background = 'rgba(52,211,153,0.08)';
+            badge.style.borderColor = 'rgba(52,211,153,0.2)';
+            badge.innerHTML =
+                '<span style="width:6px;height:6px;border-radius:50%;background:var(--accent-green);box-shadow:0 0 6px var(--accent-green);animation:pulse-green 2s infinite;"></span>' +
+                '<span style="font-size:0.72rem;font-weight:600;color:var(--accent-green);letter-spacing:0.04em;text-transform:uppercase;">자동 진화 활성</span>';
+        } else {
+            badge.style.background = 'rgba(248,113,113,0.08)';
+            badge.style.borderColor = 'rgba(248,113,113,0.2)';
+            badge.innerHTML =
+                '<span style="width:6px;height:6px;border-radius:50%;background:var(--accent-red);"></span>' +
+                '<span style="font-size:0.72rem;font-weight:600;color:var(--accent-red);letter-spacing:0.04em;text-transform:uppercase;">자동 진화 비활성</span>';
+        }
+    } catch (e) {
+        console.error('[진화탭] 상태 로드 실패:', e);
+    }
+}
+
+// ----------------------------------------------------------
 // 초기화
 // ----------------------------------------------------------
 document.addEventListener('DOMContentLoaded', async () => {
     sse.connect();
+
+    // 자동 진화 상태 로드
+    loadEvoStatus();
 
     // 날짜 목록 로드
     await loadAvailableDates();

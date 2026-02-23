@@ -568,8 +568,12 @@ class DashboardDataCollector:
         """진화 엔진 상태 + 최신 분석 결과 (AS-IS/TO-BE 포맷)"""
         evolver = getattr(self.bot, 'strategy_evolver', None)
 
+        # 자동 진화 스케줄러 활성 여부 (run_trader.py에서 _run_evolution_scheduler 제거됨)
+        auto_evolution_enabled = bool(getattr(self.bot, '_evolution_scheduler_task', None))
+
         # 기본값
         result: Dict[str, Any] = {
+            "auto_evolution_enabled": auto_evolution_enabled,
             "summary": {
                 "version": 0,
                 "total_evolutions": 0,

@@ -389,9 +389,16 @@
         <!-- Date Navigation Header -->
         <div class="card animate-in delay-1" style="padding: 16px 24px; margin-bottom: 16px;">
             <div style="display: flex; align-items: center; justify-content: space-between;">
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <span class="dot" style="width: 6px; height: 6px; border-radius: 50%; background: var(--accent-purple); box-shadow: 0 0 8px var(--accent-purple);"></span>
-                    <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-primary);">거래 리뷰</span>
+                <div style="display: flex; align-items: center; gap: 14px;">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span class="dot" style="width: 6px; height: 6px; border-radius: 50%; background: var(--accent-purple); box-shadow: 0 0 8px var(--accent-purple);"></span>
+                        <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-primary);">거래 리뷰</span>
+                    </div>
+                    <!-- 자동 진화 상태 배지 -->
+                    <div id="evo-status-badge" style="display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:8px;background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.2);">
+                        <span style="width:6px;height:6px;border-radius:50%;background:var(--accent-red);"></span>
+                        <span style="font-size:0.72rem;font-weight:600;color:var(--accent-red);letter-spacing:0.04em;text-transform:uppercase;">자동 진화 비활성</span>
+                    </div>
                 </div>
                 <div class="date-nav">
                     <button id="btn-prev" class="date-nav-btn" onclick="navigateDate(-1)" disabled>
