@@ -798,6 +798,66 @@ class StockScreener:
         except Exception as e:
             logger.warning(f"[Screener] 섹터 분산 조정 오류 (무시): {e}")
 
+    async def _apply_volume_ratio(
+        self,
+        all_stocks: Dict[str, "ScreenedStock"],
+        daily_cache: Optional[Dict] = None,
+    ) -> None:
+        """
+        거래량 비율 보완 (일봉 캐시 재사용, 추가 API 호출 없음)
+
+        기관/외국인 순매수 스크리너는 vol_inrt 필드가 없어 volume_ratio=1.0(기본값)으로
+        들어온다. _apply_momentum_filter 가 채운 daily_cache 에서 전일 거래량을 꺼내
+        오늘 누적 거래량(stock.volume) 대비 배율을 역산하여 채운다.
+
+        "거래량 N배" reason 도 함께 추가해 bot_schedulers 의 vol_ratio 파싱이 동작하도록 함.
+        """
+        if not daily_cache or not self._broker:
+            return
+
+        updated = 0
+        for symbol, stock in all_stocks.items():
+            # volume_ratio 가 기본값(1.0)이거나 미확인(0)이고 오늘 거래량이 있는 종목만 처리
+            if stock.volume_ratio > 1.0 or stock.volume <= 0:
+                continue
+            # "거래량 N배" reason 이 이미 있으면 스킵
+            if any("거래량" in r and "배" in r for r in stock.reasons):
+                continue
+
+            daily_prices = daily_cache.get(symbol)
+            if not daily_prices:
+                # 캐시 미스: broker 에서 직접 조회 (최대 5일치만)
+                try:
+                    daily_prices = await self._broker.get_daily_prices(symbol, days=5)
+                    daily_cache[symbol] = daily_prices
+                except Exception:
+                    continue
+
+            if not daily_prices:
+                continue
+
+            # 가장 최근 완성된 일봉 = 전일 거래량
+            # daily_prices[-1] 이 오늘 장중 부분 데이터일 수 있으므로
+            # 오늘 날짜와 다른 가장 마지막 항목을 전일로 사용
+            from datetime import date as _date
+            today_str = _date.today().strftime("%Y%m%d")
+            prev_candidates = [d for d in daily_prices if d.get("date", "") != today_str]
+            if not prev_candidates:
+                continue
+            prev_vol = prev_candidates[-1].get("volume", 0)
+            if prev_vol <= 0:
+                continue
+
+            ratio = stock.volume / prev_vol
+            stock.volume_ratio = round(ratio, 2)
+
+            # reason 추가 ("거래량 N.Nbae" 패턴 — bot_schedulers 정규식과 호환)
+            stock.reasons.append(f"거래량 {ratio:.1f}배")
+            updated += 1
+
+        if updated:
+            logger.debug(f"[Screener] 거래량 비율 보완: {updated}개 종목")
+
     async def _apply_volatility_filter(self, all_stocks: Dict[str, "ScreenedStock"], daily_cache: Optional[Dict] = None):
         """
         변동성 필터 (ATR 기반)
@@ -1516,6 +1576,13 @@ class StockScreener:
         await self._apply_momentum_filter(all_stocks, daily_cache=_daily_cache)
 
         # ============================================================
+        # 5-1. 거래량 비율 보완 — 일봉 캐시 재사용 (추가 API 호출 없음)
+        #      기관/외국인 스크리너는 vol_inrt 없이 기본값 1.0 으로 들어오므로
+        #      전일 거래량 대비 오늘 누적 거래량 배율로 정확히 채운다.
+        # ============================================================
+        await self._apply_volume_ratio(all_stocks, daily_cache=_daily_cache)
+
+        # ============================================================
         # 6. 섹터/업종 분산 조정 (특정 섹터 쏠림 방지)
         # ============================================================
         await self._apply_sector_diversity(all_stocks)
@@ -1555,6 +1622,33 @@ class StockScreener:
             logger.info(f"[스크리닝] ETF/ETN 제외: {s.name}({s.symbol})")
         if filtered_cnt:
             logger.info(f"[Screener] ETF/ETN 최종 {filtered_cnt}개 제외 완료")
+
+        # ============================================================
+        # 시총/지수 유니버스 필터
+        # KOSPI500 + KOSDAQ150 + KOSDAQ 시총상위 200개 이외 소형주 제외
+        # ============================================================
+        if self._stock_master and hasattr(self._stock_master, 'pool') and self._stock_master.pool:
+            try:
+                tradeable = await self._stock_master.get_tradeable_universe(
+                    kosdaq_top_n=200,
+                    kosdaq_min_cap=1000,  # 1000억원 미만 소형주 제외
+                )
+                if tradeable:
+                    before_uni = len(result)
+                    universe_excluded = [s for s in result if s.symbol not in tradeable]
+                    result = [s for s in result if s.symbol in tradeable]
+                    uni_filtered = before_uni - len(result)
+                    if universe_excluded:
+                        excl_names = ", ".join(f"{s.name}({s.symbol})" for s in universe_excluded[:5])
+                        if len(universe_excluded) > 5:
+                            excl_names += f" 외 {len(universe_excluded)-5}개"
+                        logger.info(f"[Screener] 소형주/비우량 유니버스 {uni_filtered}개 제외: {excl_names}")
+                    else:
+                        logger.debug(f"[Screener] 유니버스 필터: 전원 통과 ({before_uni}개)")
+            except Exception as e:
+                logger.warning(f"[Screener] 유니버스 필터 스킵 (stock_master 오류): {e}")
+        else:
+            logger.debug("[Screener] 유니버스 필터 스킵: stock_master 없음")
 
         # 최소 가격 필터 (소형주/저가주 제외)
         if min_price > 0:

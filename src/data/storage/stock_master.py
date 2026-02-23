@@ -87,9 +87,21 @@ class StockMaster:
                     corp_cls VARCHAR(10) DEFAULT '',
                     kospi200_yn VARCHAR(1) DEFAULT 'N',
                     kosdaq150_yn VARCHAR(1) DEFAULT 'N',
+                    kospi500_yn VARCHAR(1) DEFAULT 'N',
+                    market_cap BIGINT DEFAULT 0,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            # 신규 컬럼 마이그레이션 (기존 테이블에 없을 경우 자동 추가)
+            for col_ddl in [
+                "ALTER TABLE kr_stock_master ADD COLUMN IF NOT EXISTS kospi500_yn VARCHAR(1) DEFAULT 'N'",
+                "ALTER TABLE kr_stock_master ADD COLUMN IF NOT EXISTS market_cap BIGINT DEFAULT 0",
+            ]:
+                try:
+                    await conn.execute(col_ddl)
+                except Exception:
+                    pass  # 이미 존재하면 무시
 
             # 인덱스
             await conn.execute("""
@@ -162,36 +174,99 @@ class StockMaster:
         return stocks
 
     @staticmethod
-    def _sync_load_kospi200_kosdaq150() -> Tuple[Set[str], Set[str]]:
-        """pykrx로 KOSPI200/KOSDAQ150 로드 (동기)"""
-        kospi200 = set()
-        kosdaq150 = set()
+    def _sync_load_index_members() -> Tuple[Set[str], Set[str], Set[str], Dict[str, int]]:
+        """
+        pykrx로 지수 구성 종목 + 시가총액 로드 (동기)
+
+        Returns:
+            kospi200: KOSPI200 구성 종목 코드 집합
+            kospi500: KOSPI500 구성 종목 코드 집합 (KOSPI200 포함)
+            kosdaq150: KOSDAQ150 구성 종목 코드 집합
+            market_caps: {ticker: 시가총액(억원)} 딕셔너리
+        """
+        kospi200: Set[str] = set()
+        kospi500: Set[str] = set()
+        kosdaq150: Set[str] = set()
+        market_caps: Dict[str, int] = {}
 
         try:
             from pykrx import stock
+            from datetime import datetime as _dt
+
+            today_str = _dt.now().strftime("%Y%m%d")
 
             # KOSPI200
             try:
-                tickers = stock.get_index_portfolio_deposit_file("1028")  # KOSPI200 코드
+                tickers = stock.get_index_portfolio_deposit_file("1028")
                 if tickers:
                     kospi200 = set(tickers)
                     logger.info(f"[StockMaster/pykrx] KOSPI200 {len(kospi200)}개 종목")
             except Exception as e:
                 logger.warning(f"[StockMaster/pykrx] KOSPI200 로드 실패: {e}")
 
+            # KOSPI500: pykrx 공식 코드 미지원 → 시총 기준 상위 500개로 대체
+            # (시가총액 로드 후 아래에서 결정)
+
             # KOSDAQ150
             try:
-                tickers = stock.get_index_portfolio_deposit_file("2203")  # KOSDAQ150 코드
+                tickers = stock.get_index_portfolio_deposit_file("2203")
                 if tickers:
                     kosdaq150 = set(tickers)
                     logger.info(f"[StockMaster/pykrx] KOSDAQ150 {len(kosdaq150)}개 종목")
             except Exception as e:
                 logger.warning(f"[StockMaster/pykrx] KOSDAQ150 로드 실패: {e}")
 
+            # 시가총액 (KOSPI + KOSDAQ 전체) + KOSPI500 계산
+            try:
+                df_kospi = stock.get_market_cap_by_ticker(today_str, market="KOSPI")
+                df_kosdaq = stock.get_market_cap_by_ticker(today_str, market="KOSDAQ")
+
+                cap_col = None
+                for df_tmp in [df_kospi, df_kosdaq]:
+                    if df_tmp is not None and not df_tmp.empty:
+                        for col in ["시가총액", "Marcap", "marcap"]:
+                            if col in df_tmp.columns:
+                                cap_col = col
+                                break
+                    if cap_col:
+                        break
+
+                if cap_col:
+                    # 시총 딕셔너리 구성
+                    kospi_caps: Dict[str, int] = {}
+                    kosdaq_caps: Dict[str, int] = {}
+
+                    if df_kospi is not None and not df_kospi.empty:
+                        for ticker, row in df_kospi.iterrows():
+                            cap_won = int(row[cap_col])
+                            cap_eok = cap_won // 100_000_000  # 억원
+                            market_caps[str(ticker)] = cap_eok
+                            kospi_caps[str(ticker)] = cap_eok
+
+                    if df_kosdaq is not None and not df_kosdaq.empty:
+                        for ticker, row in df_kosdaq.iterrows():
+                            cap_won = int(row[cap_col])
+                            cap_eok = cap_won // 100_000_000
+                            market_caps[str(ticker)] = cap_eok
+                            kosdaq_caps[str(ticker)] = cap_eok
+
+                    logger.info(
+                        f"[StockMaster/pykrx] 시가총액 로드: "
+                        f"KOSPI {len(kospi_caps)}개, KOSDAQ {len(kosdaq_caps)}개"
+                    )
+
+                    # KOSPI500: KOSPI 시총 상위 500개
+                    kospi500_list = sorted(kospi_caps, key=lambda t: kospi_caps[t], reverse=True)[:500]
+                    kospi500 = set(kospi500_list)
+                    logger.info(f"[StockMaster/pykrx] KOSPI500(시총기준) {len(kospi500)}개 종목")
+
+            except Exception as e:
+                logger.warning(f"[StockMaster/pykrx] 시가총액 로드 실패: {e}")
+
         except ImportError:
             logger.warning("[StockMaster] pykrx 설치 필요: pip install pykrx")
 
-        # pykrx 실패 시 FDR 폴백
+        # pykrx 실패 시 FDR 폴백 (KOSPI200만)
         if not kospi200:
             try:
                 import FinanceDataReader as fdr
@@ -202,6 +277,13 @@ class StockMaster:
             except Exception:
                 pass
 
+        return kospi200, kospi500, kosdaq150, market_caps
+
+    # 하위 호환 alias
+    @staticmethod
+    def _sync_load_kospi200_kosdaq150() -> Tuple[Set[str], Set[str]]:
+        """(레거시) KOSPI200 + KOSDAQ150만 반환"""
+        kospi200, _, kosdaq150, _ = StockMaster._sync_load_index_members()
         return kospi200, kosdaq150
 
     async def refresh_master(self) -> Dict[str, int]:
@@ -213,8 +295,8 @@ class StockMaster:
         # 동기 함수를 executor에서 실행
         loop = asyncio.get_event_loop()
         stocks = await loop.run_in_executor(_executor, self._sync_load_fdr)
-        kospi200, kosdaq150 = await loop.run_in_executor(
-            _executor, self._sync_load_kospi200_kosdaq150
+        kospi200, kospi500, kosdaq150, market_caps = await loop.run_in_executor(
+            _executor, self._sync_load_index_members
         )
 
         if not stocks:
@@ -228,10 +310,12 @@ class StockMaster:
             if ticker and len(ticker) == 6 and ticker.isdigit():
                 unique_stocks[ticker] = s
 
-        # KOSPI200/KOSDAQ150 플래그 추가
+        # 지수 멤버십 + 시총 플래그 추가
         for ticker, stock in unique_stocks.items():
             stock["kospi200_yn"] = "Y" if ticker in kospi200 else "N"
+            stock["kospi500_yn"] = "Y" if ticker in kospi500 else "N"
             stock["kosdaq150_yn"] = "Y" if ticker in kosdaq150 else "N"
+            stock["market_cap"] = market_caps.get(ticker, 0)
 
         # DB에 저장 (UPSERT: 증분 갱신)
         try:
@@ -246,6 +330,8 @@ class StockMaster:
                             s["corp_cls"],
                             s["kospi200_yn"],
                             s["kosdaq150_yn"],
+                            s["kospi500_yn"],
+                            s["market_cap"],
                             datetime.now(),  # timezone-naive
                         )
                         for s in unique_stocks.values()
@@ -254,14 +340,17 @@ class StockMaster:
                     await conn.executemany(
                         """
                         INSERT INTO kr_stock_master
-                        (ticker, corp_name, market, corp_cls, kospi200_yn, kosdaq150_yn, updated_at)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7)
+                        (ticker, corp_name, market, corp_cls, kospi200_yn, kosdaq150_yn,
+                         kospi500_yn, market_cap, updated_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                         ON CONFLICT (ticker) DO UPDATE SET
                             corp_name = EXCLUDED.corp_name,
                             market = EXCLUDED.market,
                             corp_cls = EXCLUDED.corp_cls,
                             kospi200_yn = EXCLUDED.kospi200_yn,
                             kosdaq150_yn = EXCLUDED.kosdaq150_yn,
+                            kospi500_yn = EXCLUDED.kospi500_yn,
+                            market_cap = EXCLUDED.market_cap,
                             updated_at = EXCLUDED.updated_at
                         """,
                         rows,
@@ -388,7 +477,7 @@ class StockMaster:
         return result
 
     async def get_top_stocks(self, limit: int = 80) -> List[str]:
-        """KOSPI200 + KOSDAQ150 종목 (LLM 힌트용)"""
+        """KOSPI500 + KOSDAQ150 종목 (LLM 힌트용, 시총 내림차순)"""
         await self._ensure_connected()
 
         async with self.pool.acquire() as conn:
@@ -396,9 +485,12 @@ class StockMaster:
                 """
                 SELECT ticker, corp_name
                 FROM kr_stock_master
-                WHERE kospi200_yn = 'Y' OR kosdaq150_yn = 'Y'
+                WHERE kospi500_yn = 'Y' OR kosdaq150_yn = 'Y'
                 ORDER BY
-                    CASE WHEN kospi200_yn = 'Y' THEN 0 ELSE 1 END,
+                    CASE WHEN kospi200_yn = 'Y' THEN 0
+                         WHEN kospi500_yn = 'Y' THEN 1
+                         ELSE 2 END,
+                    market_cap DESC,
                     ticker
                 LIMIT $1
                 """,
@@ -406,6 +498,49 @@ class StockMaster:
             )
 
             return [f"{row['corp_name']}={row['ticker']}" for row in rows]
+
+    async def get_tradeable_universe(
+        self,
+        kosdaq_top_n: int = 200,
+        kosdaq_min_cap: int = 500,   # 억원
+    ) -> Set[str]:
+        """
+        매매 가능 유니버스 반환 (스크리너 필터용)
+
+        구성:
+            - KOSPI500 구성 종목 전체
+            - KOSDAQ150 구성 종목 전체
+            - KOSDAQ 시총 상위 N개 (kosdaq_top_n, 기본 200개)
+              단, 최소 시총 kosdaq_min_cap 억원 이상
+
+        Returns:
+            유효 종목코드 집합 (set of str)
+        """
+        await self._ensure_connected()
+
+        async with self.pool.acquire() as conn:
+            # KOSPI500 + KOSDAQ150
+            rows = await conn.fetch(
+                "SELECT ticker FROM kr_stock_master WHERE kospi500_yn = 'Y' OR kosdaq150_yn = 'Y'"
+            )
+            universe = {row["ticker"] for row in rows}
+
+            # KOSDAQ 시총 상위 N개 추가
+            kosdaq_rows = await conn.fetch(
+                """
+                SELECT ticker FROM kr_stock_master
+                WHERE market = 'KOSDAQ'
+                  AND market_cap >= $1
+                ORDER BY market_cap DESC
+                LIMIT $2
+                """,
+                kosdaq_min_cap,
+                kosdaq_top_n,
+            )
+            for row in kosdaq_rows:
+                universe.add(row["ticker"])
+
+        return universe
 
     async def get_stats(self) -> Dict[str, int]:
         """종목 통계"""
@@ -425,6 +560,9 @@ class StockMaster:
             kospi200 = await conn.fetchval(
                 "SELECT COUNT(*) FROM kr_stock_master WHERE kospi200_yn = 'Y'"
             )
+            kospi500 = await conn.fetchval(
+                "SELECT COUNT(*) FROM kr_stock_master WHERE kospi500_yn = 'Y'"
+            )
             kosdaq150 = await conn.fetchval(
                 "SELECT COUNT(*) FROM kr_stock_master WHERE kosdaq150_yn = 'Y'"
             )
@@ -435,6 +573,7 @@ class StockMaster:
                 "KOSDAQ": kosdaq,
                 "ETF": etf,
                 "KOSPI200": kospi200,
+                "KOSPI500": kospi500,
                 "KOSDAQ150": kosdaq150,
             }
 

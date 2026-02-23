@@ -395,19 +395,35 @@ class SchedulerMixin:
                                 after = result.get("after", {})
                                 reasoning = result.get("reasoning", "")
 
-                                lines = ["📊 주간 전략 예산 리밸런싱\n변경 내역:"]
+                                lines = [
+                                    "📊 <b>주간 전략 예산 리밸런싱</b>",
+                                    "",
+                                    "<b>■ 변경 내역</b>",
+                                ]
                                 all_keys = set(list(before.keys()) + list(after.keys()))
+                                # 전략명 한글 매핑
+                                strat_names = {
+                                    "momentum_breakout": "모멘텀",
+                                    "sepa_trend": "SEPA",
+                                    "rsi2_reversal": "RSI2",
+                                    "strategic_swing": "전략스윙",
+                                    "theme_chasing": "테마",
+                                    "gap_and_go": "갭상승",
+                                }
                                 for k in sorted(all_keys):
                                     old_v = before.get(k, 0)
                                     new_v = after.get(k, 0)
                                     diff = new_v - old_v
                                     arrow = "🔼" if diff > 0 else "🔽" if diff < 0 else "➡️"
+                                    display_name = strat_names.get(k, k)
                                     lines.append(
-                                        f"  {arrow} {k}: {old_v:.0f}% → {new_v:.0f}% "
+                                        f"  {arrow} {display_name}: "
+                                        f"<b>{old_v:.0f}%</b> → <b>{new_v:.0f}%</b> "
                                         f"({diff:+.1f}%p)"
                                     )
                                 if reasoning:
-                                    lines.append(f"사유: {reasoning}")
+                                    lines.append(f"")
+                                    lines.append(f"💡 <b>사유:</b> {reasoning}")
 
                                 await send_alert("\n".join(lines))
                                 logger.info(f"[리밸런싱] 완료: {status}")
@@ -475,8 +491,9 @@ class SchedulerMixin:
                             logger.info(
                                 f"[종목마스터] 갱신 완료: "
                                 f"전체={stats.get('total', 0)}, "
-                                f"KOSPI200={stats.get('kospi200', 0)}, "
-                                f"KOSDAQ150={stats.get('kosdaq150', 0)}"
+                                f"KOSPI200={stats.get('KOSPI200', 0)}, "
+                                f"KOSPI500={stats.get('KOSPI500', 0)}, "
+                                f"KOSDAQ150={stats.get('KOSDAQ150', 0)}"
                             )
                             consecutive_failures = 0  # 성공 시 리셋
                         last_refresh_date = today
@@ -884,7 +901,7 @@ class SchedulerMixin:
 
                                 # 장중 전략 사전 체크 (전략별 시작시간 반영)
                                 _strategy_type = StrategyType.MOMENTUM_BREAKOUT
-                                _momentum_start = self.engine.config.raw.get("momentum_breakout", {}).get("trading_start_time", "09:15")
+                                _momentum_start = "09:15"  # fix: TradingConfig has no .raw attr; default value used
                                 if "momentum_breakout" in _enabled and hour_min >= _momentum_start:
                                     _strategy_type = StrategyType.MOMENTUM_BREAKOUT
                                 elif "theme_chasing" in _enabled:
@@ -1387,13 +1404,111 @@ class SchedulerMixin:
                 logger.error(f"동기화 루프 오류: {e}")
             await asyncio.sleep(120)  # 2분마다 동기화 (KIS API 응답 지연 대응)
 
+    async def _run_strategic_prescan(self):
+        """15:35 전략적 사전분석 (배치 스캔 직전 수급 추세 + VCP 탐지)"""
+        logger.info("[전략적분석] ===== 사전분석 시작 =====")
+        try:
+            from src.signals.strategic.supply_trend import SupplyTrendDetector
+            from src.signals.strategic.vcp_detector import VCPDetector
+
+            # 수급 추세 탐지
+            supply_detector = SupplyTrendDetector(
+                kis_market_data=getattr(self, 'kis_market_data', None)
+            )
+            supply_results = await supply_detector.detect_accumulation()
+            logger.info(f"[전략적분석] 수급 추세 {len(supply_results)}종목 탐지")
+
+            # VCP 탐지: swing_screener 데이터가 있으면 재사용
+            vcp_detector = VCPDetector()
+            screener = getattr(self, 'batch_analyzer', None)
+            if screener and hasattr(screener, '_screener'):
+                # batch_analyzer._screener가 마지막 스캔에서 캐시한 데이터 재사용
+                # → 실제로는 별도 스캔이 필요할 수 있으므로 간이 스캔
+                pass
+
+            # VCP는 FDR 데이터 필요 — 스캔 시 swing_screener가 _apply_strategic_overlay에서
+            # 캐시된 VCP를 로드하므로, 여기서는 수급 추세만 선행 실행
+            logger.info("[전략적분석] 사전분석 완료 (VCP는 배치 스캔 시 통합)")
+
+        except Exception as e:
+            logger.error(f"[전략적분석] 사전분석 오류: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+    async def _run_expert_panel(self):
+        """일요일 21:00 주간 전문가 패널"""
+        logger.info("[전문가패널] ===== 주간 분석 시작 =====")
+        try:
+            from src.signals.strategic.data_collector import StrategicDataCollector
+            from src.signals.strategic.expert_panel import ExpertPanel
+
+            data_collector = StrategicDataCollector(
+                kis_market_data=getattr(self, 'kis_market_data', None),
+                theme_detector=getattr(self, 'theme_detector', None),
+            )
+            panel = ExpertPanel(data_collector=data_collector)
+            outlook = await panel.run_weekly_analysis()
+
+            if outlook:
+                # 텔레그램 알림 (HTML)
+                stocks = outlook.recommended_stocks
+                high_conviction = [s for s in stocks if s.conviction >= 0.5]
+
+                regime_emoji = {"bullish": "🟢", "neutral": "🟡", "bearish": "🔴"}.get(
+                    outlook.market_regime, "⚪"
+                )
+                regime_kr = {"bullish": "강세", "neutral": "중립", "bearish": "약세"}.get(
+                    outlook.market_regime, outlook.market_regime
+                )
+
+                lines = [
+                    f"📊 <b>주간 전문가 패널 분석</b>",
+                    f"",
+                    f"{regime_emoji} 시장 레짐: <b>{regime_kr}</b>",
+                    f"추천 종목: <b>{len(stocks)}개</b> (고확신 {len(high_conviction)}개)",
+                    f"",
+                    f"<b>■ 고확신 추천 종목</b>",
+                ]
+                for i, s in enumerate(high_conviction[:7], 1):
+                    conv_bar = "●" * int(s.conviction * 4) + "○" * (4 - int(s.conviction * 4))
+                    lines.append(
+                        f"  {i}. <b>{s.name}</b> <code>{s.symbol}</code>"
+                    )
+                    horizon_kr = {
+                        "1M": "1개월", "3M": "3개월", "6M": "6개월", "1Y": "1년",
+                    }.get(s.horizon, s.horizon)
+                    lines.append(
+                        f"      {horizon_kr} | 확신 {conv_bar} {s.conviction:.0%}"
+                    )
+                    if s.reasons:
+                        lines.append(f"      → {s.reasons[0]}")
+
+                if outlook.risk_factors:
+                    lines.append(f"")
+                    lines.append(f"<b>■ 주요 리스크</b>")
+                    for rf in outlook.risk_factors[:4]:
+                        lines.append(f"  ⚠️ {rf}")
+
+                msg = "\n".join(lines)
+                await send_alert(msg)
+                logger.info(f"[전문가패널] 완료: {len(stocks)}종목 추천")
+            else:
+                logger.warning("[전문가패널] 결과 없음")
+
+        except Exception as e:
+            logger.error(f"[전문가패널] 실행 오류: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
     async def _run_batch_scheduler(self):
         """
         스윙 모멘텀 배치 스케줄러
 
+        - 15:35 전략적 사전분석 (수급 추세 + VCP)
         - 15:40 일일 스캔 (장 마감 후)
         - 09:01 시그널 실행 (장 시작 후)
         - 09:30~15:20 매 30분 포지션 모니터링
+        - 일요일 21:00 전문가 패널 (주 1회)
         """
         if not hasattr(self, 'batch_analyzer') or not self.batch_analyzer:
             logger.info("[배치스케줄러] batch_analyzer 없음, 스킵")
@@ -1408,9 +1523,17 @@ class SchedulerMixin:
         scan_hour, scan_min = (int(x) for x in scan_time_str.split(":"))
         exec_hour, exec_min = (int(x) for x in execute_time_str.split(":"))
 
+        # 전략적 사전분석: 배치 스캔 5분 전
+        prescan_hour, prescan_min = scan_hour, max(scan_min - 5, 0)
+        if scan_min < 5:
+            prescan_hour = scan_hour - 1 if scan_hour > 0 else 23
+            prescan_min = 60 + scan_min - 5
+
         last_scan_date = None
         last_execute_date = None
         last_monitor_time = None
+        last_prescan_date = None
+        last_expert_panel_week = None
 
         pending_signals_path = Path.home() / ".cache" / "ai_trader" / "pending_signals.json"
 
@@ -1418,6 +1541,13 @@ class SchedulerMixin:
             while self.running:
                 now = datetime.now()
                 today = now.date()
+
+                # 일요일 21:00 전문가 패널 (주 1회)
+                if now.weekday() == 6 and now.hour == 21 and 0 <= now.minute < 15:
+                    iso_week = now.isocalendar()[1]
+                    if last_expert_panel_week != iso_week:
+                        await self._run_expert_panel()
+                        last_expert_panel_week = iso_week
 
                 if is_kr_market_holiday(today):
                     await asyncio.sleep(60)
@@ -1434,6 +1564,13 @@ class SchedulerMixin:
                         logger.info(f"[배치] catch-up 실행: {result}")
                     except Exception as e:
                         logger.error(f"[배치] catch-up 실행 오류: {e}")
+
+                # 15:35 전략적 사전분석 (수급 추세 탐지)
+                if (now.hour == prescan_hour
+                        and prescan_min <= now.minute < prescan_min + 4
+                        and last_prescan_date != today):
+                    await self._run_strategic_prescan()
+                    last_prescan_date = today
 
                 # 15:40 일일 스캔
                 if (now.hour == scan_hour

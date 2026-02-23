@@ -52,6 +52,7 @@ async def main():
         print(f"  - KOSDAQ: {stats.get('KOSDAQ', 0):,}개")
         print(f"  - ETF: {stats.get('ETF', 0):,}개")
         print(f"  - KOSPI200: {stats.get('KOSPI200', 0):,}개")
+        print(f"  - KOSPI500: {stats.get('KOSPI500', 0):,}개")
         print(f"  - KOSDAQ150: {stats.get('KOSDAQ150', 0):,}개")
 
         # 삼성전자 조회 검증
