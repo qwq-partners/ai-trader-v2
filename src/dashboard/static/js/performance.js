@@ -201,9 +201,12 @@ function renderExitPnlChart(byExitType) {
         third_take_profit: '3차익절',
         stop_loss: '손절',
         trailing: '트레일링',
+        trailing_stop: '트레일링',
         breakeven: '본전',
         manual: '수동',
         kis_sync: '동기화',
+        profit_taking: '익절',
+        time_exit: '시간청산',
     };
 
     const labels = keys.map(k => exitLabels[k] || k);
