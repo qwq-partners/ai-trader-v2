@@ -56,62 +56,126 @@ from bot_schedulers import SchedulerMixin
 
 
 # ============================================================
-# PID 파일 관리 (프로세스 중복 방지)
+# PID 파일 + flock 기반 프로세스 중복 방지
 # ============================================================
 
+import fcntl
+
 PID_FILE = Path.home() / ".cache" / "ai_trader" / "trader.pid"
+LOCK_FILE = Path.home() / ".cache" / "ai_trader" / "trader.lock"
+_lock_fd = None  # 전역 파일 디스크립터 (프로세스 수명 동안 유지)
 
 
-def check_and_cleanup_stale_pid():
-    """기존 PID 파일 확인 및 stale 프로세스 정리"""
-    if not PID_FILE.exists():
-        return True
+def _find_other_trader_processes() -> list:
+    """현재 프로세스를 제외한 run_trader.py 프로세스 목록 반환"""
+    my_pid = os.getpid()
+    others = []
+    for proc in psutil.process_iter(['pid', 'cmdline']):
+        try:
+            pid = proc.info['pid']
+            if pid == my_pid:
+                continue
+            cmdline = ' '.join(proc.info.get('cmdline') or [])
+            if 'run_trader.py' in cmdline and 'grep' not in cmdline:
+                others.append(pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return others
 
-    try:
-        with open(PID_FILE, 'r') as f:
-            old_pid = int(f.read().strip())
 
-        # 프로세스 존재 여부 확인
-        if psutil.pid_exists(old_pid):
+def acquire_singleton_lock() -> bool:
+    """
+    flock 기반 싱글톤 락 획득 + 기존 프로세스 강제 종료
+
+    1단계: 실행 중인 다른 run_trader.py 프로세스를 SIGTERM → SIGKILL
+    2단계: flock 파일 락으로 race condition 완전 차단
+    3단계: PID 파일 기록
+
+    Returns:
+        True: 락 획득 성공 (유일한 프로세스)
+        False: 락 획득 실패
+    """
+    global _lock_fd
+    import time
+
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    # 1단계: 기존 프로세스 종료
+    others = _find_other_trader_processes()
+    if others:
+        logger.warning(f"기존 트레이더 프로세스 발견: {others} — 종료 시도")
+        for pid in others:
             try:
-                proc = psutil.Process(old_pid)
-                cmdline = ' '.join(proc.cmdline())
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
 
-                # run_trader.py 실행 중인지 확인
-                if 'run_trader.py' in cmdline:
-                    logger.error(
-                        f"이미 실행 중인 트레이더 프로세스 발견 (PID: {old_pid})\n"
-                        f"종료 방법: kill {old_pid}"
-                    )
-                    return False
-                else:
-                    # 다른 프로세스가 PID 재사용 → stale PID 파일
-                    logger.warning(f"Stale PID 파일 발견 (PID {old_pid}는 다른 프로세스), 정리")
-                    PID_FILE.unlink()
-                    return True
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                # 프로세스 종료됨 → stale PID 파일
-                logger.warning(f"Stale PID 파일 발견 (PID {old_pid} 종료됨), 정리")
-                PID_FILE.unlink()
-                return True
-        else:
-            # 프로세스 없음 → stale PID 파일
-            logger.warning(f"Stale PID 파일 발견 (PID {old_pid} 없음), 정리")
-            PID_FILE.unlink()
-            return True
+        # SIGTERM 대기 (최대 3초)
+        time.sleep(3)
 
-    except Exception as e:
-        logger.warning(f"PID 파일 확인 중 오류: {e}, 기존 파일 제거")
-        PID_FILE.unlink()
-        return True
+        # 아직 살아있으면 SIGKILL
+        for pid in others:
+            try:
+                if psutil.pid_exists(pid):
+                    os.kill(pid, signal.SIGKILL)
+                    logger.warning(f"PID {pid} SIGKILL 전송")
+            except ProcessLookupError:
+                pass
 
+        time.sleep(1)
 
-def write_pid_file():
-    """현재 프로세스 PID 기록"""
+    # 2단계: flock 획득 (non-blocking)
+    try:
+        _lock_fd = open(LOCK_FILE, 'w')
+        fcntl.flock(_lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _lock_fd.write(str(os.getpid()))
+        _lock_fd.flush()
+    except (IOError, OSError):
+        logger.error("flock 획득 실패 — 다른 프로세스가 이미 락을 보유 중")
+        if _lock_fd:
+            _lock_fd.close()
+            _lock_fd = None
+        return False
+
+    # 3단계: PID 파일 기록
     PID_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(PID_FILE, 'w') as f:
         f.write(str(os.getpid()))
-    logger.info(f"PID 파일 생성: {PID_FILE} (PID: {os.getpid()})")
+
+    logger.info(f"싱글톤 락 획득 완료 (PID: {os.getpid()})")
+    return True
+
+
+def release_singleton_lock():
+    """락 해제 + PID 파일 제거"""
+    global _lock_fd
+    try:
+        if PID_FILE.exists():
+            PID_FILE.unlink()
+    except Exception as e:
+        logger.warning(f"PID 파일 제거 실패: {e}")
+
+    try:
+        if _lock_fd:
+            fcntl.flock(_lock_fd.fileno(), fcntl.LOCK_UN)
+            _lock_fd.close()
+            _lock_fd = None
+    except Exception as e:
+        logger.warning(f"flock 해제 실패: {e}")
+
+    try:
+        if LOCK_FILE.exists():
+            LOCK_FILE.unlink()
+    except Exception:
+        pass
+
+
+# 하위 호환용 — 기존 코드에서 호출하는 함수
+def write_pid_file():
+    """PID 파일 갱신 (acquire_singleton_lock에서 이미 기록됨)"""
+    PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(PID_FILE, 'w') as f:
+        f.write(str(os.getpid()))
 
 
 def remove_pid_file():
@@ -119,7 +183,6 @@ def remove_pid_file():
     try:
         if PID_FILE.exists():
             PID_FILE.unlink()
-            logger.info(f"PID 파일 제거: {PID_FILE}")
     except Exception as e:
         logger.warning(f"PID 파일 제거 실패: {e}")
 
@@ -276,9 +339,9 @@ class TradingBot(SchedulerMixin):
         if is_critical:
             logger.error(log_msg)
             try:
-                alert_text = f"🚨 [{error_type}] {message}"
+                alert_text = f"🚨 <b>[{error_type}]</b> {message}"
                 if details:
-                    alert_text += f"\n{details[:300]}"
+                    alert_text += f"\n<pre>{details[:300]}</pre>"
                 await send_alert(alert_text)
             except Exception as e:
                 logger.error(f"CRITICAL 알림 텔레그램 발송 실패: {e}")
@@ -514,6 +577,13 @@ class TradingBot(SchedulerMixin):
                 },
                 "sepa_trend": {
                     "stop_loss_pct": sepa_cfg.get("stop_loss_pct", 5.0),
+                    "trailing_stop_pct": 3.0,
+                    "first_exit_pct": 5.0,
+                    "second_exit_pct": 10.0,
+                    "third_exit_pct": 15.0,
+                },
+                "strategic_swing": {
+                    "stop_loss_pct": 5.0,
                     "trailing_stop_pct": 3.0,
                     "first_exit_pct": 5.0,
                     "second_exit_pct": 10.0,
@@ -1909,9 +1979,9 @@ class TradingBot(SchedulerMixin):
                 self.report_generator.theme_detector = self.theme_detector
             tasks.append(asyncio.create_task(self._run_daily_report_scheduler(), name="report_scheduler"))
 
-            # 7. 자가 진화 스케줄러 실행
+            # 7. 주간 전략 예산 리밸런싱 (자가진화 파라미터 자동변경은 비활성화)
             if self.strategy_evolver:
-                tasks.append(asyncio.create_task(self._run_evolution_scheduler(), name="evolution_scheduler"))
+                # evolution_scheduler (LLM 자동 파라미터 튜닝) 제거 — 수동 운영
                 tasks.append(asyncio.create_task(
                     self._run_weekly_rebalance_scheduler(), name="weekly_rebalance"
                 ))
@@ -2327,9 +2397,9 @@ async def main():
         dotenv_path=str(project_root / ".env")
     )
 
-    # 프로세스 중복 체크
-    if not check_and_cleanup_stale_pid():
-        logger.error("이미 실행 중인 트레이더가 있습니다. 종료 후 다시 시도하세요.")
+    # 프로세스 중복 체크 (flock + 기존 프로세스 자동 종료)
+    if not acquire_singleton_lock():
+        logger.error("싱글톤 락 획득 실패. 종료합니다.")
         sys.exit(1)
 
     # 봇 실행
@@ -2337,8 +2407,8 @@ async def main():
     try:
         await bot.run()
     finally:
-        # 비정상 종료 시에도 PID 파일 정리
-        remove_pid_file()
+        # 비정상 종료 시에도 락 + PID 파일 정리
+        release_singleton_lock()
 
 
 if __name__ == "__main__":
