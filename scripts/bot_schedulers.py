@@ -291,7 +291,7 @@ class SchedulerMixin:
                         daily_reviewer = getattr(self, 'daily_reviewer', None)
                         if daily_reviewer and not getattr(self, '_last_trade_report_date', None) == today:
                             try:
-                                daily_reviewer.generate_trade_report(self.trade_journal)
+                                await daily_reviewer.generate_trade_report(self.trade_journal)
                                 self._last_trade_report_date = today
                                 logger.info("[거래리뷰] 일일 거래 복기 리포트 생성 완료")
                             except Exception as e:

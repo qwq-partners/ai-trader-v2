@@ -6,9 +6,11 @@ AI Trading Bot v2 - 일일 거래 리뷰어 (Daily Reviewer)
 - llm_review_YYYYMMDD.json: LLM 종합 평가 (20:30)
 """
 
+import asyncio
 import json
 import os
 from datetime import datetime, date
+from decimal import Decimal
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
@@ -134,9 +136,75 @@ class DailyReviewer:
         """LLM 종합 평가 파일 경로."""
         return self.storage_dir / f"llm_review_{_date_to_file_suffix(d)}.json"
 
+    # ─── DB 거래 조회 ─────────────────────────────────────────
+
+    @staticmethod
+    async def _load_trades_from_db(
+        trade_journal: TradeJournal, target_date: date
+    ) -> Optional[List[TradeRecord]]:
+        """DB에서 해당 날짜 거래를 TradeRecord로 비동기 로드.
+
+        DB pool이 없으면 None을 반환하여 캐시 폴백합니다.
+        """
+        pool = getattr(trade_journal, 'pool', None)
+        if not pool:
+            return None
+
+        try:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT id, symbol, name, entry_time, entry_price, entry_quantity,
+                           exit_time, exit_price, exit_quantity,
+                           entry_reason, entry_strategy, entry_signal_score,
+                           exit_reason, exit_type, pnl, pnl_pct, holding_minutes,
+                           indicators_at_entry, indicators_at_exit,
+                           market_context, theme_info
+                    FROM trades
+                    WHERE entry_time::date = $1 OR exit_time::date = $1
+                    ORDER BY entry_time
+                """, target_date)
+
+            result = []
+            for r in rows:
+                rec = TradeRecord(
+                    id=r['id'], symbol=r['symbol'], name=r['name'] or '',
+                    entry_time=r['entry_time'],
+                    entry_price=Decimal(str(r['entry_price'])),
+                    entry_quantity=r['entry_quantity'],
+                    entry_reason=r['entry_reason'] or '',
+                    entry_strategy=r['entry_strategy'] or '',
+                    entry_signal_score=Decimal(str(r['entry_signal_score'] or 0)),
+                )
+                if r['exit_time']:
+                    rec.exit_time = r['exit_time']
+                    rec.exit_price = Decimal(str(r['exit_price'] or 0))
+                    rec.exit_quantity = r['exit_quantity'] or 0
+                    rec.exit_reason = r['exit_reason'] or ''
+                    rec.exit_type = r['exit_type'] or ''
+                    # TradeRecord 내부에서 float 연산에 사용되므로 Decimal 유지하되
+                    # 하위 호출에서 float += Decimal 에러를 방지
+                    rec.pnl = Decimal(str(round(float(r['pnl'] or 0))))
+                    rec.pnl_pct = Decimal(str(round(float(r['pnl_pct'] or 0), 4)))
+                    rec.holding_minutes = r['holding_minutes'] or 0
+                # JSONB 필드 (asyncpg는 자동 파싱하므로 dict일 수 있음)
+                for field_name in ('indicators_at_entry', 'indicators_at_exit',
+                                   'market_context', 'theme_info'):
+                    val = r[field_name]
+                    if val and isinstance(val, str):
+                        val = json.loads(val)
+                    setattr(rec, field_name, val or {})
+                result.append(rec)
+
+            if result:
+                logger.info(f"[거래리뷰] DB에서 {target_date} 거래 {len(result)}건 로드")
+            return result
+        except Exception as e:
+            logger.warning(f"[거래리뷰] DB 거래 조회 실패, 캐시 폴백: {e}")
+            return None
+
     # ─── 거래 리포트 생성 ───────────────────────────────────
 
-    def generate_trade_report(
+    async def generate_trade_report(
         self,
         trade_journal: TradeJournal,
         date_str: Optional[str] = None,
@@ -152,7 +220,13 @@ class DailyReviewer:
             리포트 딕셔너리
         """
         target_date = _parse_date_str(date_str)
-        trades = trade_journal.get_trades_by_date(target_date)
+
+        # DB 우선 조회 (캐시가 봇 재시작으로 비었을 수 있음)
+        db_trades = await self._load_trades_from_db(trade_journal, target_date)
+        if db_trades is not None:
+            trades = db_trades
+        else:
+            trades = trade_journal.get_trades_by_date(target_date)
         closed_trades = [t for t in trades if t.is_closed]
 
         logger.info(
@@ -169,11 +243,11 @@ class DailyReviewer:
                 "strategy": t.entry_strategy,
                 "entry_time": t.entry_time.isoformat() if t.entry_time else None,
                 "exit_time": t.exit_time.isoformat() if t.exit_time else None,
-                "entry_price": t.entry_price,
-                "exit_price": t.exit_price,
+                "entry_price": float(t.entry_price),
+                "exit_price": float(t.exit_price),
                 "quantity": t.entry_quantity,
-                "pnl": t.pnl,
-                "pnl_pct": round(t.pnl_pct, 2),
+                "pnl": round(float(t.pnl)),
+                "pnl_pct": round(float(t.pnl_pct), 2),
                 "holding_minutes": t.holding_minutes,
                 "entry_reason": t.entry_reason,
                 "exit_reason": t.exit_reason,
@@ -224,8 +298,8 @@ class DailyReviewer:
         wins = [t for t in trades if t.is_win]
         losses = [t for t in trades if not t.is_win]
 
-        total_profit = sum(t.pnl for t in wins)
-        total_loss = abs(sum(t.pnl for t in losses))
+        total_profit = float(sum(float(t.pnl) for t in wins))
+        total_loss = abs(float(sum(float(t.pnl) for t in losses)))
 
         # 손실 0원 시 profit_factor 상한 99.9 (왜곡 방지)
         if total_loss > 0:
@@ -235,31 +309,31 @@ class DailyReviewer:
         else:
             profit_factor = 0.0
 
-        total_pnl = sum(t.pnl for t in trades)
-        total_pnl_pct = sum(t.pnl_pct for t in trades)
+        total_pnl = float(sum(float(t.pnl) for t in trades))
+        total_pnl_pct = float(sum(float(t.pnl_pct) for t in trades))
 
-        best = max(trades, key=lambda t: t.pnl_pct)
-        worst = min(trades, key=lambda t: t.pnl_pct)
+        best = max(trades, key=lambda t: float(t.pnl_pct))
+        worst = min(trades, key=lambda t: float(t.pnl_pct))
 
         return {
             "total_trades": len(trades),
             "wins": len(wins),
             "losses": len(losses),
             "win_rate": round(len(wins) / len(trades) * 100, 1),
-            "total_pnl": round(total_pnl, 0),
+            "total_pnl": round(total_pnl),
             "total_pnl_pct": round(total_pnl_pct, 2),
             "profit_factor": round(profit_factor, 2),
             "best_trade": {
                 "symbol": best.symbol,
                 "name": best.name,
-                "pnl_pct": round(best.pnl_pct, 2),
-                "pnl": round(best.pnl, 0),
+                "pnl_pct": round(float(best.pnl_pct), 2),
+                "pnl": round(float(best.pnl)),
             },
             "worst_trade": {
                 "symbol": worst.symbol,
                 "name": worst.name,
-                "pnl_pct": round(worst.pnl_pct, 2),
-                "pnl": round(worst.pnl, 0),
+                "pnl_pct": round(float(worst.pnl_pct), 2),
+                "pnl": round(float(worst.pnl)),
             },
         }
 
@@ -286,8 +360,8 @@ class DailyReviewer:
                 stats[strategy]["wins"] += 1
             else:
                 stats[strategy]["losses"] += 1
-            stats[strategy]["total_pnl"] += trade.pnl
-            stats[strategy]["total_pnl_pct"] += trade.pnl_pct
+            stats[strategy]["total_pnl"] += float(trade.pnl)
+            stats[strategy]["total_pnl_pct"] += float(trade.pnl_pct)
 
         # 평균/승률 계산
         for s in stats.values():
@@ -326,7 +400,7 @@ class DailyReviewer:
         # 거래 리포트 로드 (없으면 생성)
         report = self.load_report(date_str_formatted)
         if report is None:
-            report = self.generate_trade_report(trade_journal, date_str_formatted)
+            report = await self.generate_trade_report(trade_journal, date_str_formatted)
 
         trades = report.get("trades", [])
         summary = report.get("summary", {})
