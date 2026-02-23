@@ -338,6 +338,11 @@ class KISMarketData:
 
                     net_qty = int(item.get("ntby_qty", 0) or 0)
 
+                    acml_vol = int(item.get("acml_vol", 0) or 0)
+                    prdy_vol = int(item.get("prdy_vol", 0) or 0)
+                    # 거래량 비율: 당일 누적 / 전일 (장 마감 후에는 정확, 장중에는 부분값)
+                    volume_ratio = round(acml_vol / prdy_vol, 2) if prdy_vol > 0 else 0.0
+
                     result.append({
                         "symbol": symbol,
                         "name": name,
@@ -345,7 +350,9 @@ class KISMarketData:
                         "net_buy_amt": int(item.get("ntby_tr_pbmn", 0) or 0),
                         "price": float(item.get("stck_prpr", 0) or 0),
                         "change_pct": float(item.get("prdy_ctrt", 0) or 0),
-                        "volume": int(item.get("acml_vol", 0) or 0),
+                        "volume": acml_vol,
+                        "prdy_vol": prdy_vol,
+                        "volume_ratio": volume_ratio,
                         "investor": investor_name,
                     })
 

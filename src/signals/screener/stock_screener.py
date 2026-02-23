@@ -299,7 +299,15 @@ class StockScreener:
                     logger.debug(f"[스크리닝] ETF/ETN 제외: {name}({symbol})")
                     continue
 
+                # 거래량 비율: API에서 prdy_vol 받으면 직접 계산, 없으면 0 (후처리 _apply_volume_ratio 에서 보완)
+                api_volume_ratio = item.get("volume_ratio", 0.0)
+                prdy_vol = item.get("prdy_vol", 0)
+
                 score = min(60 + change_pct * 3, 100)
+
+                reasons = [f"기관 순매수 {net_buy_qty:,}주"]
+                if api_volume_ratio > 0:
+                    reasons.append(f"거래량 {api_volume_ratio:.1f}배")
 
                 stocks.append(ScreenedStock(
                     symbol=symbol,
@@ -307,9 +315,9 @@ class StockScreener:
                     price=price,
                     change_pct=change_pct,
                     volume=volume,
-                    volume_ratio=item.get("volume_ratio", 1.0),
+                    volume_ratio=api_volume_ratio if api_volume_ratio > 0 else 1.0,
                     score=score,
-                    reasons=[f"기관 순매수 {net_buy_qty:,}주"],
+                    reasons=reasons,
                     has_inst_buying=True,
                 ))
 
@@ -523,15 +531,22 @@ class StockScreener:
 
                 score = min(60 + change_pct * 3, 100)
 
+                # 거래량 비율: API에서 prdy_vol 받으면 직접 계산, 없으면 0 (후처리 _apply_volume_ratio 에서 보완)
+                api_volume_ratio = item.get("volume_ratio", 0.0)
+
+                reasons = [f"외국인 순매수 {net_buy_qty:,}주"]
+                if api_volume_ratio > 0:
+                    reasons.append(f"거래량 {api_volume_ratio:.1f}배")
+
                 stocks.append(ScreenedStock(
                     symbol=symbol,
                     name=name,
                     price=price,
                     change_pct=change_pct,
                     volume=volume,
-                    volume_ratio=item.get("volume_ratio", 1.0),
+                    volume_ratio=api_volume_ratio if api_volume_ratio > 0 else 1.0,
                     score=score,
-                    reasons=[f"외국인 순매수 {net_buy_qty:,}주"],
+                    reasons=reasons,
                     has_foreign_buying=True,
                 ))
 
@@ -812,8 +827,11 @@ class StockScreener:
 
         "거래량 N배" reason 도 함께 추가해 bot_schedulers 의 vol_ratio 파싱이 동작하도록 함.
         """
-        if not daily_cache or not self._broker:
+        if not self._broker:
             return
+
+        if daily_cache is None:
+            daily_cache = {}
 
         updated = 0
         for symbol, stock in all_stocks.items():

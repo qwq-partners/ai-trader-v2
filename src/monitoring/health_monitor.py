@@ -303,7 +303,7 @@ class HealthMonitor:
 
             emoji = "\U0001f6a8" if result.level == "critical" else "\u26a0\ufe0f"
             try:
-                await send_alert(f"{emoji} [HealthCheck] {result.message}")
+                await send_alert(f"{emoji} <b>[HealthCheck]</b> {result.message}")
             except Exception:
                 pass
 

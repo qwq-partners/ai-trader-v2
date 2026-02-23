@@ -95,6 +95,11 @@ class BatchAnalyzer:
         self._rsi2 = RSI2ReversalStrategy(rsi2_cfg)
         self._sepa = SEPATrendStrategy(sepa_cfg)
 
+        # strategic_swing 최소 점수 (2계층 이상 복합 시그널만)
+        self._strategic_min_score = self._config.get(
+            "strategic_swing", {}
+        ).get("min_score", 70.0)
+
         # 대기 시그널
         self._pending: List[PendingSignal] = []
         self._signals_path = Path.home() / ".cache" / "ai_trader" / "pending_signals.json"
@@ -139,7 +144,10 @@ class BatchAnalyzer:
             rsi2_signals = await self._rsi2.generate_batch_signals(rsi2_candidates)
             sepa_signals = await self._sepa.generate_batch_signals(sepa_candidates)
 
-            all_signals = rsi2_signals + sepa_signals
+            # strategic_swing 시그널: 2계층+ 복합신호 종목
+            strategic_signals = self._generate_strategic_signals(candidates)
+
+            all_signals = rsi2_signals + sepa_signals + strategic_signals
 
             # PendingSignal 변환
             self._pending = []
@@ -177,7 +185,8 @@ class BatchAnalyzer:
 
             logger.info(
                 f"[배치분석] 스캔 완료: "
-                f"RSI2={len(rsi2_signals)}개, SEPA={len(sepa_signals)}개 → "
+                f"RSI2={len(rsi2_signals)}개, SEPA={len(sepa_signals)}개, "
+                f"전략스윙={len(strategic_signals)}개 → "
                 f"대기 시그널 {len(self._pending)}개 저장"
             )
 
@@ -353,6 +362,46 @@ class BatchAnalyzer:
             except Exception as e:
                 logger.warning(f"[포지션모니터] {symbol} 체크 오류: {e}")
 
+    def _generate_strategic_signals(self, candidates) -> List[Signal]:
+        """strategic_swing 시그널 생성: 2계층 이상 복합신호 종목"""
+        signals = []
+        for c in candidates:
+            # 2계층 이상 복합신호 확인 (구조화된 메타데이터 기반)
+            layers = c.indicators.get("strategic_layers", 0)
+            if layers < 2:
+                continue
+            if c.score < self._strategic_min_score:
+                continue
+
+            entry_price = float(c.entry_price) if c.entry_price else 0
+            if entry_price <= 0:
+                continue
+
+            signal = Signal(
+                symbol=c.symbol,
+                side=OrderSide.BUY,
+                strength=SignalStrength.STRONG,
+                strategy=StrategyType.STRATEGIC_SWING,
+                price=c.entry_price,
+                target_price=c.target_price,
+                stop_price=c.stop_price,
+                score=c.score,
+                confidence=min(c.score / 100.0, 1.0),
+                reason=f"전략적 스윙: {', '.join(c.reasons[:3])}",
+                metadata={
+                    "candidate_name": c.name,
+                    "atr_pct": c.indicators.get("atr_pct", 0),
+                    "strategic_layers": sum(
+                        1 for r in c.reasons
+                        if any(kw in r for kw in ["전문가패널", "수급추세", "VCP"])
+                    ),
+                },
+            )
+            signals.append(signal)
+
+        logger.info(f"[배치분석] 전략스윙 시그널 {len(signals)}개 생성")
+        return signals
+
     def _save_json(self):
         """대기 시그널 JSON 저장"""
         try:
@@ -382,24 +431,63 @@ class BatchAnalyzer:
 
             if not self._pending:
                 await send_alert(
-                    "<b>[스윙스캔]</b> 일일 스캔 완료\n"
-                    "후보 종목: 0개"
+                    "🔍 <b>일일 스윙 스캔 완료</b>\n\n"
+                    "후보 종목: <b>0개</b>"
                 )
                 return
 
-            text = f"<b>[스윙스캔]</b> 일일 스캔 완료\n"
-            text += f"후보 종목: {len(self._pending)}개\n\n"
+            # 전략별 분류
+            strat_names = {
+                "sepa_trend": "SEPA",
+                "rsi2_reversal": "RSI2",
+                "strategic_swing": "전략스윙",
+                "momentum_breakout": "모멘텀",
+            }
+            strat_counts = {}
+            for p in self._pending:
+                sn = strat_names.get(p.strategy, p.strategy)
+                strat_counts[sn] = strat_counts.get(sn, 0) + 1
 
-            for p in self._pending[:10]:
-                emoji = "🔵" if p.strategy == "rsi2_reversal" else "🟢"
-                text += (
-                    f"{emoji} {p.symbol} {p.name}\n"
-                    f"  전략={p.strategy} 점수={p.score:.0f}\n"
-                    f"  진입={p.entry_price:,.0f} 손절={p.stop_price:,.0f} 목표={p.target_price:,.0f}\n"
-                    f"  {p.reason}\n\n"
+            strat_summary = " / ".join(f"{k} {v}개" for k, v in strat_counts.items())
+
+            lines = [
+                f"🔍 <b>일일 스윙 스캔 완료</b>",
+                f"",
+                f"후보: <b>{len(self._pending)}개</b> ({strat_summary})",
+                f"",
+            ]
+
+            strat_emoji = {
+                "sepa_trend": "🟢",
+                "rsi2_reversal": "🔵",
+                "strategic_swing": "🟣",
+                "momentum_breakout": "🟠",
+            }
+
+            for i, p in enumerate(self._pending[:10], 1):
+                emoji = strat_emoji.get(p.strategy, "⚪")
+                sn = strat_names.get(p.strategy, p.strategy)
+                pnl_target = (p.target_price / p.entry_price - 1) * 100 if p.entry_price > 0 else 0
+                pnl_stop = (p.stop_price / p.entry_price - 1) * 100 if p.entry_price > 0 else 0
+                lines.append(
+                    f"{emoji} <b>{p.name}</b> <code>{p.symbol}</code> "
+                    f"| {sn} {p.score:.0f}점"
                 )
+                lines.append(
+                    f"    진입 {p.entry_price:,.0f} → "
+                    f"목표 {p.target_price:,.0f}(<b>+{pnl_target:.1f}%</b>) / "
+                    f"손절 {p.stop_price:,.0f}({pnl_stop:.1f}%)"
+                )
+                if p.reason:
+                    # reason이 너무 길면 축약
+                    reason_display = p.reason if len(p.reason) <= 60 else p.reason[:57] + "..."
+                    lines.append(f"    💡 {reason_display}")
+                lines.append("")
 
-            await send_alert(text)
+            if len(self._pending) > 10:
+                lines.append(f"<i>... 외 {len(self._pending) - 10}개 종목</i>")
+
+            await send_alert("\n".join(lines))
 
         except Exception as e:
             logger.warning(f"[배치분석] 텔레그램 알림 실패: {e}")

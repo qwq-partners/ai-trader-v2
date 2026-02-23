@@ -64,7 +64,7 @@ _RESPONSE_SCHEMA = """{
       "confidence": 0.8
     }
   ],
-  "telegram_summary": "📊 2/14 거래 리뷰\\n승률 40% (2/5) | 손익 -45,230원\\n..."
+  "telegram_summary": "📊 <b>2/14 거래 리뷰</b>\\n\\n<b>■ 성과</b>\\n  승률 40% (2/5) | 손익 <b>-45,230원</b>\\n  PF 0.85\\n\\n<b>■ 인사이트</b>\\n  • 장초반 과열 진입 주의\\n  • SEPA 전략 유지"
 }"""
 
 
@@ -542,11 +542,13 @@ class DailyReviewer:
             })
 
         date_display = target_date.strftime("%-m/%-d")
+        assess_emoji = {"good": "🟢", "fair": "🟡", "poor": "🔴"}.get(assessment, "⚪")
         telegram_summary = (
-            f"<b>{date_display} 거래 리뷰 (자동)</b>\n"
-            f"승률 {win_rate:.0f}% ({summary.get('wins', 0)}/{total_trades}) | "
-            f"손익 {total_pnl:+,.0f}원 ({total_pnl_pct:+.2f}%)\n"
-            f"PF {profit_factor:.2f}"
+            f"📊 <b>{date_display} 거래 리뷰</b> (자동)\n\n"
+            f"<b>■ 성과</b>  {assess_emoji}\n"
+            f"  승률 <b>{win_rate:.0f}%</b> ({summary.get('wins', 0)}/{total_trades})\n"
+            f"  손익 <b>{total_pnl:+,.0f}원</b> ({total_pnl_pct:+.2f}%)\n"
+            f"  PF {profit_factor:.2f}"
         )
 
         return {

@@ -327,7 +327,26 @@ class TradeStorage:
         is_fully_closed = total_exited >= trade.entry_quantity
         status = exit_type if is_fully_closed else "partial"
 
-        # 2) DB 큐 — trades UPDATE (누적 PnL)
+        # 2) DB 큐 — trades UPSERT (누락된 KIS_SYNC 등 부모 레코드 보장 후 UPDATE)
+        # Step 2a: 부모 레코드가 없을 경우에만 INSERT (FK 위반 방지)
+        self._enqueue(
+            """INSERT INTO trades
+               (id, symbol, name, entry_time, entry_price, entry_quantity,
+                entry_reason, entry_strategy, entry_signal_score,
+                market_context, indicators_at_entry, theme_info, created_at, updated_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+               ON CONFLICT (id) DO NOTHING""",
+            (
+                trade.id, trade.symbol, trade.name,
+                trade.entry_time, float(trade.entry_price), trade.entry_quantity,
+                trade.entry_reason, trade.entry_strategy, float(trade.entry_signal_score),
+                json.dumps(trade.market_context, default=str, ensure_ascii=False),
+                json.dumps(trade.indicators_at_entry, default=str, ensure_ascii=False),
+                json.dumps(trade.theme_info, default=str, ensure_ascii=False),
+                trade.created_at, trade.updated_at,
+            ),
+        )
+        # Step 2b: 청산 필드 UPDATE (ON CONFLICT DO NOTHING 이후 항상 실행)
         self._enqueue(
             """UPDATE trades SET
                exit_time=$1, exit_price=$2, exit_quantity=$3,
@@ -681,12 +700,14 @@ class TradeStorage:
                     )
                     db_sell_qty_by_symbol = {r['symbol']: int(r['total_qty']) for r in sell_rows}
 
-                    # DB trades 테이블에서 당일 거래 로드 (캐시가 손상/비어있을 수 있음)
+                    # DB trades 테이블에서 거래 로드:
+                    # 오늘 진입한 거래 OR 미청산 포지션(이전 날 진입, 오늘 청산 대상)
                     trade_rows = await self.pool.fetch(
                         "SELECT id, symbol, name, entry_time, entry_price, entry_quantity, "
                         "exit_time, exit_price, exit_quantity, entry_strategy, entry_signal_score, "
-                        "exit_reason, exit_type, pnl, pnl_pct "
-                        "FROM trades WHERE entry_time::date = $1",
+                        "entry_reason, exit_reason, exit_type, pnl, pnl_pct "
+                        "FROM trades WHERE entry_time::date = $1 "
+                        "   OR (exit_time IS NULL AND entry_time::date < $1)",
                         today,
                     )
                     for tr in trade_rows:
