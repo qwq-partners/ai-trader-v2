@@ -76,6 +76,18 @@ class SwingScreener:
         scored = await self._apply_composite_score(all_candidates)
         self._compute_lci_zscore(scored)  # 수급 데이터 주입 후 LCI 계산
 
+        # 4.5단계: VCP 변동성수축 패턴 탐지 (FDR 데이터 재사용 → 캐시 저장)
+        try:
+            from ..strategic.vcp_detector import VCPDetector
+            vcp_detector = VCPDetector()
+            vcp_results = vcp_detector.detect_all(candidates_data)
+            logger.info(f"[스윙스크리너] VCP 탐지: {len(vcp_results)}종목")
+        except Exception as e:
+            logger.warning(f"[스윙스크리너] VCP 탐지 실패 (무시): {e}")
+
+        # 5단계: 전략적 오버레이 (3계층 전략적 신호)
+        scored = self._apply_strategic_overlay(scored)
+
         # 점수 순 정렬
         scored.sort(key=lambda c: c.score, reverse=True)
 
@@ -530,3 +542,140 @@ class SwingScreener:
                     c.indicators["supply_accel"] = round(accel, 3)
 
                 c.indicators["lci"] = round(lci, 3)
+
+    def _apply_strategic_overlay(
+        self, candidates: List[SwingCandidate]
+    ) -> List[SwingCandidate]:
+        """5단계: 3계층 전략적 신호로 점수 보정
+
+        Layer 1: 전문가 패널 추천 → +최대 25점
+        Layer 2: 수급 추세 → +최대 20점
+        Layer 3: VCP 패턴 → +최대 15점
+        다층 중첩 보너스: 2계층 +8, 3계층 +15
+        """
+        # 1) 전문가 추천 로드
+        outlook = self._load_strategic_outlook()
+        recommended = {}
+        if outlook:
+            recommended = {s.symbol: s for s in outlook.recommended_stocks}
+            logger.info(f"[스윙스크리너] 전문가 추천 {len(recommended)}종목 로드")
+
+        # 2) 수급 추세 로드
+        supply_trends = self._load_supply_trends()
+        trending = {s.symbol: s for s in supply_trends}
+        if trending:
+            logger.info(f"[스윙스크리너] 수급 추세 {len(trending)}종목 로드")
+
+        # 3) VCP 후보 로드
+        vcp_candidates = self._load_vcp_candidates()
+        vcp_map = {v.symbol: v for v in vcp_candidates}
+        if vcp_map:
+            logger.info(f"[스윙스크리너] VCP 후보 {len(vcp_map)}종목 로드")
+
+        if not recommended and not trending and not vcp_map:
+            logger.debug("[스윙스크리너] 전략적 오버레이 데이터 없음, 스킵")
+            return candidates
+
+        OVERLAY_MAX_BONUS = 25   # 오버레이 총합 캡: 기본 점수 체계 무력화 방지
+        OVERLAY_MIN_BASE = 50    # 기본 점수가 너무 낮으면 오버레이 미적용
+
+        overlay_applied = 0
+        for candidate in candidates:
+            sym = candidate.symbol
+            layers_matched = 0
+
+            # 기본 점수 미달 시 오버레이 스킵 (저품질 신호 진입 차단)
+            if candidate.score < OVERLAY_MIN_BASE:
+                candidate.indicators["strategic_layers"] = 0
+                continue
+
+            pre_overlay_score = candidate.score  # 오버레이 전 점수 기록
+
+            # Layer 1: 전문가 추천 보너스
+            if sym in recommended:
+                pick = recommended[sym]
+                bonus = int(pick.conviction * 25)  # 최대 +25
+                candidate.score += bonus
+                candidate.reasons.append(
+                    f"전문가패널 추천 (확신도 {pick.conviction:.0%})"
+                )
+                layers_matched += 1
+
+            # Layer 2: 수급 추세 보너스
+            if sym in trending:
+                trend = trending[sym]
+                bonus = min(int(trend.score * 0.2), 20)  # 최대 +20
+                candidate.score += bonus
+                candidate.reasons.append(
+                    f"수급추세 {trend.foreign_streak}일외국인+{trend.inst_streak}일기관"
+                )
+                layers_matched += 1
+
+            # Layer 3: VCP 패턴 보너스
+            if sym in vcp_map:
+                vcp = vcp_map[sym]
+                bonus = min(int(vcp.score * 0.15), 15)  # 최대 +15
+                candidate.score += bonus
+                candidate.reasons.append(f"VCP 변동성수축 (점수 {vcp.score:.0f})")
+                layers_matched += 1
+
+            # 다층 중첩 보너스
+            if layers_matched >= 3:
+                candidate.score += 10
+                candidate.reasons.append("★ 3계층 복합신호 (전문가+수급+VCP)")
+            elif layers_matched >= 2:
+                candidate.score += 5
+                candidate.reasons.append("2계층 복합신호")
+
+            # 오버레이 총합 캡 적용 (최대 +25점)
+            overlay_added = candidate.score - pre_overlay_score
+            if overlay_added > OVERLAY_MAX_BONUS:
+                candidate.score = pre_overlay_score + OVERLAY_MAX_BONUS
+                logger.debug(
+                    f"[스윙스크리너] {sym} 오버레이 캡 적용: "
+                    f"+{overlay_added:.0f} → +{OVERLAY_MAX_BONUS}점"
+                )
+
+            # 구조화된 메타데이터 (batch_analyzer에서 문자열 파싱 대신 사용)
+            candidate.indicators["strategic_layers"] = layers_matched
+
+            if layers_matched > 0:
+                overlay_applied += 1
+
+        if overlay_applied > 0:
+            logger.info(f"[스윙스크리너] 전략적 오버레이 적용: {overlay_applied}종목")
+
+        return candidates
+
+    @staticmethod
+    def _load_strategic_outlook():
+        """전문가 패널 결과 캐시 로드"""
+        try:
+            from ..strategic.expert_panel import ExpertPanel
+            panel = ExpertPanel()
+            return panel.load_outlook()
+        except Exception as e:
+            logger.debug(f"[스윙스크리너] 전문가 패널 캐시 로드 실패: {e}")
+            return None
+
+    @staticmethod
+    def _load_supply_trends():
+        """수급 추세 캐시 로드"""
+        try:
+            from ..strategic.supply_trend import SupplyTrendDetector
+            detector = SupplyTrendDetector()
+            return detector.load_cache()
+        except Exception as e:
+            logger.debug(f"[스윙스크리너] 수급 추세 캐시 로드 실패: {e}")
+            return []
+
+    @staticmethod
+    def _load_vcp_candidates():
+        """VCP 후보 캐시 로드"""
+        try:
+            from ..strategic.vcp_detector import VCPDetector
+            detector = VCPDetector()
+            return detector.load_cache()
+        except Exception as e:
+            logger.debug(f"[스윙스크리너] VCP 캐시 로드 실패: {e}")
+            return []

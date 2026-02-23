@@ -4,42 +4,74 @@ risk_config:
   default_stop_loss_pct: 4.0
   base_position_pct: 10.0
   max_positions: 7
+  # 활성 전략(rsi2+sepa+strategic_swing)에만 배분, 비활성 전략 0%
   strategy_allocation:
-    momentum_breakout: 35.0
-    theme_chasing: 5.0
+    momentum_breakout: 0.0
+    theme_chasing: 0.0
     sepa_trend: 50.0
-    gap_and_go: 5.0
-    rsi2_reversal: 5.0
+    gap_and_go: 0.0
+    rsi2_reversal: 40.0
+    strategic_swing: 10.0
+
 exit_manager:
   max_stop_pct: 6.0
-  min_stop_pct: 3.0
-  first_exit_pct: 2.5
+  min_stop_pct: 2.5           # 수정: 3.0 → 2.5 (stop_loss_pct 이하로)
+  first_exit_pct: 5.0         # 수정: 2.5 → 5.0 (R:R 2:1 복원, 손절 2배)
   first_exit_ratio: 0.3
-  stop_loss_pct: 2.5
-  trailing_activate_pct: 3.0
+  stop_loss_pct: 3.0           # 수정: 2.5 → 3.0 (ATR 최솟값 3%와 정합성)
+  trailing_activate_pct: 2.5  # 수정: 3.0 → 2.5 (first_exit 전에 트레일링 시작)
   trailing_stop_pct: 2.5
+
+# 비활성 전략: enabled=false 명시 (default.yml override 방지)
 momentum_breakout:
-  enabled: true
+  enabled: false
   stop_loss_pct: 3.5
   min_volume_ratio: 2.5
   trading_start_time: '10:30'
   min_score: 75.0
   min_breakout_pct: 0.8
+
 theme_chasing:
+  enabled: false
   stop_loss_pct: 2.5
   min_volume_ratio: 2.3
-  trading_start_time: 09:10
+  trading_start_time: '09:10'
   entry_window_minutes: 20
+
 gap_and_go:
+  enabled: false
   stop_loss_pct: 2.5
   min_volume_ratio: 3.0
+
+# 활성 전략 설정
 sepa_trend:
-  weight: 60
+  enabled: true
+  weight: 40
   min_score: 60
+
+rsi2_reversal:
+  enabled: true
+  weight: 60
+  min_score: 65
+
 _meta:
   exit_manager.stop_loss_pct:
-    source: llm
-    timestamp: '2026-02-11T20:31:33.438158'
+    source: manual_review
+    timestamp: '2026-02-23T15:35:00'
+    note: '2.5→3.0% ATR min 정합성 수정'
+  exit_manager.first_exit_pct:
+    source: manual_review
+    timestamp: '2026-02-23T15:35:00'
+    note: '2.5→5.0% R:R 1:1→2:1 복원'
+  exit_manager.trailing_activate_pct:
+    source: manual_review
+    timestamp: '2026-02-23T15:35:00'
+    note: '3.0→2.5% first_exit보다 낮게 (순서 역전 수정)'
   risk_config.strategy_allocation:
-    source: weekly_rebalance
-    timestamp: '2026-02-21T00:00:34.666905'
+    source: manual_review
+    timestamp: '2026-02-23T15:35:00'
+    note: '비활성 전략 0%, rsi2=40/sepa=50/swing=10 재배분'
+  momentum_breakout.enabled:
+    source: manual_review
+    timestamp: '2026-02-23T15:35:00'
+    note: 'evolved_overrides true → false 수정 (default.yml false 덮어쓰기 버그 수정)'

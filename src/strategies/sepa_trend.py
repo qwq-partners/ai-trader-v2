@@ -130,15 +130,17 @@ class SEPATrendStrategy(BaseStrategy):
         SEPA 트렌드 점수 계산 (0-100)
 
         - 기술적 (SEPA, MA정렬, 52w위치, MRS, MA5>MA20): 40점
-        - 수급 LCI z-score 기반: 20점 (변경: 30->20, 기술적 조건과 균형)
-        - 재무 (PER/PBR/ROE): 20점
+        - 수급 LCI z-score 기반: 20점
+        - 재무 (ROE 중심 축소): 10점 (20→10, 단기스윙에 PER/PBR 영향 제한적)
+        - 거래량 모멘텀: 10점 (신규, 추세 확인용)
         - 섹터 모멘텀: 10점
+        합계: ~40+20+10+10+10 = ~90점 (min_score 60 기준 충분한 변별력)
         """
         ind = candidate.indicators
         score = 0.0
 
         # 1. 기술적 (40점)
-        # SEPA 통과 기본 점수: 15점 (20→15, MRS 5점 재배분)
+        # SEPA 통과 기본 점수: 15점
         if ind.get("sepa_pass"):
             score += 15
 
@@ -154,7 +156,7 @@ class SEPATrendStrategy(BaseStrategy):
             elif spread > 0:
                 score += 3
 
-        # 52주 고점 근접도 (7점)
+        # 52주 고점 근접도 (7점) — 신고가 돌파 임박 = 추세 강도
         close = ind.get("close", 0)
         high_52w = ind.get("high_52w", 0)
         if close and high_52w and high_52w > 0:
@@ -179,20 +181,20 @@ class SEPATrendStrategy(BaseStrategy):
         if ind.get("ma5_above_ma20", False):
             score += 3
 
-        # 2. 수급 LCI z-score 기반 (20점) - 변경: 30->20, 수급만으로 신호 생성 방지
+        # 2. 수급 LCI z-score 기반 (20점)
         lci = ind.get("lci")
         if lci is not None:
             if lci > 1.5:
-                score += 20  # 변경: 30->20 (기술적 조건과 균형)
+                score += 20
             elif lci > 1.0:
-                score += 15  # 변경: 22->15
+                score += 15
             elif lci > 0.5:
-                score += 10  # 변경: 15->10
+                score += 10
             elif lci > 0:
-                score += 5   # 변경: 8->5
+                score += 5
             # lci <= 0: 0점
         else:
-            # LCI 미계산 시 기존 방식 폴백 (변경: 축소)
+            # LCI 미계산 시 폴백
             foreign_net = ind.get("foreign_net_buy", 0)
             inst_net = ind.get("inst_net_buy", 0)
             supply_score = 0
@@ -200,29 +202,43 @@ class SEPATrendStrategy(BaseStrategy):
                 supply_score += 10
             if inst_net > 0:
                 supply_score += 10
-            score += min(supply_score, 20)  # LCI 경로와 동일 상한
+            score += min(supply_score, 20)
 
-        # 3. 재무 (20점)
+        # 3. 재무 (10점) — ROE 중심으로 축소, PER/PBR은 단기스윙에 영향 제한적
         per = ind.get("per", 0)
         pbr = ind.get("pbr", 0)
         roe = ind.get("roe", 0)
 
         if per and 0 < per < 20:
-            score += 7
+            score += 2
         elif per and 0 < per < 30:
-            score += 4
+            score += 1
 
         if pbr and 0 < pbr < 3:
-            score += 6
+            score += 2
         elif pbr and 0 < pbr < 5:
-            score += 3
+            score += 1
 
         if roe and roe > 10:
-            score += 7
+            score += 6   # ROE에 집중 (수익성 좋은 회사의 추세가 더 강함)
         elif roe and roe > 5:
+            score += 3
+
+        # 4. 거래량 모멘텀 (10점) — 추세 확인: 거래량이 수반되지 않은 상승은 허상
+        vol_ratio = (ind.get("vol_ratio") or ind.get("volume_ratio") or
+                     ind.get("vol_inrt") or 0)
+        try:
+            vol_ratio = float(vol_ratio)
+        except (TypeError, ValueError):
+            vol_ratio = 0.0
+        if vol_ratio > 2.0:
+            score += 10
+        elif vol_ratio > 1.5:
+            score += 7
+        elif vol_ratio > 1.0:
             score += 4
 
-        # 4. 섹터 모멘텀 (10점)
+        # 5. 섹터 모멘텀 (10점)
         sector_score = ind.get("sector_momentum", 0)
         if sector_score > 0:
             score += min(sector_score / 10, 10)

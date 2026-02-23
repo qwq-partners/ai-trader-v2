@@ -135,37 +135,39 @@ class RSI2ReversalStrategy(BaseStrategy):
         """
         RSI-2 역추세 점수 계산 (0-100)
 
-        - RSI(2) 위치: 40점
-        - MA200 위 거리: 20점
+        - RSI(2) 위치: 30점 (40→30, KRX 수급 강화 대신 RSI 과집중 완화)
+        - MA200 위 거리: 15점 (20→15)
         - BB 하단 이탈 깊이: 15점
-        - 수급 (외국인/기관): 10점
+        - 수급 (외국인/기관): 20점 (10→20, KRX는 수급이 반등 핵심)
         - MRS 맨스필드 상대강도: 5점
         - 5일 하락 후 반등 조짐: 10점
+        - 거래대금 증가: 5점 (신규, 수급 유입 확인)
+        합계: 30+15+15+20+5+10+5 = 100점
         """
         ind = candidate.indicators
         score = 0.0
 
-        # 1. RSI(2) 위치 (40점)
+        # 1. RSI(2) 위치 (30점) — 과매도 깊이에 따른 점수
         rsi_2 = ind.get("rsi_2")
         if rsi_2 is not None:
             if rsi_2 < 5:
-                score += 40
-            elif rsi_2 < 10:
                 score += 30
+            elif rsi_2 < 10:
+                score += 22
             elif rsi_2 < 15:
-                score += 15
+                score += 11
 
-        # 2. MA200 위 거리 (20점)
+        # 2. MA200 위 거리 (15점) — 장기 상승추세 확인
         close = ind.get("close", 0)
         ma200 = ind.get("ma200")
         if close and ma200 and ma200 > 0:
             above_pct = (close - ma200) / ma200 * 100
             if above_pct > 20:
-                score += 20
-            elif above_pct > 10:
                 score += 15
+            elif above_pct > 10:
+                score += 11
             elif above_pct > 0:
-                score += 10
+                score += 7
 
         # 3. BB 하단 이탈 (15점)
         bb_lower = ind.get("bb_lower")
@@ -178,15 +180,15 @@ class RSI2ReversalStrategy(BaseStrategy):
             elif bb_dist < 1:
                 score += 5
 
-        # 4. 수급 (10점) - 15→10점으로 축소, MRS 5점 재배분
+        # 4. 수급 (20점) — KRX: 수급 없는 과매도는 Dead Cat Bounce 위험
         foreign_net = ind.get("foreign_net_buy", 0)
         inst_net = ind.get("inst_net_buy", 0)
         if foreign_net > 0:
-            score += 5
+            score += 10
         if inst_net > 0:
-            score += 5
+            score += 10
 
-        # 5. MRS 맨스필드 상대강도 (5점) - 지수 대비 강세 종목의 과매도 → 반등 확률 높음
+        # 5. MRS 맨스필드 상대강도 (5점) — 지수 대비 강세 종목 과매도 → 반등 확률 높음
         mrs = ind.get("mrs")
         mrs_slope = ind.get("mrs_slope", 0)
         if mrs is not None:
@@ -195,11 +197,23 @@ class RSI2ReversalStrategy(BaseStrategy):
             elif mrs > 0:
                 score += 3
 
-        # 6. 5일 하락 후 반등 (10점)
+        # 6. 5일 하락 후 반등 조짐 (10점)
         change_5d = ind.get("change_5d", 0)
         if change_5d and change_5d < -5:
             score += 10
         elif change_5d and change_5d < -3:
             score += 5
+
+        # 7. 거래대금 증가 (5점) — 수급 유입 추가 확인
+        vol_ratio = (ind.get("vol_ratio") or ind.get("volume_ratio") or
+                     ind.get("vol_inrt") or 0)
+        try:
+            vol_ratio = float(vol_ratio)
+        except (TypeError, ValueError):
+            vol_ratio = 0.0
+        if vol_ratio > 1.5:
+            score += 5
+        elif vol_ratio > 1.0:
+            score += 3
 
         return min(score, 100)
