@@ -356,7 +356,7 @@ class TradeStorage:
             (
                 trade.exit_time, float(trade.exit_price), trade.exit_quantity,
                 trade.exit_reason, trade.exit_type,
-                float(trade.pnl), float(trade.pnl_pct),
+                round(float(trade.pnl)), float(trade.pnl_pct),
                 trade.holding_minutes,
                 json.dumps(trade.indicators_at_exit, default=str, ensure_ascii=False),
                 trade.updated_at, trade.id,
@@ -373,7 +373,7 @@ class TradeStorage:
                 trade.id, trade.symbol, trade.name,
                 trade.exit_time, float(exit_price), exit_quantity,
                 exit_type, exit_reason,
-                float(this_sell_pnl), float(this_sell_pnl_pct),
+                round(float(this_sell_pnl)), float(this_sell_pnl_pct),
                 trade.entry_strategy, float(trade.entry_signal_score),
                 status,
             ),
@@ -412,6 +412,118 @@ class TradeStorage:
 
     def get_statistics(self, days: int = 30) -> Dict[str, Any]:
         return self._journal.get_statistics(days)
+
+    async def get_statistics_from_db(self, days: int = 30) -> Dict[str, Any]:
+        """DB 기반 거래 통계 (JSON 대체, 청산 완료 건만)"""
+        if not self._db_available or not self.pool:
+            return self._journal.get_statistics(days)
+
+        cutoff = datetime.now() - timedelta(days=days)
+        try:
+            async with self.pool.acquire() as conn:
+                # 1) 기본 통계
+                row = await conn.fetchrow("""
+                    SELECT COUNT(*) as total,
+                           COUNT(*) FILTER (WHERE pnl > 0) as wins,
+                           COUNT(*) FILTER (WHERE pnl <= 0) as losses,
+                           COALESCE(SUM(pnl), 0) as total_pnl,
+                           COALESCE(AVG(pnl_pct), 0) as avg_pnl_pct,
+                           COALESCE(AVG(holding_minutes), 0) as avg_holding
+                    FROM trades
+                    WHERE exit_time IS NOT NULL
+                      AND entry_time >= $1
+                """, cutoff)
+
+                total = row['total']
+                if total == 0:
+                    return {
+                        "total_trades": 0, "win_rate": 0, "avg_pnl_pct": 0,
+                        "total_pnl": 0, "avg_holding_minutes": 0,
+                        "best_trade": None, "worst_trade": None,
+                        "by_strategy": {}, "by_exit_type": {},
+                    }
+
+                # 2) 전략별
+                strat_rows = await conn.fetch("""
+                    SELECT entry_strategy, COUNT(*) as trades,
+                           COUNT(*) FILTER (WHERE pnl > 0) as wins,
+                           COALESCE(SUM(pnl), 0) as total_pnl,
+                           COALESCE(AVG(pnl_pct), 0) as avg_pnl_pct
+                    FROM trades
+                    WHERE exit_time IS NOT NULL AND entry_time >= $1
+                    GROUP BY entry_strategy
+                """, cutoff)
+
+                # 3) 청산유형별
+                exit_rows = await conn.fetch("""
+                    SELECT exit_type, COUNT(*) as trades,
+                           COUNT(*) FILTER (WHERE pnl > 0) as wins,
+                           COALESCE(AVG(pnl_pct), 0) as avg_pnl_pct
+                    FROM trades
+                    WHERE exit_time IS NOT NULL AND entry_time >= $1
+                    GROUP BY exit_type
+                """, cutoff)
+
+                # 4) best/worst
+                best = await conn.fetchrow("""
+                    SELECT symbol, name, pnl_pct FROM trades
+                    WHERE exit_time IS NOT NULL AND entry_time >= $1
+                    ORDER BY pnl_pct DESC LIMIT 1
+                """, cutoff)
+                worst = await conn.fetchrow("""
+                    SELECT symbol, name, pnl_pct FROM trades
+                    WHERE exit_time IS NOT NULL AND entry_time >= $1
+                    ORDER BY pnl_pct ASC LIMIT 1
+                """, cutoff)
+
+            # dict 구성 (기존 JSON 응답 구조 호환)
+            by_strategy = {}
+            for sr in strat_rows:
+                key = sr['entry_strategy'] or 'unknown'
+                trades_cnt = sr['trades']
+                by_strategy[key] = {
+                    "trades": trades_cnt,
+                    "wins": sr['wins'],
+                    "total_pnl": float(sr['total_pnl']),
+                    "avg_pnl_pct": float(sr['avg_pnl_pct']),
+                    "win_rate": sr['wins'] / trades_cnt * 100 if trades_cnt > 0 else 0,
+                }
+
+            by_exit_type = {}
+            for er in exit_rows:
+                key = er['exit_type'] or 'unknown'
+                by_exit_type[key] = {
+                    "trades": er['trades'],
+                    "wins": er['wins'],
+                    "avg_pnl_pct": float(er['avg_pnl_pct']),
+                }
+
+            best_dict = None
+            if best:
+                best_dict = {"symbol": best['symbol'], "name": best['name'],
+                             "pnl_pct": float(best['pnl_pct'])}
+            worst_dict = None
+            if worst:
+                worst_dict = {"symbol": worst['symbol'], "name": worst['name'],
+                              "pnl_pct": float(worst['pnl_pct'])}
+
+            return {
+                "total_trades": total,
+                "wins": row['wins'],
+                "losses": row['losses'],
+                "win_rate": row['wins'] / total * 100 if total > 0 else 0,
+                "avg_pnl_pct": float(row['avg_pnl_pct']),
+                "total_pnl": float(row['total_pnl']),
+                "avg_holding_minutes": float(row['avg_holding']),
+                "best_trade": best_dict,
+                "worst_trade": worst_dict,
+                "by_strategy": by_strategy,
+                "by_exit_type": by_exit_type,
+            }
+
+        except Exception as e:
+            logger.warning(f"[TradeStorage] DB 통계 조회 실패, JSON 폴백: {e}")
+            return self._journal.get_statistics(days)
 
     def update_review(
         self,
@@ -787,6 +899,18 @@ class TradeStorage:
                 if not target_trade:
                     logger.warning(f"[TradeStorage] {sym} 매도 복구 대상 trade 없음 (누락 {missing_qty}주)")
                     continue
+
+                # 매도수량 클램핑: entry_quantity 초과 방지
+                remaining = target_trade.entry_quantity - (target_trade.exit_quantity or 0)
+                if missing_qty > remaining:
+                    logger.warning(
+                        f"[동기화] {sym} 매도수량 초과 클램핑: "
+                        f"missing={missing_qty} > remaining={remaining} "
+                        f"(entry={target_trade.entry_quantity}, exit={target_trade.exit_quantity or 0})"
+                    )
+                    missing_qty = max(remaining, 0)
+                    if missing_qty <= 0:
+                        continue
 
                 # 누락분만 복구 (마지막 체결가 사용)
                 last_fill = sell_fills[-1]

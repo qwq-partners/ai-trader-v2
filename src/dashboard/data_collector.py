@@ -344,13 +344,21 @@ class DashboardDataCollector:
         trades = journal.get_trades_by_date(trade_date)
         return self._enrich_trades(trades)
 
-    def get_trade_stats(self, days: int = 30) -> Dict[str, Any]:
-        """거래 통계 (미청산 거래 포함)"""
+    async def get_trade_stats(self, days: int = 30) -> Dict[str, Any]:
+        """거래 통계 (미청산 거래 포함, DB 우선)"""
         journal = self.bot.trade_journal
         if not journal:
             return {"total_trades": 0}
 
-        stats = _serialize(journal.get_statistics(days))
+        # DB 우선, 실패 시 JSON 폴백
+        if hasattr(journal, 'get_statistics_from_db'):
+            try:
+                stats = await journal.get_statistics_from_db(days)
+            except Exception as e:
+                logger.warning(f"[DataCollector] DB 통계 실패, JSON 폴백: {e}")
+                stats = _serialize(journal.get_statistics(days))
+        else:
+            stats = _serialize(journal.get_statistics(days))
 
         # 미청산 거래 정보 추가
         open_trades = journal.get_open_trades()

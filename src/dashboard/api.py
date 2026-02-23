@@ -87,7 +87,7 @@ class APIHandler:
         except ValueError:
             return web.json_response({"error": "Invalid days parameter"}, status=400)
         days = max(1, min(days, 365))
-        return web.json_response(self.dc.get_trade_stats(days))
+        return web.json_response(await self.dc.get_trade_stats(days))
 
     async def get_themes(self, request: web.Request) -> web.Response:
         return web.json_response(self.dc.get_themes())

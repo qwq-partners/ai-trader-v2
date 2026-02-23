@@ -14,7 +14,7 @@ AI Trading Bot v2 - 수수료 계산기
 왕복 거래 비용: 약 0.227%
 """
 
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Tuple
 from dataclasses import dataclass
 
@@ -44,14 +44,14 @@ class FeeCalculator:
         self.config = config or FeeConfig()
 
     def calculate_buy_fee(self, amount: Decimal) -> Decimal:
-        """매수 수수료 계산"""
-        return amount * self.config.buy_commission_rate
+        """매수 수수료 계산 (원 단위 반올림)"""
+        return (amount * self.config.buy_commission_rate).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
 
     def calculate_sell_fee(self, amount: Decimal) -> Decimal:
-        """매도 수수료 + 세금 계산"""
+        """매도 수수료 + 세금 계산 (원 단위 반올림)"""
         commission = amount * self.config.sell_commission_rate
         tax = amount * self.config.sell_tax_rate
-        return commission + tax
+        return (commission + tax).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
 
     def calculate_net_pnl(
         self,
@@ -74,7 +74,7 @@ class FeeCalculator:
         total_cost = buy_amount + buy_fee
         net_proceeds = sell_amount - sell_fee
 
-        net_pnl = net_proceeds - total_cost
+        net_pnl = (net_proceeds - total_cost).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
         net_pnl_pct = (net_pnl / total_cost) * 100 if total_cost > 0 else Decimal("0")
 
         return net_pnl, net_pnl_pct
@@ -151,7 +151,7 @@ def calculate_net_pnl(
         Decimal(str(sell_price)),
         quantity
     )
-    return float(pnl), float(pnl_pct)
+    return int(pnl), float(pnl_pct)
 
 
 def get_target_price(entry_price: float, target_net_pct: float) -> float:
