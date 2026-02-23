@@ -96,6 +96,72 @@ INDEX_NAMES = {
     "^DJI": "다우",
 }
 
+# ──────────────────────────────────────────────────────────────────────────────
+# S&P 500 대표 종목 (섹터 ETF별, 시총 비중 기준 정렬)
+# (sym, 표시명, 상대 시총 비중)  ←  섹터 내 비중이므로 합산 100 불필요
+# ──────────────────────────────────────────────────────────────────────────────
+SP500_STOCKS: Dict[str, List] = {
+    "XLK": [  # Technology
+        ("AAPL",  "Apple",       15.0), ("MSFT",  "Microsoft",  13.5),
+        ("NVDA",  "NVIDIA",      11.0), ("AVGO",  "Broadcom",    3.5),
+        ("ORCL",  "Oracle",       2.0), ("ADBE",  "Adobe",       1.8),
+        ("CRM",   "Salesforce",   1.6), ("AMD",   "AMD",         1.2),
+        ("AMAT",  "App. Mater.",  1.1), ("QCOM",  "Qualcomm",    1.0),
+    ],
+    "XLF": [  # Financials
+        ("BRK-B", "Berkshire",   4.5), ("JPM",   "JPMorgan",    4.2),
+        ("V",     "Visa",        4.0), ("MA",    "Mastercard",  3.5),
+        ("GS",    "Goldman",     1.6), ("MS",    "Morgan St.",  1.5),
+        ("BAC",   "Bank of Am.", 2.0), ("WFC",   "Wells Fargo", 1.4),
+        ("AXP",   "Amex",        1.1),
+    ],
+    "XLV": [  # Health Care
+        ("LLY",   "Lilly",       5.0), ("UNH",   "UnitedHlth",  4.2),
+        ("JNJ",   "J&J",         2.5), ("ABBV",  "AbbVie",      2.2),
+        ("MRK",   "Merck",       2.0), ("PFE",   "Pfizer",      1.4),
+        ("TMO",   "Thermo F.",   1.1), ("DHR",   "Danaher",     1.0),
+    ],
+    "XLY": [  # Consumer Discretionary
+        ("AMZN",  "Amazon",      8.5), ("TSLA",  "Tesla",       4.2),
+        ("HD",    "Home Depot",  2.2), ("MCD",   "McDonald's",  1.5),
+        ("BKNG",  "Booking",     1.3), ("NKE",   "Nike",        0.8),
+        ("LOW",   "Lowe's",      0.8),
+    ],
+    "XLC": [  # Communication Services
+        ("GOOG",  "Alphabet",    9.0), ("META",  "Meta",        7.5),
+        ("NFLX",  "Netflix",     2.5), ("DIS",   "Disney",      1.5),
+        ("T",     "AT&T",        1.0), ("VZ",    "Verizon",     0.9),
+    ],
+    "XLI": [  # Industrials
+        ("GE",    "GE Aero",     2.1), ("CAT",   "Caterpillar", 1.9),
+        ("RTX",   "RTX Corp",    1.8), ("UNP",   "Union Pac.",  1.6),
+        ("HON",   "Honeywell",   1.3), ("BA",    "Boeing",      1.0),
+        ("ADP",   "ADP",         1.0),
+    ],
+    "XLP": [  # Consumer Staples
+        ("WMT",   "Walmart",     3.2), ("COST",  "Costco",      2.8),
+        ("PG",    "P&G",         2.6), ("KO",    "Coca-Cola",   2.0),
+        ("PEP",   "PepsiCo",     1.8), ("PM",    "Phil. Morris",1.0),
+    ],
+    "XLE": [  # Energy
+        ("XOM",   "ExxonMobil",  2.8), ("CVX",   "Chevron",     2.2),
+        ("COP",   "ConocoPhil.", 1.3), ("SLB",   "SLB",         0.8),
+        ("EOG",   "EOG Res.",    0.7),
+    ],
+    "XLB": [  # Materials
+        ("LIN",   "Linde",       1.6), ("SHW",   "Sherwin-W.",  0.9),
+        ("APD",   "Air Prod.",   0.7), ("ECL",   "Ecolab",      0.6),
+    ],
+    "XLRE": [  # Real Estate
+        ("PLD",   "Prologis",    0.9), ("AMT",   "Amer. Tower", 0.8),
+        ("EQIX",  "Equinix",     0.6), ("SPG",   "Simon Prop.", 0.5),
+    ],
+    "XLU": [  # Utilities
+        ("NEE",   "NextEra",     1.0), ("DUK",   "Duke En.",    0.6),
+        ("SO",    "Southern",    0.5), ("D",     "Dominion",    0.4),
+    ],
+}
+
 
 class USMarketData:
     """미국 시장 오버나이트 데이터 (Yahoo Finance REST)"""
@@ -153,6 +219,85 @@ class USMarketData:
             logger.warning("[USMarket] US 시장 데이터 조회 실패")
 
         return result or {}
+
+    async def fetch_sp500_stocks(self) -> Dict[str, Dict]:
+        """
+        S&P 500 대표 종목 시세 조회 (SP500_STOCKS 기준 ~75개)
+
+        섹터 treemap 차트용 데이터. 기존 캐시에 있으면 재활용, 없으면 Yahoo Finance
+        v7 → v8 spark 순으로 폴백 조회.
+
+        Returns:
+            {symbol: {price, change_pct, name}} — 조회 실패한 심볼은 누락
+        """
+        # 이미 fetch_us_market_summary 캐시에 있는 심볼은 재활용
+        all_syms = [
+            sym
+            for stocks in SP500_STOCKS.values()
+            for sym, _, _ in stocks
+        ]
+
+        # 기존 캐시 활용
+        result: Dict[str, Dict] = {}
+        missing = []
+        for sym in all_syms:
+            if sym in self._cache:
+                result[sym] = self._cache[sym]
+            else:
+                missing.append(sym)
+
+        if not missing:
+            return result
+
+        # 누락 심볼 추가 조회 (v7 우선)
+        try:
+            session  = await self._get_session()
+            url      = f"{self.YAHOO_BASE_URL}/v7/finance/quote"
+            chunk_sz = 40
+            for i in range(0, len(missing), chunk_sz):
+                chunk = missing[i:i + chunk_sz]
+                params = {
+                    "symbols": ",".join(chunk),
+                    "fields": "symbol,shortName,regularMarketPrice,"
+                              "regularMarketChange,regularMarketChangePercent",
+                }
+                try:
+                    async with session.get(url, params=params,
+                                           timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            for q in data.get("quoteResponse", {}).get("result", []):
+                                sym = q.get("symbol", "")
+                                if sym:
+                                    result[sym] = {
+                                        "price":      q.get("regularMarketPrice", 0),
+                                        "change_pct": q.get("regularMarketChangePercent", 0),
+                                        "name":       q.get("shortName", sym),
+                                    }
+                except Exception:
+                    pass
+
+            # v8 spark 폴백
+            still_missing = [s for s in missing if s not in result]
+            if still_missing:
+                url8 = f"{self.YAHOO_BASE_URL}/v8/finance/spark"
+                for i in range(0, len(still_missing), 20):
+                    chunk = still_missing[i:i + 20]
+                    params = {"symbols": ",".join(chunk), "range": "1d", "interval": "1d"}
+                    try:
+                        async with session.get(url8, params=params,
+                                               timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                self._parse_v8_spark_data(data, result)
+                    except Exception:
+                        pass
+
+        except Exception as e:
+            logger.warning(f"[USMarket] S&P500 종목 조회 오류: {e}")
+
+        logger.info(f"[USMarket] S&P500 종목 조회: {len(result)}개 수집")
+        return result
 
     async def _fetch_via_v7(self) -> Optional[Dict[str, Dict]]:
         """Yahoo Finance v7 quote API"""

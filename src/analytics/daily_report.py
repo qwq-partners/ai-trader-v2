@@ -777,9 +777,10 @@ class DailyReportGenerator:
             # ── 1) 차트 이미지 생성 후 전송 (caption = 지수 요약) ──────────
             chart_sent = False
             try:
-                from .us_market_chart import generate_us_market_chart
+                from .us_market_chart import generate_us_market_chart, generate_sp500_map
                 from ..utils.telegram import send_photo as tg_send_photo
 
+                # 1a) 지수 카드 + 섹터 ETF 히트맵
                 chart_buf = generate_us_market_chart(
                     quotes=quotes,
                     date_str=date_str,
@@ -797,6 +798,18 @@ class DailyReportGenerator:
                         logger.info("[레포트] 미국증시 차트 이미지 발송 완료")
                     else:
                         logger.warning("[레포트] 차트 이미지 발송 실패")
+
+                # 1b) S&P500 개별 종목 맵 (별도 전송)
+                try:
+                    stock_quotes = await umd.fetch_sp500_stocks()
+                    sp500_buf = generate_sp500_map(stock_quotes, date_str=date_str)
+                    if sp500_buf:
+                        await tg_send_photo(sp500_buf, caption="📊 <b>S&P 500 Map</b>",
+                                            parse_mode="HTML")
+                        logger.info("[레포트] S&P500 맵 발송 완료")
+                except Exception as sp_err:
+                    logger.warning(f"[레포트] S&P500 맵 생성/전송 실패: {sp_err}")
+
             except Exception as chart_err:
                 logger.error(f"[레포트] 차트 생성/전송 오류: {chart_err}")
 
