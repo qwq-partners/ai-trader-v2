@@ -47,20 +47,25 @@ class StockMaster:
         self._etf_set: Set[str] = set()  # ETF/ETN 코드 집합 (market='ETF' or corp_cls='ETF')
         self._cache_loaded = False
 
-    async def connect(self):
-        """DB 연결"""
+    async def connect(self) -> bool:
+        """DB 연결. 성공 시 True 반환."""
         if self.pool:
-            return
+            return True
 
-        self.pool = await asyncpg.create_pool(
-            self.db_url,
-            min_size=1,
-            max_size=5,
-            command_timeout=30,
-        )
-        logger.info("[StockMaster] DB 연결 완료")
-        await self._ensure_table()
-        await self._load_cache()
+        try:
+            self.pool = await asyncpg.create_pool(
+                self.db_url,
+                min_size=1,
+                max_size=5,
+                command_timeout=30,
+            )
+            logger.info("[StockMaster] DB 연결 완료")
+            await self._ensure_table()
+            await self._load_cache()
+            return True
+        except Exception as e:
+            logger.error(f"[StockMaster] DB 연결 실패: {e}")
+            return False
 
     async def disconnect(self):
         """DB 연결 종료"""
@@ -68,6 +73,17 @@ class StockMaster:
             await self.pool.close()
             self.pool = None
             logger.info("[StockMaster] DB 연결 종료")
+
+    async def is_empty(self) -> bool:
+        """테이블이 비어있는지 확인"""
+        await self._ensure_connected()
+        count = await self.pool.fetchval("SELECT COUNT(*) FROM kr_stock_master")
+        return (count or 0) == 0
+
+    async def rebuild_cache(self) -> None:
+        """인메모리 캐시만 재구축 (FDR/pykrx API 호출 없음)"""
+        await self._load_cache()
+        logger.info("[StockMaster] 캐시 재구축 완료")
 
     async def _ensure_connected(self):
         """연결 확인"""
