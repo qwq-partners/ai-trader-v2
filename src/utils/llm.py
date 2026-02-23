@@ -87,7 +87,9 @@ class LLMUsage:
         self.output_tokens += output_tokens
 
         # 비용 추정 (대략적)
-        if "gpt-5" in model:
+        if "gpt-5-mini" in model:
+            self.estimated_cost_usd += (input_tokens * 0.0004 + output_tokens * 0.0016) / 1000
+        elif "gpt-5" in model:
             self.estimated_cost_usd += (input_tokens * 0.003 + output_tokens * 0.015) / 1000
         elif "gpt-4" in model:
             self.estimated_cost_usd += (input_tokens * 0.01 + output_tokens * 0.03) / 1000

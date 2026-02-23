@@ -229,7 +229,8 @@ class RiskManager:
             equity = portfolio.total_equity
             effective_pnl = getattr(portfolio, 'effective_daily_pnl', portfolio.daily_pnl)
             daily_pnl_pct = float(effective_pnl / equity * 100) if equity > 0 else 0.0
-            if daily_pnl_pct <= -5.0:
+            hard_stop_pct = max(self.config.daily_max_loss_pct * 2.5, 5.0)
+            if daily_pnl_pct <= -hard_stop_pct:
                 return False, f"일일 손실 한도 초과 ({daily_pnl_pct:.1f}%) - 전면 차단"
             else:
                 return False, f"일일 손실 한도 도달 ({daily_pnl_pct:.1f}%) - 방어적 전략만 허용"

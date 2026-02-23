@@ -4,12 +4,7 @@
 
 let currentDate = new Date().toISOString().slice(0, 10);
 
-// HTML 이스케이프 (XSS 방지)
-function esc(s) {
-    if (s === null || s === undefined) return '';
-    const d = document.createElement('div');
-    d.textContent = String(s);
-    return d.innerHTML;
+// esc()는 common.js에서 글로벌 정의
 }
 
 document.addEventListener('DOMContentLoaded', () => {

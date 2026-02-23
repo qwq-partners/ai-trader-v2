@@ -174,6 +174,12 @@ class SchedulerMixin:
                             self.engine._reserved_by_order.clear()
                         if hasattr(self.engine, '_pending_fallback_count'):
                             self.engine._pending_fallback_count.clear()
+                        # risk_manager에도 동일 속성 존재 시 정리
+                        if self.engine.risk_manager:
+                            if hasattr(self.engine.risk_manager, '_reserved_by_order'):
+                                self.engine.risk_manager._reserved_by_order.clear()
+                            if hasattr(self.engine.risk_manager, '_pending_fallback_count'):
+                                self.engine.risk_manager._pending_fallback_count.clear()
 
                         # 거래 로거 일일 기록 플러시 및 초기화
                         trading_logger.flush()

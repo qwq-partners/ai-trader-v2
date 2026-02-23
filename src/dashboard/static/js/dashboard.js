@@ -174,7 +174,7 @@ function renderSortedPositions() {
 
         return `<tr class="border-b" style="border-color:rgba(99,102,241,0.08)">
             <td class="py-2 pr-3 font-medium text-white" style="white-space:nowrap;">${esc(pos.name || pos.symbol)} <span style="color:var(--text-muted); font-size:0.72rem; font-weight:400;">${esc(pos.symbol)}</span></td>
-            <td class="py-2 pr-3" style="font-size:0.75rem; color:var(--accent-purple);">${stName}</td>
+            <td class="py-2 pr-3" style="font-size:0.75rem; color:var(--accent-purple);">${esc(stName)}</td>
             <td class="py-2 pr-3 text-right mono">${formatNumber(pos.current_price)}</td>
             <td class="py-2 pr-3 text-right mono text-gray-400">${formatNumber(pos.avg_price)}</td>
             <td class="py-2 pr-3 text-right mono">${pos.quantity}</td>

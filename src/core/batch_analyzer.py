@@ -338,6 +338,7 @@ class BatchAnalyzer:
                         )
                         event = SignalEvent.from_signal(signal, source="position_monitor")
                         await self._engine.emit(event)
+                        await asyncio.sleep(0.2)  # rate limit
                         continue  # 청산 시그널 발행 시 보유기간 체크 스킵
 
                 # 보유기간 초과 강제 청산
