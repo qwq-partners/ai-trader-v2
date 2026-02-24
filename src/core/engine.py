@@ -631,7 +631,7 @@ class TradingEngine:
     # 일일 통계 영속화 (재시작 시 복원)
     # ----------------------------------------------------------
 
-    _DAILY_STATS_PATH = Path.home() / ".cache" / "ai_trader" / "daily_stats.json"
+    _DAILY_STATS_PATH = Path.home() / ".cache" / "ai_trader" / "engine_daily_stats.json"
 
     def _save_daily_stats(self):
         """daily_pnl + daily_start_unrealized_pnl을 JSON에 저장 (재시작 복원용)"""
