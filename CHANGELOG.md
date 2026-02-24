@@ -2,6 +2,33 @@
 
 ---
 
+## [2026-02-24] 프리장 익절 슬리피지 필터
+
+### 🛡️ 프리장 익절 슬리피지 필터 (`engine.py`, `types.py`, `config.py`, `default.yml`)
+
+**배경**: 018250 애경산업 장전 단일가 버그
+- `stale pending` 3분 타임아웃 버그(→`873e7cb`에서 30분으로 수정됨)로 3개 주문 중복 제출
+- indicative(예상체결가) 18,310~18,940원 vs 실제 단일가 15,980원 (-15% 괴리)
+- 두 문제 중 stale pending은 이미 수정. 이번 커밋은 indicative 슬리피지 문제 대응
+
+**변경 내용** (`src/core/engine.py`)
+- PRE_MARKET 세션 + SELL 신호에 슬리피지 버퍼 체크 추가 (on_signal)
+  - `"손절" in reason` → **무조건 통과** (손실 방어 최우선)
+  - 익절/트레일링: `indicative × (1 - buffer%) ≤ 진입가` → **차단** (정규장 대기)
+  - `indicative × (1 - buffer%) > 진입가` → **허용** (슬리피지 후에도 수익 확정)
+  - 허용/차단 모두 상세 로그 출력
+
+**설정** (`config/default.yml`)
+```yaml
+pre_market_slippage_buffer_pct: 3.0  # 기본 3% 버퍼
+```
+- `TradingConfig.pre_market_slippage_buffer_pct` 추가 (기본 3.0%)
+- 버퍼 0.0 → 필터 비활성화 (기존 동작과 동일)
+
+**커밋**: `2776cd0`
+
+---
+
 ## [2026-02-24] 자산탭 정합성 + 외부 계좌 버그 + 오후 결과 레포트
 
 ### 📊 자산탭(Equity) 정합성 수정
