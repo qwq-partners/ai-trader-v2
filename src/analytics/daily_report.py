@@ -986,80 +986,94 @@ class DailyReportGenerator:
         recommendations: List[RecommendedStock],
         report_date: date,
     ) -> str:
-        """오후 결과 레포트 포맷팅"""
+        """오후 결과 레포트 포맷팅 (HTML, Telegram)"""
 
-        date_str = report_date.strftime("%Y년 %m월 %d일")
+        date_str = report_date.strftime("%Y.%m.%d")
+        SEP = "─" * 18
 
         lines = [
-            f"📋 <b>오늘의 추천 종목 결과</b>",
-            f"<i>{date_str} 장 마감 기준</i>",
+            f"📋 <b>추천종목 결과</b>  <i>{date_str} 장마감</i>",
+            SEP,
             "",
         ]
 
         wins = 0
         total_pct = 0.0
+        evaluated = []
 
         for rec in recommendations:
             if rec.result_pct is not None:
-                # 결과 이모지
+                # 등급 판정
                 if rec.result_pct >= 3:
-                    emoji = "🎯"  # 목표 달성
+                    grade = "🎯"
                     wins += 1
                 elif rec.result_pct >= 0:
-                    emoji = "✅"  # 수익
+                    grade = "✅"
                     wins += 1
                 elif rec.result_pct >= -2:
-                    emoji = "➖"  # 손절 이내
+                    grade = "➖"
                 else:
-                    emoji = "❌"  # 손실
+                    grade = "❌"
+
+                # 목표/손절 도달 태그
+                tag = ""
+                if rec.target_exit > 0 and rec.result_price and rec.result_price >= rec.target_exit:
+                    tag = "  <b>🏆목표</b>"
+                elif rec.stop_loss > 0 and rec.result_price and rec.result_price <= rec.stop_loss:
+                    tag = "  <b>🛑손절</b>"
 
                 total_pct += rec.result_pct
+                evaluated.append(rec)
 
-                # 목표가 달성 여부 표시
-                target_tag = ""
-                if rec.target_exit > 0 and rec.result_price and rec.result_price >= rec.target_exit:
-                    target_tag = " 🏆목표달성"
-                elif rec.stop_loss > 0 and rec.result_price and rec.result_price <= rec.stop_loss:
-                    target_tag = " 🛑손절"
-
+                # 종목 헤더: 순위 + 이름 + 심볼
                 lines.append(
-                    f"{emoji} <b>{rec.name}</b> <code>{rec.symbol}</code>: "
-                    f"<b>{rec.result_pct:+.1f}%</b> "
-                    f"({rec.result_price:,.0f}원){target_tag}"
+                    f"{grade} <b>{rec.rank}. {rec.name}</b> "
+                    f"<code>{rec.symbol}</code>"
                 )
-                # 목표가/손절가 참고선 (작은 글씨)
-                if rec.target_exit > 0 or rec.stop_loss > 0:
-                    ref = []
-                    if rec.target_exit > 0:
-                        ref.append(f"목표 {rec.target_exit:,.0f}")
-                    if rec.stop_loss > 0:
-                        ref.append(f"손절 {rec.stop_loss:,.0f}")
-                    lines.append(f"   <i>({' / '.join(ref)})</i>")
+                # 결과 수치: 종가 + 등락률 + 태그
+                lines.append(
+                    f"   <code>{rec.result_price:>10,.0f}원</code>  "
+                    f"<b>{rec.result_pct:+.1f}%</b>{tag}"
+                )
+                # 진입/목표/손절 참고 (한 줄, 작게)
+                if rec.target_entry > 0:
+                    lines.append(
+                        f"   <i>진입 {rec.target_entry:,.0f} / "
+                        f"목표 {rec.target_exit:,.0f} / "
+                        f"손절 {rec.stop_loss:,.0f}</i>"
+                    )
+                lines.append("")
             else:
                 lines.append(
-                    f"⏳ <b>{rec.name}</b> <code>{rec.symbol}</code>: 종가 데이터 없음"
+                    f"⏳ <b>{rec.rank}. {rec.name}</b> "
+                    f"<code>{rec.symbol}</code>"
                 )
+                lines.append("   <i>종가 데이터 없음</i>")
+                lines.append("")
 
-        # 요약
-        evaluated = [r for r in recommendations if r.result_pct is not None]
+        # ── 성과 요약 ──
         n = len(evaluated)
-        lines.extend(["", "─" * 20, "<b>📈 성과 요약</b>"])
+        lines.append(SEP)
+        lines.append("<b>📊 성과 요약</b>")
+        lines.append("")
 
         if n > 0:
             avg_pct = total_pct / n
             hit_rate = wins / n * 100
-            lines.extend([
-                f"• 적중률 (0% 이상): <b>{wins}/{n}</b> ({hit_rate:.0f}%)",
-                f"• 평균 수익률: <b>{avg_pct:+.2f}%</b>",
-            ])
-            # 상위 / 하위 종목
+
             sorted_recs = sorted(evaluated, key=lambda r: r.result_pct or 0, reverse=True)
-            if sorted_recs:
-                best = sorted_recs[0]
-                worst = sorted_recs[-1]
-                lines.append(f"• 최고: {best.name} {best.result_pct:+.1f}% / 최저: {worst.name} {worst.result_pct:+.1f}%")
+            best  = sorted_recs[0]
+            worst = sorted_recs[-1]
+
+            lines.extend([
+                f"적중률  <b>{wins} / {n}</b>  ({hit_rate:.0f}%)",
+                f"평균    <b>{avg_pct:+.2f}%</b>",
+                "",
+                f"🥇  {best.name}  <b>{best.result_pct:+.1f}%</b>",
+                f"🔻  {worst.name}  <b>{worst.result_pct:+.1f}%</b>",
+            ])
         else:
-            lines.append("• 결과 데이터 없음 (장 마감 후 재시도 필요)")
+            lines.append("<i>결과 데이터 없음</i>")
 
         return "\n".join(lines)
 
