@@ -1070,12 +1070,25 @@ class DashboardDataCollector:
                 })
             positions_list.sort(key=lambda x: x.get('pnl_pct', 0), reverse=True)
 
-            # 당일 거래 통계 (DB 기반 우선)
+            # 당일 거래 통계 (TradeJournal → DB 기반)
             trades_count, win_rate, realized_pnl = 0, 0.0, 0.0
             if db_stats:
                 trades_count = db_stats.get('trades_count', 0)
                 win_rate = db_stats.get('win_rate', 0.0)
                 realized_pnl = db_stats.get('realized_pnl', 0.0)
+            else:
+                try:
+                    journal = getattr(self.bot, 'trade_journal', None)
+                    if journal and hasattr(journal, 'get_today_trades'):
+                        today_trades = journal.get_today_trades()
+                        closed = [t for t in today_trades if getattr(t, 'is_closed', False)]
+                        trades_count = len(closed)
+                        if trades_count > 0:
+                            wins = sum(1 for t in closed if getattr(t, 'is_win', False))
+                            win_rate = wins / trades_count * 100
+                            realized_pnl = sum(float(getattr(t, 'pnl', 0) or 0) for t in closed)
+                except Exception:
+                    pass
 
             # 일일 손익: 전일 스냅샷 대비 실시간 총자산 변동
             tracker = getattr(self.bot, 'equity_tracker', None)
