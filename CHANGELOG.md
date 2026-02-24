@@ -2,6 +2,41 @@
 
 ---
 
+## [2026-02-25] 배치 스캔 아침 스캔 모드 전환
+
+### 배경
+전일 15:40 스캔 + 19:30 보정 → 당일 08:20 단일 스캔으로 전환.
+전일 종가 기준으로 계산하면 15:40이든 08:20이든 결과가 동일하므로, 아침 스캔 시 미국 오버나이트 반영과 프리장 갭업 필터링이라는 추가 이점이 생김.
+
+### 신규: `run_morning_scan()` (batch_analyzer.py)
+- 전일 종가 기반 스크리닝 (기존 run_daily_scan과 동일 데이터)
+- **미국 오버나이트 점수 보정** (get_overnight_signal 기반)
+  - 평균 지수 -2% 이하 → 전 종목 -15pt
+  - 평균 지수 -1% 이하 → 전 종목 -7pt
+  - 평균 지수 +1% 이상 → 전 종목 +3pt
+  - 보정 후 min_score 미달 → 제거
+- **프리장 갭업 필터**: 현재가 > max_entry_price 종목 사전 제거
+- `expires_at` = 오늘 15:30 (동일 당일 소비)
+
+### 리팩토링: `_scan_and_build(expire_today)` (batch_analyzer.py)
+- run_daily_scan / run_morning_scan 공통 로직 추출
+- `expire_today=False` → 익영업일 15:30 / `expire_today=True` → 오늘 15:30
+
+### 스케줄러 변경 (bot_schedulers.py)
+- `morning_scan_enabled=true`: 08:20 아침 스캔 활성화, 15:40/19:30 비활성화
+- `morning_scan_enabled=false`: 기존 15:40/19:30 동작 유지 (하위 호환)
+- catch-up 로직 개선: 유효 시그널 없으면(expires_at 기준) 재시작 시 즉시 아침 스캔
+
+### 설정 (config/default.yml)
+```yaml
+morning_scan_enabled: true    # 기본값 활성화
+morning_scan_time: "08:20"    # 08:00~08:50 사이 권장
+```
+
+**커밋**: `3b060da`
+
+---
+
 ## [2026-02-24] 미해결 이슈 정리 — daily_pnl DB 백필
 
 ### ✅ daily_pnl 재시작 DB 백필 (`engine.py`, `run_trader.py`)
