@@ -1641,9 +1641,11 @@ class SchedulerMixin:
                         try:
                             import json as _json
                             _sigs = _json.loads(pending_signals_path.read_text())
+                            # 오늘 생성된 유효 시그널이 있는 경우에만 스캔 생략
+                            # (전날 생성된 시그널은 expires_at이 오늘이어도 재스캔 필요)
                             has_valid = any(
-                                datetime.fromisoformat(s.get("expires_at", "2000-01-01"))
-                                > now
+                                datetime.fromisoformat(s.get("expires_at", "2000-01-01")) > now
+                                and datetime.fromisoformat(s.get("created_at", "2000-01-01")).date() == today
                                 for s in _sigs
                             )
                         except Exception:
