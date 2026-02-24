@@ -651,6 +651,10 @@ class TradingBot(SchedulerMixin):
 
                 # 일일 통계 복원 (재시작 시 daily_pnl / daily_start_unrealized_pnl 유지)
                 self.engine.restore_daily_stats()
+                # JSON 파일 없거나 날짜 불일치 시 DB에서 오늘 realized PnL 백필
+                _pool = getattr(self.trade_journal, 'pool', None)
+                if _pool:
+                    await self.engine.restore_daily_pnl_from_db(_pool)
 
                 self.strategy_evolver = get_strategy_evolver()
 

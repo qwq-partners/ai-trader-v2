@@ -652,13 +652,13 @@ class TradingEngine:
         """재시작 시 오늘 날짜 daily_pnl/daily_start_unrealized_pnl 복원"""
         try:
             if not self._DAILY_STATS_PATH.exists():
-                logger.info("[DailyStats] 저장 파일 없음 → 복원 생략")
+                logger.info("[DailyStats] 저장 파일 없음 → DB 백필 시도 예정")
                 return
             with open(self._DAILY_STATS_PATH, "r") as f:
                 data = json.load(f)
             saved_date = data.get("date", "")
             if saved_date != date.today().isoformat():
-                logger.info(f"[DailyStats] 날짜 불일치({saved_date} ≠ 오늘) → 복원 생략")
+                logger.info(f"[DailyStats] 날짜 불일치({saved_date} ≠ 오늘) → DB 백필 시도 예정")
                 return
             self.portfolio.daily_pnl = Decimal(data["daily_pnl"])
             self.portfolio.daily_start_unrealized_pnl = Decimal(data["daily_start_unrealized_pnl"])
@@ -670,6 +670,40 @@ class TradingEngine:
             )
         except Exception as e:
             logger.warning(f"[DailyStats] 복원 실패: {e}")
+
+    async def restore_daily_pnl_from_db(self, pool) -> bool:
+        """JSON 파일 없거나 날짜 불일치 시 DB에서 오늘 realized PnL 백필
+
+        restore_daily_stats() 호출 후 daily_pnl == 0 이면 DB에서 조회해 복원.
+        이미 JSON에서 복원된 경우(daily_pnl != 0)는 건너뜀.
+        """
+        if self.portfolio.daily_pnl != Decimal("0"):
+            logger.debug("[DailyStats] daily_pnl 이미 복원됨 → DB 백필 생략")
+            return False
+        try:
+            today = date.today()
+            row = await pool.fetchrow(
+                "SELECT COALESCE(SUM(pnl), 0) AS total_pnl, "
+                "COUNT(*) FILTER (WHERE pnl IS NOT NULL) AS cnt "
+                "FROM trade_events WHERE event_type='SELL' "
+                "AND DATE(event_time AT TIME ZONE 'Asia/Seoul') = $1",
+                today,
+            )
+            if row and row["cnt"] > 0:
+                self.portfolio.daily_pnl = Decimal(str(row["total_pnl"]))
+                self.portfolio.daily_trades = max(
+                    self.portfolio.daily_trades, int(row["cnt"])
+                )
+                logger.info(
+                    f"[DailyStats] DB 백필 완료 → 실현PnL={self.portfolio.daily_pnl:+,.0f}원 "
+                    f"({row['cnt']}건)"
+                )
+                self._save_daily_stats()  # 파일에도 저장 (다음 재시작 대비)
+                return True
+            logger.info("[DailyStats] DB 조회 결과 오늘 SELL 체결 없음 → daily_pnl=0 유지")
+        except Exception as e:
+            logger.warning(f"[DailyStats] DB 백필 실패: {e}")
+        return False
 
 
 class StrategyManager:
