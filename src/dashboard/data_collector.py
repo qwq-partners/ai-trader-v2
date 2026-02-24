@@ -312,11 +312,15 @@ class DashboardDataCollector:
                     entry_price = d.get('entry_price', 0)
                     qty = d.get('entry_quantity', 0)
                     if entry_price and qty:
-                        d['pnl'] = float(pos.current_price - pos.avg_price) * qty
-                        d['pnl_pct'] = float(
-                            (pos.current_price - pos.avg_price)
-                            / pos.avg_price * 100
-                        ) if pos.avg_price else 0
+                        avg = float(pos.avg_price)
+                        cur = float(pos.current_price)
+                        buy_cost = avg * qty
+                        sell_amount = cur * qty
+                        buy_fee = buy_cost * self.BUY_FEE_RATE
+                        est_sell_cost = sell_amount * (self.SELL_FEE_RATE + self.SELL_TAX_RATE)
+                        # 실현P&L과 동일 공식: 매도시 실수령액 - (매수원가 + 매수수수료)
+                        d['pnl'] = (sell_amount - est_sell_cost) - (buy_cost + buy_fee)
+                        d['pnl_pct'] = (d['pnl'] / (buy_cost + buy_fee) * 100) if (buy_cost + buy_fee) > 0 else 0
 
                 # 보유시간 계산
                 entry_time = d.get('entry_time')
@@ -1225,8 +1229,12 @@ class DashboardDataCollector:
                         qty = p.quantity
                         if qty <= 0 or avg <= 0:
                             continue
-                        unrealized = (cur - avg) * qty
-                        pct = (cur - avg) / avg * 100 if avg > 0 else 0
+                        buy_cost = avg * qty
+                        sell_amount = cur * qty
+                        buy_fee = buy_cost * self.BUY_FEE_RATE
+                        est_sell_cost = sell_amount * (self.SELL_FEE_RATE + self.SELL_TAX_RATE)
+                        unrealized = (sell_amount - est_sell_cost) - (buy_cost + buy_fee)
+                        pct = (unrealized / (buy_cost + buy_fee) * 100) if (buy_cost + buy_fee) > 0 else 0
                         total_unrealized += unrealized
                         name = getattr(p, 'name', '') or name_cache.get(sym, sym)
                         holdings.append({
@@ -1343,7 +1351,7 @@ class DashboardDataCollector:
                 "odno": f.get('odno', ''),
             })
 
-        # 보유 현황 (미실현)
+        # 보유 현황 (미실현) — 수수료+거래세 포함 순손익
         holdings = []
         total_unrealized = 0
         try:
@@ -1356,8 +1364,12 @@ class DashboardDataCollector:
                     qty = p.quantity
                     if qty <= 0 or avg <= 0:
                         continue
-                    unrealized = (cur - avg) * qty
-                    pct = (cur - avg) / avg * 100 if avg > 0 else 0
+                    buy_cost = avg * qty
+                    sell_amount = cur * qty
+                    buy_fee = buy_cost * self.BUY_FEE_RATE
+                    est_sell_cost = sell_amount * (self.SELL_FEE_RATE + self.SELL_TAX_RATE)
+                    unrealized = (sell_amount - est_sell_cost) - (buy_cost + buy_fee)
+                    pct = (unrealized / (buy_cost + buy_fee) * 100) if (buy_cost + buy_fee) > 0 else 0
                     total_unrealized += unrealized
                     name = getattr(p, 'name', '') or name_cache.get(sym, sym)
                     holdings.append({
