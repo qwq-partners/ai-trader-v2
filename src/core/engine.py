@@ -808,10 +808,13 @@ class RiskManager:
         _SELL_TIMEOUT = 90  # 매도 지정가 미체결 타임아웃
         stale_sells = []
         stale_buys = []
+        time_val = now.hour * 100 + now.minute
+        is_regular_hours = 900 <= time_val < 1530
         for s, t in list(self._pending_timestamps.items()):
             elapsed = (now - t).total_seconds()
             is_sell = self._pending_sides.get(s) == OrderSide.SELL
-            if is_sell and elapsed >= _SELL_TIMEOUT:
+            # 장전에는 매도 폴백(시장가 전환) 불필요 — 체결 자체가 장 시작까지 대기
+            if is_sell and elapsed >= _SELL_TIMEOUT and is_regular_hours:
                 stale_sells.append(s)
             elif not is_sell and elapsed >= self._PENDING_TIMEOUT_SECONDS:
                 stale_buys.append(s)

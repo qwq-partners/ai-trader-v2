@@ -1108,11 +1108,22 @@ class TradingBot(SchedulerMixin):
             logger.info("[엔진] 자동 재개: 일시정지 타이머 만료")
 
         try:
-            # stale pending 클린업 (3분 이상 체결 미확인 시 양쪽 pending 모두 해제)
+            # stale pending 클린업 (장중 3분 / 장전 30분 이상 체결 미확인 시 양쪽 pending 모두 해제)
             if self._exit_pending_timestamps:
-                stale_cutoff = datetime.now() - timedelta(minutes=3)
+                now_time = datetime.now()
+                # 장전(~09:00)에는 체결 자체가 불가능 → 장 시작까지 대기 (30분)
+                stale_minutes = 30 if now_time.hour < 9 else 3
+                stale_cutoff = now_time - timedelta(minutes=stale_minutes)
                 stale = [s for s, t in self._exit_pending_timestamps.items() if t < stale_cutoff]
                 for s in stale:
+                    # KIS 미체결 주문 먼저 취소 (살아있는 주문 → 장 시작 시 중복 체결 방지)
+                    if self.broker and hasattr(self.broker, 'cancel_all_for_symbol'):
+                        try:
+                            cancelled = await self.broker.cancel_all_for_symbol(s)
+                            if cancelled:
+                                logger.info(f"[청산 pending] {s} KIS 주문 {cancelled}건 취소 완료")
+                        except Exception as e:
+                            logger.warning(f"[청산 pending] {s} KIS 주문 취소 실패: {e}")
                     self._exit_pending_symbols.discard(s)
                     self._exit_pending_timestamps.pop(s, None)
                     # RiskManager pending도 동기화 해제 (매도 영구 차단 방지)
@@ -1121,13 +1132,21 @@ class TradingBot(SchedulerMixin):
                     # ExitManager stage 롤백 (stale timeout = 주문 실패로 간주)
                     if self.exit_manager:
                         self.exit_manager.rollback_stage(s)
-                    logger.warning(f"[청산 pending] {s} 타임아웃 해제 (3분 초과, RiskManager+ExitManager 동기화)")
+                    logger.warning(f"[청산 pending] {s} 타임아웃 해제 ({stale_minutes}분 초과, RiskManager+ExitManager 동기화)")
 
             # 엔진 RiskManager에서 이미 해제된 종목은 _exit_pending_symbols에서도 동기화 해제
             if self._exit_pending_symbols and self.engine.risk_manager:
                 orphaned = [s for s in self._exit_pending_symbols
                             if s not in self.engine.risk_manager._pending_orders]
                 for s in orphaned:
+                    # KIS 미체결 주문 취소 (고아 pending = KIS에 살아있는 주문 가능)
+                    if self.broker and hasattr(self.broker, 'cancel_all_for_symbol'):
+                        try:
+                            cancelled = await self.broker.cancel_all_for_symbol(s)
+                            if cancelled:
+                                logger.info(f"[청산 pending] {s} 고아 KIS 주문 {cancelled}건 취소 완료")
+                        except Exception:
+                            pass
                     self._exit_pending_symbols.discard(s)
                     self._exit_pending_timestamps.pop(s, None)
                     if self.exit_manager:
