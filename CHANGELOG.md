@@ -2,6 +2,22 @@
 
 ---
 
+## [2026-02-24] 미해결 이슈 정리 — daily_pnl DB 백필
+
+### ✅ daily_pnl 재시작 DB 백필 (`engine.py`, `run_trader.py`)
+
+**문제**: 재시작 시 `engine_daily_stats.json` 없거나 날짜 불일치 → `daily_pnl=0` 초기화
+**수정**: `restore_daily_pnl_from_db(pool)` 추가
+- JSON 복원 성공(daily_pnl != 0)이면 건너뜀
+- JSON 없거나 날짜 불일치 시 → `trade_events` SELL 집계로 오늘 실현PnL 복원
+- 백필 성공 시 JSON에도 저장 (다음 재시작 대비)
+- `run_trader.py`: `restore_daily_stats()` 직후 `restore_daily_pnl_from_db()` 호출
+- **검증**: +0원 → +221,067원 (13건) 정상 복원 확인
+
+**커밋**: `00f2519`
+
+---
+
 ## [2026-02-24] daily_stats 포맷 불일치 방어 + 문서 체계 정리
 
 ### 🐛 `_load_daily_stats` KeyError 수정 (`src/risk/manager.py`)
