@@ -959,6 +959,8 @@ class KISBroker(BaseBroker):
 
             ctx_fk = ""
             ctx_nk = ""
+            prev_ctx_fk = None
+            prev_ctx_nk = None
 
             for page in range(10):  # 최대 10페이지 (약 500건)
                 params = {
@@ -1038,6 +1040,20 @@ class KISBroker(BaseBroker):
                     break
                 if len(output1) == 0:
                     break
+                # 무한루프 방지: 키가 이전 페이지와 동일하면 중단
+                if ctx_fk == prev_ctx_fk and ctx_nk == prev_ctx_nk:
+                    logger.warning(f"외부 계좌 페이지네이션 무한루프 감지 ({cano}), page={page} — 중단")
+                    break
+                prev_ctx_fk = ctx_fk
+                prev_ctx_nk = ctx_nk
+
+            # symbol 기준 중복 제거 (같은 종목이 여러 페이지에 걸쳐 중복 반환되는 경우 방어)
+            seen: dict = {}
+            for pos in positions:
+                sym = pos["symbol"]
+                if sym not in seen:
+                    seen[sym] = pos
+            positions = list(seen.values())
 
             logger.debug(
                 f"외부 계좌 조회 완료: {cano} ({len(positions)}종목)"
