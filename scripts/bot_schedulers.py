@@ -8,6 +8,7 @@ run_trader.py의 TradingBot에서 상속하여 사용.
 
 import asyncio
 import aiohttp
+import json
 import os
 import re
 from datetime import datetime, date, timedelta
@@ -95,9 +96,39 @@ class SchedulerMixin:
         morning_hour, morning_min = (int(x) for x in morning_time_str.split(":"))
         evening_hour, evening_min = (int(x) for x in evening_time_str.split(":"))
 
-        last_us_market_report: Optional[date] = None
-        last_morning_report: Optional[date] = None
-        last_evening_report: Optional[date] = None
+        # 이중 발송 방지: 재시작 후에도 오늘 이미 발송한 레포트는 재발송 안 함
+        _report_state_path = Path.home() / ".cache" / "ai_trader" / "report_state.json"
+
+        def _load_report_state() -> dict:
+            try:
+                if _report_state_path.exists():
+                    return json.loads(_report_state_path.read_text())
+            except Exception:
+                pass
+            return {}
+
+        def _save_report_state(state: dict):
+            try:
+                _report_state_path.parent.mkdir(parents=True, exist_ok=True)
+                _report_state_path.write_text(json.dumps(state))
+            except Exception:
+                pass
+
+        _rs = _load_report_state()
+        _today_str = date.today().isoformat()
+
+        last_us_market_report: Optional[date] = (
+            date.fromisoformat(_rs.get("us_market_report", ""))
+            if _rs.get("us_market_report") == _today_str else None
+        )
+        last_morning_report: Optional[date] = (
+            date.fromisoformat(_rs.get("morning_report", ""))
+            if _rs.get("morning_report") == _today_str else None
+        )
+        last_evening_report: Optional[date] = (
+            date.fromisoformat(_rs.get("evening_report", ""))
+            if _rs.get("evening_report") == _today_str else None
+        )
         last_holiday_refresh_month: Optional[str] = None
         last_daily_reset: Optional[date] = None
 
@@ -219,6 +250,10 @@ class SchedulerMixin:
                                 send_telegram=True,
                             )
                             last_us_market_report = today
+                            _save_report_state({
+                                **_load_report_state(),
+                                "us_market_report": today.isoformat(),
+                            })
                         except Exception as e:
                             logger.error(f"[레포트] 미국증시 레포트 발송 실패: {e}")
 
@@ -235,6 +270,10 @@ class SchedulerMixin:
                                 send_telegram=True,
                             )
                             last_morning_report = today
+                            _save_report_state({
+                                **_load_report_state(),
+                                "morning_report": today.isoformat(),
+                            })
                         except Exception as e:
                             logger.error(f"[레포트] 아침 레포트 발송 실패: {e}")
 
@@ -247,6 +286,10 @@ class SchedulerMixin:
                                 send_telegram=True,
                             )
                             last_evening_report = today
+                            _save_report_state({
+                                **_load_report_state(),
+                                "evening_report": today.isoformat(),
+                            })
                         except Exception as e:
                             logger.error(f"[레포트] 오후 레포트 발송 실패: {e}")
 

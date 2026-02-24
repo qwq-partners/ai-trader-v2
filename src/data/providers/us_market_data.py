@@ -196,14 +196,16 @@ class USMarketData:
     # ──────────────────────────────────────────────────────────────
     # 1. fetch_us_market_summary
     # ──────────────────────────────────────────────────────────────
-    async def fetch_us_market_summary(self) -> Dict[str, Dict]:
+    async def fetch_us_market_summary(self, force_refresh: bool = False) -> Dict[str, Dict]:
         """
         Yahoo Finance에서 전체 US 심볼 시세 조회 (1회 호출).
 
+        Args:
+            force_refresh: True이면 캐시를 무시하고 강제로 새 데이터 조회
         Returns:
             {심볼: {price, change, change_pct, name, ...}}
         """
-        if self._is_cache_valid():
+        if not force_refresh and self._is_cache_valid():
             return self._cache
 
         result = await self._fetch_via_v7()

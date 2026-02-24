@@ -744,7 +744,8 @@ class DailyReportGenerator:
         )
 
         umd = self._us_market_data or get_us_market_data()
-        quotes = await umd.fetch_us_market_summary()
+        # 07:00 레포트는 캐시를 무시하고 최신 US 마감 데이터 강제 조회
+        quotes = await umd.fetch_us_market_summary(force_refresh=True)
 
         if not quotes:
             msg = "⚠️ 미국증시 데이터 조회 실패"
@@ -872,11 +873,13 @@ class DailyReportGenerator:
                     caption_lines.extend(idx_lines)
                     caption = "\n".join(caption_lines)[:1024]
 
+                    _report_cid = self.telegram.report_chat_id
                     chart_sent = await tg_send_photo(
-                        chart_buf, caption=caption, parse_mode="HTML"
+                        chart_buf, caption=caption, parse_mode="HTML",
+                        chat_id=_report_cid,
                     )
                     if chart_sent:
-                        logger.info("[레포트] 미국증시 차트 이미지 발송 완료")
+                        logger.info(f"[레포트] 미국증시 차트 이미지 발송 완료 → {_report_cid}")
                     else:
                         logger.warning("[레포트] 차트 이미지 발송 실패")
 
@@ -885,8 +888,10 @@ class DailyReportGenerator:
                     stock_quotes = await umd.fetch_sp500_stocks()
                     sp500_buf = generate_sp500_map(stock_quotes, date_str=date_str)
                     if sp500_buf:
-                        await tg_send_photo(sp500_buf, caption="📊 <b>S&P 500 Map</b>",
-                                            parse_mode="HTML")
+                        await tg_send_photo(
+                            sp500_buf, caption="📊 <b>S&P 500 Map</b>",
+                            parse_mode="HTML", chat_id=self.telegram.report_chat_id,
+                        )
                         logger.info("[레포트] S&P500 맵 발송 완료")
                 except Exception as sp_err:
                     logger.warning(f"[레포트] S&P500 맵 생성/전송 실패: {sp_err}")
