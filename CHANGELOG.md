@@ -2,6 +2,26 @@
 
 ---
 
+## [2026-02-25] 미국증시 레포트 버그 3종 수정
+
+### 문제
+1. **허수 데이터**: `CACHE_TTL=86400` → 전날 오후 스캔 때 캐시된 Yahoo Finance 데이터를 07:00에 반환
+2. **채널 오발송**: `send_photo()` 기본값이 `alert_chat_id`(개인봇) → 지수차트/S&P500 맵이 개인채널로 발송
+3. **재시작 이중 발송**: `last_us_market_report` 메모리 상태 → 재시작 시 초기화되어 재발송
+
+### 수정
+- `us_market_data.py`: `fetch_us_market_summary(force_refresh=True)` 파라미터 추가
+- `daily_report.py`: 07:00 레포트 생성 시 `force_refresh=True` 호출
+- `daily_report.py`: `send_photo()` 호출 시 `chat_id=self.telegram.report_chat_id` 전달  
+  (지수차트 + S&P500 맵 모두 레포트 채널 `-1003374679062`으로 발송)
+- `bot_schedulers.py`: `report_state.json` 디스크 영속화  
+  (`~/.cache/ai_trader/report_state.json`) — 재시작 후 오늘 발송된 레포트 재발송 방지
+- `bot_schedulers.py`: `import json` 누락 추가
+
+**커밋**: `36ec269`
+
+---
+
 ## [2026-02-25] 배치 스캔 아침 스캔 모드 전환
 
 ### 배경
