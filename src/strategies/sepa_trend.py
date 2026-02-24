@@ -195,15 +195,17 @@ class SEPATrendStrategy(BaseStrategy):
                 score += 5
             # lci <= 0: 0점
         else:
-            # LCI 미계산 시 폴백
-            foreign_net = ind.get("foreign_net_buy", 0)
-            inst_net = ind.get("inst_net_buy", 0)
-            supply_score = 0
-            if foreign_net > 0:
-                supply_score += 10
-            if inst_net > 0:
-                supply_score += 10
-            score += min(supply_score, 20)
+            # LCI 미계산 시 폴백 (프리장/데이터 미수집 등)
+            foreign_net = ind.get("foreign_net_buy", 0) or 0
+            inst_net = ind.get("inst_net_buy", 0) or 0
+            if foreign_net > 0 or inst_net > 0:
+                # 외국인/기관 순매수 데이터 있는 경우 (장중/종가 스캔 시)
+                supply_score = (10 if foreign_net > 0 else 0) + (10 if inst_net > 0 else 0)
+                score += min(supply_score, 20)
+            else:
+                # 수급 데이터 완전 미존재 (프리장 08:20 등) → 중립값 (페널티 없음)
+                # 데이터 없음 ≠ 수급 없음 — 불이익 주지 않음
+                score += 5
 
         # 3. 재무 (10점) — ROE 중심으로 축소, PER/PBR은 단기스윙에 영향 제한적
         per = ind.get("per", 0)

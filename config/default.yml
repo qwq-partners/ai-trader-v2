@@ -156,7 +156,8 @@ strategies:
     enabled: true
     stop_loss_pct: 5.0
     max_holding_days: 10
-    min_score: 70
+    min_score: 60                  # 설계 원래 의도 (코드 주석: "min_score 60 기준 충분한 변별력")
+                                   # 70으로 올렸을 때 프리장 수급데이터 미존재 시 전 종목 탈락 현상
     weight: 40                     # 자금 배분 40%
 
 
