@@ -387,6 +387,8 @@ class SwingScreener:
         | 섹터 | 10% | 섹터 모멘텀 |
         """
         # ── 수급 데이터 일괄 조회 (LCI용) ──
+        # 1차: KIS 실시간 API (장중/마감 후)
+        # 2차: pykrx 전일 수급 (프리장 등 KIS 데이터 없는 경우 자동 폴백)
         supply_demand: Dict[str, Dict[str, int]] = {}  # symbol -> {foreign_net_buy, inst_net_buy}
         if self._kis_market_data:
             try:
@@ -416,6 +418,18 @@ class SwingScreener:
                 logger.info(f"[스윙스크리너] 수급 데이터 조회: {len(supply_demand)}종목")
             except Exception as e:
                 logger.warning(f"[스윙스크리너] 수급 데이터 조회 실패: {e}")
+
+        # pykrx 전일 수급 폴백: KIS API 0종목 시 (프리장 등)
+        if not supply_demand:
+            try:
+                supply_demand = await asyncio.to_thread(self._fetch_prev_day_supply_pykrx)
+                if supply_demand:
+                    logger.info(
+                        f"[스윙스크리너] 수급 데이터: KIS 없음 → pykrx 전일 데이터 사용 "
+                        f"({len(supply_demand)}종목)"
+                    )
+            except Exception as e:
+                logger.warning(f"[스윙스크리너] pykrx 전일 수급 조회 실패: {e}")
 
         # ── 후보별 수급 데이터 주입 ──
         for candidate in candidates:
@@ -531,6 +545,53 @@ class SwingScreener:
         except Exception as e:
             self._kospi_closes = []
             logger.warning(f"[스윙스크리너] KOSPI 벤치마크 로드 오류: {e}")
+
+    def _fetch_prev_day_supply_pykrx(self) -> Dict[str, Dict[str, int]]:
+        """pykrx로 전일 외국인/기관 순매수 데이터 조회 (동기 함수, asyncio.to_thread 필요)
+
+        KIS 실시간 API가 0종목일 때(프리장, 주말 등) 자동 폴백으로 사용.
+        KOSPI + KOSDAQ 외국인 + 기관합계 4번 호출 → 약 0.8초.
+
+        Returns:
+            {symbol: {"foreign_net_buy": int, "inst_net_buy": int}, ...}
+        """
+        import pykrx.stock as pykrx_stock
+        from datetime import datetime, timedelta
+
+        # 전일 날짜 계산 (주말이면 금요일)
+        target = datetime.now().date() - timedelta(days=1)
+        while target.weekday() >= 5:  # 토(5), 일(6) → 금요일로
+            target -= timedelta(days=1)
+        date_str = target.strftime("%Y%m%d")
+
+        result: Dict[str, Dict[str, int]] = {}
+
+        # KOSPI + KOSDAQ, 외국인 + 기관합계
+        configs = [
+            ("KOSPI", "외국인", "foreign_net_buy"),
+            ("KOSDAQ", "외국인", "foreign_net_buy"),
+            ("KOSPI", "기관합계", "inst_net_buy"),
+            ("KOSDAQ", "기관합계", "inst_net_buy"),
+        ]
+
+        for market, investor, field in configs:
+            try:
+                df = pykrx_stock.get_market_net_purchases_of_equities(
+                    date_str, date_str, market, investor
+                )
+                if df is None or df.empty:
+                    continue
+                for ticker, row in df.iterrows():
+                    sym = str(ticker).zfill(6)
+                    if sym not in result:
+                        result[sym] = {"foreign_net_buy": 0, "inst_net_buy": 0}
+                    net_qty = int(row.get("순매수거래량", 0) or 0)
+                    result[sym][field] += net_qty
+            except Exception as e:
+                logger.debug(f"[스윙스크리너] pykrx {market} {investor} 조회 실패: {e}")
+
+        logger.info(f"[스윙스크리너] pykrx 전일 수급({date_str}): {len(result)}종목 로드")
+        return result
 
     def _compute_lci_zscore(self, candidates: List[SwingCandidate]):
         """
