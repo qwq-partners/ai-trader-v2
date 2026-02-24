@@ -195,15 +195,8 @@ class DailyReportGenerator:
         # 현재가 조회 및 결과 계산
         await self._update_results()
 
-        # 실거래 결과 조회 (DB 기반)
-        trade_summary = await self._get_trade_summary()
-
-        # 레포트 생성
+        # 레포트 생성 (추천 종목 결과만 — 봇 실거래 결과는 별도 채널)
         report = self._format_evening_report(self._today_recommendations, today)
-
-        # 실거래 섹션 추가
-        if trade_summary:
-            report += "\n\n" + trade_summary
 
         # 텔레그램 레포트 채널로 발송
         if send_telegram:
