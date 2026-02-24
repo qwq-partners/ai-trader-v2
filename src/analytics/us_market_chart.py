@@ -101,6 +101,7 @@ def generate_us_market_chart(
         import matplotlib; matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         import matplotlib.patches as mp
+        import matplotlib.patheffects as pe
         import squarify, numpy as np
 
         _setup_font()
@@ -150,22 +151,23 @@ def generate_us_market_chart(
 
             # 지수명 (소)
             fig.text(cx + 0.013, cy + ch - 0.011,
-                     label, color=TEXT_SEC, fontsize=11,
+                     label, color="#c9d1d9", fontsize=13, fontweight=700,
                      va="top", transform=fig.transFigure)
 
             # 등락률 (대 — 핵심)
             sign  = "+" if pct > 0 else ""
             arrow = "▲" if pct > 0 else ("▼" if pct < 0 else "●")
-            fig.text(cx + cw/2, cy + ch/2 + ch*0.08,
+            t = fig.text(cx + cw/2, cy + ch/2 + ch*0.08,
                      f"{arrow}  {sign}{pct:.2f}%",
-                     color=pct_c, fontsize=21, fontweight="bold",
+                     color=pct_c, fontsize=28, fontweight=900,
                      ha="center", va="center", transform=fig.transFigure)
+            t.set_path_effects([pe.withStroke(linewidth=3, foreground="#000000")])
 
             # 현재가
             pstr = f"{price:.2f}" if sym == "^VIX" else (
                    f"{price:,.0f}" if price >= 10000 else f"{price:,.2f}")
             fig.text(cx + cw/2, cy + 0.012,
-                     pstr, color=TEXT_SEC, fontsize=10,
+                     pstr, color="#8b949e", fontsize=12, fontweight=700,
                      ha="center", va="bottom", transform=fig.transFigure,
                      fontfamily="monospace")
 
@@ -203,22 +205,35 @@ def generate_us_market_chart(
             sign = "+" if item["pct"] > 0 else ""
             pstr = f"{sign}{item['pct']:.2f}%"
 
-            # 이름 + % (블록이 충분히 클 때만)
-            if w > 9 and h > 9:
-                nfs = max(9,  min(16, min(w,h) * 0.80))
-                pfs = max(10, min(18, min(w,h) * 0.90))
-                ax.text(x+w/2, y+h/2+h*0.09, item["name"],
-                        ha="center", va="center", color=tc,
-                        fontsize=nfs, fontweight="bold", zorder=3)
-                ax.text(x+w/2, y+h/2-h*0.13, pstr,
-                        ha="center", va="center", color=tc,
-                        fontsize=pfs, zorder=3)
-            elif w > 5 and h > 5:
-                fs = max(8, min(13, min(w,h) * 0.80))
-                ax.text(x+w/2, y+h/2, f"{item['name']}\n{pstr}",
-                        ha="center", va="center", color=tc,
-                        fontsize=fs, fontweight="bold",
-                        zorder=3, linespacing=1.25)
+            # 이름 + % — 타일 크기 비례, 겹침 방지
+            # PTS: 이 axes(height=0.515*10in)에서 1pt ≈ 0.270 data unit
+            _stroke = [pe.withStroke(linewidth=5, foreground="#000000")]
+            PTS      = 0.270
+            nfs      = max(8,  min(42, min(w, h) * 1.35))
+            pfs      = max(7,  nfs / 2)
+            name_h   = nfs * PTS
+            pct_h    = pfs * PTS
+            gap      = max(0.5, min(w, h) * 0.05)
+            group_h  = name_h + gap + pct_h
+
+            if w > 5 and h > 5 and group_h < h * 0.82:
+                # 두 텍스트를 그룹 중앙 기준으로 겹치지 않게 배치
+                name_cy = y + h/2 + (gap + pct_h) / 2
+                pct_cy  = y + h/2 - (name_h + gap) / 2
+                t1 = ax.text(x+w/2, name_cy, item["name"],
+                        ha="center", va="center", color="#ffffff",
+                        fontsize=nfs, fontweight=900, zorder=3)
+                t1.set_path_effects(_stroke)
+                t2 = ax.text(x+w/2, pct_cy, pstr,
+                        ha="center", va="center", color="#ffffff",
+                        fontsize=pfs, fontweight=900, zorder=3)
+                t2.set_path_effects(_stroke)
+            elif w > 3 and h > 3:
+                # 공간 부족 시 이름만
+                t3 = ax.text(x+w/2, y+h/2, item["name"],
+                        ha="center", va="center", color="#ffffff",
+                        fontsize=nfs, fontweight=900, zorder=3)
+                t3.set_path_effects(_stroke)
 
         # 범례
         N = 40
@@ -280,6 +295,7 @@ def generate_sp500_map(
         import matplotlib; matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         import matplotlib.patches as mp
+        import matplotlib.patheffects as pe
         import squarify
 
         _setup_font()
@@ -366,22 +382,34 @@ def generate_sp500_map(
                 md   = min(IDX, IDY)
 
                 # 가독성 기준: 블록이 충분히 클 때만 텍스트
-                if IDX > 6 and IDY > 6:
-                    # 티커 + % 두 줄
-                    tfs = max(9, min(16, md * 0.72))
-                    pfs = max(9, min(15, md * 0.65))
-                    ax.text(IX+IDX/2, IY+IDY/2+IDY*0.12, sym,
-                            ha="center", va="center", color=tc,
-                            fontsize=tfs, fontweight="bold", zorder=3, clip_on=True)
-                    ax.text(IX+IDX/2, IY+IDY/2-IDY*0.14, pstr,
-                            ha="center", va="center", color=tc,
-                            fontsize=pfs, zorder=3, clip_on=True)
-                elif IDX > 3.5 and IDY > 3.5:
+                # PTS2: sp500 axes(height=0.90*10in)에서 1pt ≈ 0.154 data unit
+                PTS2   = 0.154
+                _stk   = [pe.withStroke(linewidth=4, foreground="#000000")]
+                tfs    = max(7, min(38, md * 1.35))
+                pfs    = max(6, tfs / 2)
+                th     = tfs * PTS2
+                ph     = pfs * PTS2
+                gap2   = max(0.3, md * 0.04)
+                grph   = th + gap2 + ph
+
+                if IDX > 3 and IDY > 3 and grph < IDY * 0.82:
+                    # 티커 + % 겹침 없이 배치
+                    name_cy = IY + IDY/2 + (gap2 + ph) / 2
+                    pct_cy  = IY + IDY/2 - (th + gap2) / 2
+                    t1 = ax.text(IX+IDX/2, name_cy, sym,
+                            ha="center", va="center", color="#ffffff",
+                            fontsize=tfs, fontweight=900, zorder=3, clip_on=True)
+                    t1.set_path_effects(_stk)
+                    t2 = ax.text(IX+IDX/2, pct_cy, pstr,
+                            ha="center", va="center", color="#ffffff",
+                            fontsize=pfs, fontweight=900, zorder=3, clip_on=True)
+                    t2.set_path_effects(_stk)
+                elif IDX > 2 and IDY > 2:
                     # 티커만
-                    tfs = max(7.5, min(12, md * 0.68))
-                    ax.text(IX+IDX/2, IY+IDY/2, sym,
-                            ha="center", va="center", color=tc,
-                            fontsize=tfs, fontweight="bold", zorder=3, clip_on=True)
+                    t3 = ax.text(IX+IDX/2, IY+IDY/2, sym,
+                            ha="center", va="center", color="#ffffff",
+                            fontsize=tfs, fontweight=900, zorder=3, clip_on=True)
+                    t3.set_path_effects(_stk)
 
         # 색상 범례
         N = 50
