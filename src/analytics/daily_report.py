@@ -754,7 +754,16 @@ class DailyReportGenerator:
             return msg
 
         now = datetime.now()
-        date_str = now.strftime("%Y.%m.%d")
+
+        # US 마감일 계산: KST 전날 기준, 주말이면 금요일로 조정
+        # (US 공휴일은 별도 처리 생략 — 해당일 Yahoo Finance가 직전 영업일 반환)
+        us_close_date = (now - timedelta(days=1)).date()
+        if us_close_date.weekday() == 5:   # 토 → 금
+            us_close_date -= timedelta(days=1)
+        elif us_close_date.weekday() == 6:  # 일 → 금
+            us_close_date -= timedelta(days=2)
+        us_date_str = us_close_date.strftime("%Y.%m.%d")   # US 마감일 (현지)
+        kst_date_str = now.strftime("%m/%d")                # KST 오늘 날짜 (보고서 발송일)
 
         # ── 지수 ──
         idx_lines = []
@@ -784,7 +793,7 @@ class DailyReportGenerator:
 
         lines = [
             f"🇺🇸 <b>미국증시 마감 리포트</b>",
-            f"<i>{date_str} 07:00 기준 (전일 NY 마감)</i>",
+            f"<i>{us_date_str} NY 마감 (KST {kst_date_str} 07:00 수신)</i>",
             "",
             f"<b>■ 주요 지수  {mood}</b>",
         ]
@@ -865,11 +874,11 @@ class DailyReportGenerator:
                 # 1a) 지수 카드 + 섹터 ETF 히트맵
                 chart_buf = generate_us_market_chart(
                     quotes=quotes,
-                    date_str=date_str,
+                    date_str=us_date_str,
                     avg_pct=avg_pct,
                 )
                 if chart_buf:
-                    caption_lines = [f"🇺🇸 <b>미국증시 마감</b>  {date_str}  {mood}", ""]
+                    caption_lines = [f"🇺🇸 <b>미국증시 마감</b>  {us_date_str}  {mood}", ""]
                     caption_lines.extend(idx_lines)
                     caption = "\n".join(caption_lines)[:1024]
 
@@ -886,7 +895,7 @@ class DailyReportGenerator:
                 # 1b) S&P500 개별 종목 맵 (별도 전송)
                 try:
                     stock_quotes = await umd.fetch_sp500_stocks()
-                    sp500_buf = generate_sp500_map(stock_quotes, date_str=date_str)
+                    sp500_buf = generate_sp500_map(stock_quotes, date_str=us_date_str)
                     if sp500_buf:
                         await tg_send_photo(
                             sp500_buf, caption="📊 <b>S&P 500 Map</b>",
