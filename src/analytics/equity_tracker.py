@@ -251,6 +251,8 @@ class EquityTracker:
         cumulative_equity = initial_capital
         backfilled = 0
 
+        today_str = date.today().isoformat()
+
         for trade_file in trade_files:
             # 날짜 추출 (trades_YYYYMMDD.json → YYYY-MM-DD)
             fname = trade_file.stem  # trades_20260213
@@ -258,6 +260,12 @@ class EquityTracker:
             if len(date_part) != 8:
                 continue
             date_str = f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:8]}"
+
+            # ⚠️ 오늘 날짜는 backfill 생략 — 실시간 save_snapshot(15:40)이 담당
+            # backfill은 trades 파일 기반 추정치이므로 당일 완료 전 저장 시 오류 발생
+            if date_str == today_str:
+                logger.debug(f"[자산추적] 백필: {date_str} 스킵 (오늘 날짜 — 장마감 후 저장)")
+                continue
 
             # 이미 equity 스냅샷이 있으면 스킵
             equity_file = self._get_file_path(date_str)

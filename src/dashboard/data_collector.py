@@ -18,6 +18,11 @@ try:
     PYKRX_AVAILABLE = True
 except ImportError:
     PYKRX_AVAILABLE = False
+
+try:
+    from src.analytics.equity_tracker import EquitySnapshot as _EquitySnapshot
+except ImportError:
+    _EquitySnapshot = None
     logger.warning("pykrx not available - stock names will not be enriched")
 
 
@@ -1042,6 +1047,81 @@ class DashboardDataCollector:
     # 자산 히스토리 (Equity History)
     # ----------------------------------------------------------
 
+    def _make_live_today_snapshot(self, db_stats: Dict = None):
+        """실시간 포트폴리오 기반 오늘 스냅샷 생성 (파일 저장 없이 반환만)"""
+        if _EquitySnapshot is None:
+            return None
+        try:
+            portfolio = self.bot.engine.portfolio
+            today_str = date.today().isoformat()
+
+            # 보유 포지션 상세
+            positions_list = []
+            for symbol, pos in portfolio.positions.items():
+                positions_list.append({
+                    "symbol": symbol,
+                    "name": getattr(pos, 'name', '') or symbol,
+                    "quantity": pos.quantity,
+                    "avg_price": float(pos.avg_price),
+                    "current_price": float(pos.current_price),
+                    "market_value": float(pos.market_value),
+                    "pnl": float(pos.unrealized_pnl),
+                    "pnl_pct": float(pos.unrealized_pnl_pct),
+                })
+            positions_list.sort(key=lambda x: x.get('pnl_pct', 0), reverse=True)
+
+            # 당일 거래 통계 (DB 기반 우선)
+            trades_count, win_rate, realized_pnl = 0, 0.0, 0.0
+            if db_stats:
+                trades_count = db_stats.get('trades_count', 0)
+                win_rate = db_stats.get('win_rate', 0.0)
+                realized_pnl = db_stats.get('realized_pnl', 0.0)
+
+            # 일일 손익: 전일 스냅샷 대비 실시간 총자산 변동
+            tracker = getattr(self.bot, 'equity_tracker', None)
+            total_equity = float(portfolio.total_equity)
+            daily_pnl = float(portfolio.effective_daily_pnl)
+            daily_pnl_pct = 0.0
+            if tracker:
+                yesterday = (date.today() - timedelta(days=1)).isoformat()
+                prev = tracker.get_snapshot(yesterday)
+                if not prev:
+                    for d in range(2, 6):
+                        prev = tracker.get_snapshot((date.today() - timedelta(days=d)).isoformat())
+                        if prev:
+                            break
+                if prev and prev.total_equity > 0:
+                    daily_pnl = total_equity - prev.total_equity
+                    daily_pnl_pct = round(daily_pnl / prev.total_equity * 100, 2)
+
+            return _EquitySnapshot(
+                date=today_str,
+                total_equity=total_equity,
+                cash=float(portfolio.cash),
+                positions_value=float(portfolio.total_position_value),
+                daily_pnl=round(daily_pnl, 0),
+                daily_pnl_pct=daily_pnl_pct,
+                position_count=len(portfolio.positions),
+                trades_count=trades_count,
+                win_rate=round(win_rate, 1),
+                positions=positions_list,
+                timestamp=datetime.now().isoformat(),
+            )
+        except Exception as e:
+            logger.warning(f"[자산추적] 실시간 오늘 스냅샷 생성 실패: {e}")
+            return None
+
+    def _inject_live_today(self, snapshots: list) -> list:
+        """스냅샷 리스트에서 오늘 날짜를 실시간 포트폴리오 데이터로 교체/추가"""
+        today_str = date.today().isoformat()
+        live = self._make_live_today_snapshot()
+        if live is None:
+            return snapshots
+        # 오늘 날짜 스냅샷 제거 후 실시간으로 교체
+        filtered = [s for s in snapshots if s.date != today_str]
+        filtered.append(live)
+        return sorted(filtered, key=lambda x: x.date)
+
     def _build_equity_summary(self, snapshots) -> Dict[str, Any]:
         """스냅샷 리스트에서 요약 통계 계산"""
         if not snapshots:
@@ -1086,31 +1166,49 @@ class DashboardDataCollector:
         }
 
     def get_equity_history(self, days: int = 30) -> Dict[str, Any]:
-        """일별 자산 히스토리 + 요약 통계 (days 기반)"""
+        """일별 자산 히스토리 + 요약 통계 (days 기반)
+        오늘 날짜는 항상 실시간 포트폴리오 데이터로 교체됩니다.
+        """
         tracker = getattr(self.bot, 'equity_tracker', None)
         if not tracker:
             return {"snapshots": [], "summary": {}}
 
         snapshots = tracker.load_history(days)
+        # 오늘 날짜를 실시간 데이터로 교체 (스냅샷 파일이 오래됐거나 없어도 정상 표시)
+        snapshots = self._inject_live_today(snapshots)
         if not snapshots:
             return {"snapshots": [], "summary": {"oldest_date": tracker.get_oldest_date()}}
 
         return self._build_equity_summary(snapshots)
 
     def get_equity_history_range(self, date_from: str, date_to: str) -> Dict[str, Any]:
-        """일별 자산 히스토리 + 요약 통계 (from~to 범위)"""
+        """일별 자산 히스토리 + 요약 통계 (from~to 범위)
+        오늘 날짜가 범위에 포함되면 실시간 포트폴리오 데이터로 교체됩니다.
+        """
         tracker = getattr(self.bot, 'equity_tracker', None)
         if not tracker:
             return {"snapshots": [], "summary": {}}
 
         snapshots = tracker.load_history_range(date_from, date_to)
+        # date_to가 오늘이면 실시간 inject
+        today_str = date.today().isoformat()
+        if date_to >= today_str:
+            snapshots = self._inject_live_today(snapshots)
         if not snapshots:
             return {"snapshots": [], "summary": {"oldest_date": tracker.get_oldest_date()}}
 
         return self._build_equity_summary(snapshots)
 
     def get_equity_history_positions(self, date_str: str) -> Dict[str, Any]:
-        """특정일 자산 스냅샷 + 포지션 상세"""
+        """특정일 자산 스냅샷 + 포지션 상세
+        오늘 날짜는 실시간 포트폴리오 데이터로 반환합니다.
+        """
+        today_str = date.today().isoformat()
+        if date_str == today_str:
+            live = self._make_live_today_snapshot()
+            if live:
+                return live.to_dict()
+
         tracker = getattr(self.bot, 'equity_tracker', None)
         if not tracker:
             return {"error": "Equity tracker not available"}
