@@ -2,6 +2,49 @@
 
 ---
 
+## [2026-02-24] 자산탭 정합성 + 외부 계좌 버그 + 오후 결과 레포트
+
+### 📊 자산탭(Equity) 정합성 수정
+
+**`Position.unrealized_pnl_net` 추가** (`src/core/types.py`)
+- 수수료·세금 포함 순손익: `(현재가 - 평균단가) × 수량 - 매수수수료 - 매도수수료 - 거래세`
+- `unrealized_pnl_net_pct`: cost_basis + 매수수수료 대비 수익률
+- `/api/positions`, `/api/portfolio` 응답에 `unrealized_pnl_net` 필드 추가
+- 대시보드 포지션 테이블 메인 표시값 → `unrealized_pnl_net`, hover tooltip으로 평가손익 보조 표시
+- 모바일 앱 (`ai-trader-mobile`): `PortfolioData`, `PositionData` 타입 + UI 업데이트
+
+**engine.py daily stats 영속화** (`~/.cache/ai_trader/engine_daily_stats.json`)
+- `_save_daily_stats()` / `restore_daily_stats()`: 날짜 일치 시 재시작 후 복원
+- risk/manager.py의 `daily_stats.json`과 파일명 분리 (포맷 상이)
+- 매도 체결 및 `reset_daily_stats()` 완료 시 자동 저장
+- `run_trader.py`: `sync_from_kis` + `_restore_position_metadata` 완료 후 복원 호출
+
+**자산 탭 실시간 주입** (`src/dashboard/data_collector.py`)
+- `_make_live_today_snapshot()`: 실시간 포트폴리오 기반 오늘 스냅샷 동적 생성
+- `_inject_live_today()`: API 응답마다 오늘 엔트리를 실시간 데이터로 대체
+- `equity_tracker.py`: `backfill_from_journal()`이 오늘 날짜 건너뜀 (09시 빈 스냅샷 생성 버그 수정)
+
+---
+
+### 🐛 IRP 계좌 포지션 중복 표시 수정 (`kis_broker.py`)
+
+- **원인**: KIS API가 IRP 계좌 단일 페이지임에도 `ctx_area_fk100`/`ctx_area_nk100` 키를 계속 반환 → 10페이지 × 2종목 = 20개 중복
+- `prev_ctx_fk/nk` 추적 → 이전 페이지와 동일 키 시 즉시 break + WARNING 로그
+- symbol 기준 중복 제거 (`seen` dict) 2차 방어
+
+---
+
+### 📋 오후 4시 추천 종목 결과 레포트
+
+- `scheduler.evening_report_time`: `17:00` → `16:00`
+- **추천 종목 영속화**: 아침 레포트 후 `~/.cache/ai_trader/morning_recs_YYYYMMDD.json` 저장 → 봇 재시작 후에도 복원
+- **종가 조회 3단계**: KIS API → pykrx 종가 (장 마감 후 안정) → 네이버 HTML
+- **레포트 내용**: 추천 종목 당일 성과만 (봇 실거래 결과 제외 — 별도 채널)
+  - 🎯/✅/➖/❌ 성과 분류, 🏆목표달성 / 🛑손절 태그
+  - 적중률, 평균 수익률, 최고/최저 종목 요약
+
+---
+
 ## [2026-02-24] 전체 코드리뷰 + 넥스트장 2차 스캔
 
 ### 🔍 전체 코드리뷰 (81건 이슈 수정)
