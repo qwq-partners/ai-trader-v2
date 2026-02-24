@@ -396,8 +396,7 @@ class KISBroker(BaseBroker):
                 "ALGO_NO": "",
             }
 
-            # 시간외 단일가 설정 (프리장/넥스트장)
-            session = self._get_current_market_session()
+            # 시간외 단일가 설정 (프리장/넥스트장) — L351의 session 재사용
             if session in ("pre_market", "next_market"):
                 params["AFHR_FLPR_YN"] = "Y"  # 시간외단일가여부
                 logger.debug(f"시간외 단일가 주문 (세션: {session})")

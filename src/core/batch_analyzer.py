@@ -17,7 +17,7 @@ AI Trading Bot v2 - 배치 분석 엔진
 import asyncio
 import json
 from dataclasses import dataclass, asdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time, date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -98,6 +98,7 @@ class BatchAnalyzer:
             name="SEPATrend",
             strategy_type=StrategyType.SEPA_TREND,
             min_score=self._config.get("sepa_trend", {}).get("min_score", 70.0),
+            stop_loss_pct=self._config.get("sepa_trend", {}).get("stop_loss_pct", 5.0),  # 3곳 불일치 통일
             params=self._config.get("sepa_trend", {}),
         )
         self._rsi2 = RSI2ReversalStrategy(rsi2_cfg)
@@ -157,12 +158,22 @@ class BatchAnalyzer:
 
             all_signals = rsi2_signals + sepa_signals + strategic_signals
 
+            # 동일 종목 중복 제거 (score 높은 것 우선)
+            seen: dict = {}
+            for sig in all_signals:
+                if sig.symbol not in seen or sig.score > seen[sig.symbol].score:
+                    seen[sig.symbol] = sig
+            all_signals = list(seen.values())
+
             # PendingSignal 변환
             self._pending = []
             now = datetime.now()
-            # 익영업일 15:30 만료 (대략 익일)
-            expires = now + timedelta(days=1)
-            expires = expires.replace(hour=15, minute=30, second=0, microsecond=0)
+            # 익영업일 15:30 만료 (주말/공휴일 건너뜀)
+            from .engine import is_kr_market_holiday
+            expires_date = now.date() + timedelta(days=1)
+            while is_kr_market_holiday(expires_date) or expires_date.weekday() >= 5:
+                expires_date += timedelta(days=1)
+            expires = datetime.combine(expires_date, time(15, 30, 0))
 
             for sig in all_signals:
                 entry_price = float(sig.price) if sig.price else 0
@@ -232,7 +243,7 @@ class BatchAnalyzer:
             price_penalty_pct = evening_cfg.get("price_penalty_pct", -3.0)     # -3% 이하 → 패널티
             gap_remove_pct = evening_cfg.get("gap_remove_pct", 8.0)            # +8% 이상 → 제거
             score_bonus = evening_cfg.get("score_bonus", 10.0)
-            score_penalty = evening_cfg.get("score_penalty", -15.0)
+            score_penalty = -abs(evening_cfg.get("score_penalty", 15.0))
             min_score_after = evening_cfg.get("min_score_after", 60.0)
 
             updated = []
@@ -325,7 +336,7 @@ class BatchAnalyzer:
             lines.append("→ 내일 09:01 시그널 실행 예정")
 
             try:
-                from ..utils.notification import send_alert
+                from ..utils.telegram import send_alert
                 await send_alert("\n".join(lines))
             except Exception:
                 pass

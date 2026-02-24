@@ -68,8 +68,9 @@ class RiskManager:
         # 경고 임계값
         self._warn_threshold_pct = config.daily_max_loss_pct * 0.7  # 70%에서 경고
 
-        # 당일 재진입 금지: 손절된 종목 (자정 리셋)
-        self._stop_loss_today: set = set()
+        # 당일 재진입 금지: 손절된 종목 (자정 리셋, 재시작 시 복원)
+        self._stop_loss_today_path = cache_dir / "stop_loss_today.json"
+        self._stop_loss_today: set = self._load_stop_loss_today()
 
         logger.info(
             f"RiskManager 초기화: 일일손실한도={config.daily_max_loss_pct}%, "
@@ -371,8 +372,9 @@ class RiskManager:
 
         # 손절 체크
         if position.stop_loss and price <= position.stop_loss:
-            # 당일 재진입 금지: 손절 종목 기록
+            # 당일 재진입 금지: 손절 종목 기록 + 영속화
             self._stop_loss_today.add(position.symbol)
+            self._save_stop_loss_today()
             logger.info(
                 f"[재진입금지] {position.symbol} 손절 기록 (당일 재진입 차단)"
             )
@@ -442,7 +444,8 @@ class RiskManager:
         if pnl > 0:
             self.daily_stats.wins += 1
             self.daily_stats.consecutive_losses = 0
-        else:
+        elif pnl < 0:
+            # pnl == 0 (손익분기)는 손실 아님 — consecutive_losses/losses 집계 제외
             self.daily_stats.losses += 1
             self.daily_stats.consecutive_losses += 1
 
@@ -520,3 +523,33 @@ class RiskManager:
             )
         except Exception as e:
             logger.error(f"일일 손익 로드 실패: {e}")
+
+    def _load_stop_loss_today(self) -> set:
+        """손절 종목 목록을 파일에서 복원 (오늘 날짜가 아니면 빈 set)"""
+        try:
+            if not self._stop_loss_today_path.exists():
+                return set()
+            with open(self._stop_loss_today_path, 'r') as f:
+                data = json.load(f)
+            saved_date = data.get("date", "")
+            if saved_date != date.today().isoformat():
+                return set()
+            symbols = set(data.get("symbols", []))
+            if symbols:
+                logger.info(f"[리스크] 손절 종목 복원: {symbols}")
+            return symbols
+        except Exception as e:
+            logger.error(f"손절 종목 로드 실패: {e}")
+            return set()
+
+    def _save_stop_loss_today(self):
+        """손절 종목 목록을 파일에 저장"""
+        try:
+            data = {
+                "date": date.today().isoformat(),
+                "symbols": list(self._stop_loss_today)
+            }
+            with open(self._stop_loss_today_path, 'w') as f:
+                json.dump(data, f)
+        except Exception as e:
+            logger.error(f"손절 종목 저장 실패: {e}")

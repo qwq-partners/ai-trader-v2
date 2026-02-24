@@ -881,8 +881,14 @@ class DashboardDataCollector:
                 }
                 if hasattr(strategy, 'config'):
                     cfg = strategy.config
-                    for attr in dir(cfg):
-                        if not attr.startswith('_'):
+                    # dir() 대신 명시적 화이트리스트 — 내부 속성 노출 방지
+                    _cfg_whitelist = [
+                        "stop_loss_pct", "take_profit_pct", "min_score",
+                        "max_holding_days", "trailing_stop_pct",
+                        "first_exit_pct", "second_exit_pct",
+                    ]
+                    for attr in _cfg_whitelist:
+                        if hasattr(cfg, attr):
                             val = getattr(cfg, attr)
                             if isinstance(val, (int, float, bool, str)):
                                 result["strategies"][name][attr] = val
@@ -1032,6 +1038,8 @@ class DashboardDataCollector:
 
     def _build_equity_summary(self, snapshots) -> Dict[str, Any]:
         """스냅샷 리스트에서 요약 통계 계산"""
+        if not snapshots:
+            return {"period_return": 0, "period_return_pct": 0, "max_drawdown": 0, "avg_daily_pnl": 0, "snapshots": []}
         snap_dicts = [s.to_dict() for s in snapshots]
 
         first_equity = snapshots[0].total_equity

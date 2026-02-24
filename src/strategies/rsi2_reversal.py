@@ -85,7 +85,7 @@ class RSI2ReversalStrategy(BaseStrategy):
                 # ATR 기반 동적 손절/익절 (R:R 1:2 보장)
                 atr = candidate.indicators.get("atr_14")
                 atr_pct_value = 0.0
-                if atr and atr > 0:
+                if atr is not None and atr > 0:
                     stop_pct = max(3.0, min(7.0, atr * 2.0))     # 2×ATR, 3~7% 범위
                     target_pct = max(5.0, min(15.0, atr * 4.0))   # 4×ATR, 5~15% 범위
                     candidate.stop_price = candidate.entry_price * Decimal(str(1 - stop_pct / 100))
@@ -199,9 +199,9 @@ class RSI2ReversalStrategy(BaseStrategy):
 
         # 6. 5일 하락 후 반등 조짐 (10점)
         change_5d = ind.get("change_5d", 0)
-        if change_5d and change_5d < -5:
+        if change_5d is not None and change_5d < -5:
             score += 10
-        elif change_5d and change_5d < -3:
+        elif change_5d is not None and change_5d < -3:
             score += 5
 
         # 7. 거래대금 증가 (5점) — 수급 유입 추가 확인

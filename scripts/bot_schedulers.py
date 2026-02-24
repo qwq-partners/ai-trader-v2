@@ -913,7 +913,8 @@ class SchedulerMixin:
 
                                 # 장중 전략 사전 체크 (전략별 시작시간 반영)
                                 _strategy_type = StrategyType.MOMENTUM_BREAKOUT
-                                _momentum_start = "09:15"  # fix: TradingConfig has no .raw attr; default value used
+                                _sched_cfg = self.config.get("momentum_breakout") or {}
+                                _momentum_start = _sched_cfg.get("trading_start_time", "09:15")
                                 if "momentum_breakout" in _enabled and hour_min >= _momentum_start:
                                     _strategy_type = StrategyType.MOMENTUM_BREAKOUT
                                 elif "theme_chasing" in _enabled:
@@ -1078,7 +1079,7 @@ class SchedulerMixin:
                                         target_price=Decimal(str(target_price)),
                                         stop_price=Decimal(str(stop_price)),
                                         score=stock.score,
-                                        confidence=(stock.score / 100.0) + _confidence_adj,
+                                        confidence=min(1.0, max(0.0, (stock.score / 100.0) + _confidence_adj)),
                                         reason=f"스크리닝 자동진입: {stock.name} 점수={stock.score:.0f} 등락={rt_change:+.1f}%",
                                         metadata={
                                             "source": "live_screening",
@@ -1212,6 +1213,7 @@ class SchedulerMixin:
     async def _run_fill_check(self):
         """체결 확인 루프 (적응형 폴링: 미체결 유무에 따라 2초/5초)"""
         check_interval = 5  # 초 (기본값)
+        self._fill_check_errors = 0  # 연속 네트워크 오류 카운터 초기화
 
         try:
             while self.running:
@@ -1236,13 +1238,11 @@ class SchedulerMixin:
                     check_interval = 2 if open_orders else 5
 
                     # 성공 시 에러 카운터 리셋
-                    if hasattr(self, '_fill_check_errors') and self._fill_check_errors > 0:
+                    if self._fill_check_errors > 0:
                         self._fill_check_errors = 0
 
                 except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                     logger.warning(f"체결 확인 네트워크 오류: {e}")
-                    if not hasattr(self, '_fill_check_errors'):
-                        self._fill_check_errors = 0
                     self._fill_check_errors += 1
                     if self._fill_check_errors >= 3:
                         # 토큰 만료 가능성 → 갱신 시도
@@ -1258,8 +1258,6 @@ class SchedulerMixin:
                     raise
                 except Exception as e:
                     logger.warning(f"체결 확인 오류: {e}")
-                    if not hasattr(self, '_fill_check_errors'):
-                        self._fill_check_errors = 0
                     self._fill_check_errors += 1
                     if self._fill_check_errors >= 5:
                         await self._send_error_alert(
@@ -1582,6 +1580,7 @@ class SchedulerMixin:
                         logger.info(f"[배치] catch-up 실행: {result}")
                     except Exception as e:
                         logger.error(f"[배치] catch-up 실행 오류: {e}")
+                        last_execute_date = today  # 무한 재시도 방지
 
                 # 15:35 전략적 사전분석 (수급 추세 탐지)
                 if (now.hour == prescan_hour

@@ -37,7 +37,7 @@ class SEPATrendStrategy(BaseStrategy):
             config = StrategyConfig(
                 name="SEPATrend",
                 strategy_type=StrategyType.SEPA_TREND,
-                stop_loss_pct=3.5,      # 변경: 5%->3.5% (손절 축소, 손익비 개선)
+                stop_loss_pct=5.0,       # default.yml sepa_trend.stop_loss_pct 와 통일 (구 3.5→5.0)
                 take_profit_pct=8.0,     # 변경: 15%->8% (현실적 익절 목표)
                 min_score=70.0,
             )
@@ -79,7 +79,7 @@ class SEPATrendStrategy(BaseStrategy):
 
                 # ATR 기반 동적 손절/익절 (변경: 손절 축소, 익절 현실화)
                 atr = candidate.indicators.get("atr_14")
-                if atr and atr > 0:
+                if atr is not None and atr > 0:
                     stop_pct = max(2.5, min(5.0, atr * 1.5))   # 변경: 3~7%->2.5~5%, x2->x1.5
                     target_pct = max(3.0, min(8.0, atr * 3.0))  # 변경: 5~15%->3~8%, x4->x3
                     candidate.stop_price = candidate.entry_price * Decimal(str(1 - stop_pct / 100))
@@ -92,7 +92,8 @@ class SEPATrendStrategy(BaseStrategy):
                 else:
                     strength = SignalStrength.NORMAL
 
-                atr_pct_value = candidate.indicators.get("atr_14", 0) or 0
+                atr_pct_value = candidate.indicators.get("atr_14", 0)
+                atr_pct_value = atr_pct_value if atr_pct_value is not None else 0
 
                 signal = Signal(
                     symbol=candidate.symbol,
@@ -145,9 +146,9 @@ class SEPATrendStrategy(BaseStrategy):
             score += 15
 
         # MA 정렬 강도: MA50과 MA200 사이 거리 (7점)
-        ma50 = ind.get("ma50", 0)
-        ma200 = ind.get("ma200", 0)
-        if ma50 and ma200 and ma200 > 0:
+        ma50 = ind.get("ma50")
+        ma200 = ind.get("ma200")
+        if ma50 is not None and ma200 is not None and ma200 > 0:
             spread = (ma50 - ma200) / ma200 * 100
             if spread > 10:
                 score += 7
@@ -157,9 +158,9 @@ class SEPATrendStrategy(BaseStrategy):
                 score += 3
 
         # 52주 고점 근접도 (7점) — 신고가 돌파 임박 = 추세 강도
-        close = ind.get("close", 0)
-        high_52w = ind.get("high_52w", 0)
-        if close and high_52w and high_52w > 0:
+        close = ind.get("close")
+        high_52w = ind.get("high_52w")
+        if close is not None and high_52w is not None and high_52w > 0:
             from_high = (close - high_52w) / high_52w * 100
             if from_high >= -5:
                 score += 7

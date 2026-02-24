@@ -968,7 +968,9 @@ class TradeStorage:
             else:
                 logger.info("[TradeStorage] KIS 동기화 완료: 누락 없음")
 
-            # PnL 보정 (수수료+세금 포함 정확한 값)
+            # PnL 보정 전 DB 큐 drain 대기 (미기록 데이터 반영)
+            if self._write_queue:
+                await asyncio.sleep(0.5)  # 큐 처리 여유 시간
             await self._reconcile_pnl(today, sells)
 
         except Exception as e:

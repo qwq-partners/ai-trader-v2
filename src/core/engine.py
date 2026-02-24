@@ -471,10 +471,11 @@ class TradingEngine:
             # 매도 비용 계산 (수수료 + 거래세 0.20%, fee_calculator 기준 통일)
             fee_calc = get_fee_calculator()
             sell_fee = fee_calc.calculate_sell_fee(fill.total_value)
-            buy_fee = fee_calc.calculate_buy_fee(pos.avg_price * fill.quantity)
+            # buy_fee는 매수 시 fill.total_cost에 이미 포함됨 → PnL에서 이중 차감하지 않음
+            # buy_fee = fee_calc.calculate_buy_fee(pos.avg_price * fill.quantity)
 
-            # 실현 손익 = (매도가 - 평균단가) × 수량 - 매수수수료 - 매도비용(수수료+거래세)
-            realized_pnl = (fill.price - pos.avg_price) * fill.quantity - buy_fee - sell_fee
+            # 실현 손익 = (매도가 - 평균단가) × 수량 - 매도비용(수수료+거래세)
+            realized_pnl = (fill.price - pos.avg_price) * fill.quantity - sell_fee
 
             # 현금 증가 = 매도 대금 - 매도비용
             self.portfolio.cash += fill.total_value - sell_fee
@@ -839,7 +840,8 @@ class RiskManager:
                 try:
                     await self.engine.broker.cancel_all_for_symbol(s)
                 except Exception as e:
-                    logger.warning(f"[리스크] 매도 취소 실패: {s} - {e}")
+                    logger.warning(f"[리스크] 매도 취소 실패: {s} - {e}, 시장가 재주문 건너뜀")
+                    continue
             # 시장가 재주문 (동시호가 시간대에는 지정가 유지)
             pos = self.engine.portfolio.positions.get(s)
             if pos and pos.quantity > 0:
@@ -1018,7 +1020,7 @@ class RiskManager:
                     order_type=OrderType.LIMIT,
                     quantity=position_size,
                     price=sell_price,
-                    strategy=event.strategy.value,
+                    strategy=event.strategy.value if event.strategy else "unknown",
                     reason=event.reason,
                     signal_score=event.score
                 )
@@ -1030,7 +1032,7 @@ class RiskManager:
                     order_type=OrderType.MARKET,
                     quantity=position_size,
                     price=event.price,
-                    strategy=event.strategy.value,
+                    strategy=event.strategy.value if event.strategy else "unknown",
                     reason=event.reason,
                     signal_score=event.score
                 )
@@ -1265,13 +1267,9 @@ class RiskManager:
             )
             return 0
 
-        # 일일 매수 횟수 제한 + 적응형 포지션 사이징
-        max_daily_buys = self.config.max_daily_new_buys
-        daily_buy_count = self.engine.portfolio.daily_trades
-
-        if daily_buy_count >= max_daily_buys:
-            logger.info(f"[리스크] 일일 매수 한도 도달: {daily_buy_count}/{max_daily_buys}")
-            return 0
+        # 일일 거래 횟수 제한 없음 (코드리뷰 수정 — 가용 현금이 유일한 게이트)
+        # max_daily_buys = self.config.max_daily_new_buys
+        # daily_buy_count = self.engine.portfolio.daily_trades
 
         # 전략별 비율 기반 포지션 금액 (전략별 상한 존중)
         max_value = equity * Decimal(str(self.config.max_position_pct / 100))

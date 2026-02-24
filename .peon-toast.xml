@@ -1,0 +1,1 @@
+<toast duration="short"><visual><binding template="ToastGeneric"><text> Task complete</text><text>ai-trader-v2: done</text><image placement="appLogoOverride" hint-crop="circle" src="peon-ping-icon.png" /></binding></visual><audio silent="true" /></toast>

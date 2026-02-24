@@ -459,27 +459,39 @@ class SwingScreener:
 
     @staticmethod
     def _should_exclude(name: str) -> bool:
-        """ETF/ETN/관리종목/정리매매 제외 판단"""
+        """ETF/ETN/관리종목/정리매매 제외 판단
+
+        ETF 운용사 브랜드는 종목명 앞에서 시작하는 경우만 제외
+        (ACE, SOL, BNK 등 일반 기업명과 구분)
+        """
         upper = name.upper()
-        exclude_keywords_upper = [
-            # ETF 운용사 브랜드 (대문자 비교)
+
+        # ETF 운용사 브랜드: 종목명이 해당 키워드로 시작할 때만 제외
+        # (ex: "ACE 코스피200" ✅ 제외 / "에이스기술" ❌ 통과)
+        etf_brand_prefixes = [
             "KODEX", "TIGER", "KBSTAR", "ARIRANG", "KOSEF",
-            "HANARO", "SOL", "KINDEX", "ACE", "PLUS", "RISE",
-            "BNK", "TIMEFOLIO", "WOORI", "FOCUS", "TREX",
-            "SMART", "MASTER",
-            # ETF/ETN 키워드
-            "ETF", "ETN",
-            # 파생상품 키워드
-            "인버스", "레버리지", "선물", "채권", "원유", "금선물",
+            "HANARO", "SOL ", "KINDEX", "ACE ", "PLUS ", "RISE ",
+            "BNK ", "TIMEFOLIO", "WOORI ", "FOCUS ", "TREX ",
+            "SMART ", "MASTER ",
         ]
-        exclude_keywords_any = [
-            # 관리종목/정리매매 (원문 포함 검사)
-            "관리", "정리매매", "투자주의",
-        ]
-        if any(kw in upper for kw in exclude_keywords_upper):
+        if any(upper.startswith(kw) for kw in etf_brand_prefixes):
             return True
-        if any(kw in name for kw in exclude_keywords_any):
+
+        # ETF/ETN 키워드: 종목명 어디에든 포함되면 제외 (명확한 상품 유형 표기)
+        etf_type_keywords = ["ETF", "ETN"]
+        if any(kw in upper for kw in etf_type_keywords):
             return True
+
+        # 파생상품 키워드 (한글 — 기업명에 포함될 가능성 낮음)
+        derivative_keywords = ["인버스", "레버리지", "선물", "채권", "원유", "금선물"]
+        if any(kw in name for kw in derivative_keywords):
+            return True
+
+        # 관리종목/정리매매 상태 (원문 포함 검사)
+        status_keywords = ["정리매매", "투자주의", "투자경고", "투자위험"]
+        if any(kw in name for kw in status_keywords):
+            return True
+
         return False
 
     async def _load_benchmark_index(self):
