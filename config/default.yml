@@ -10,6 +10,7 @@ trading:
   # 거래 시간대
   enable_pre_market: true        # 프리장 (08:00~08:50)
   enable_next_market: true       # 넥스트장 (15:30~20:00)
+  pre_market_slippage_buffer_pct: 3.0  # 프리장 익절 슬리피지 버퍼(%): indicative vs 실제 단일가 갭 대비
 
   # 수수료 (한국투자증권 기준, 2024년 세율 적용)
   fees:

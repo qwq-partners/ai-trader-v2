@@ -104,6 +104,7 @@ def create_trading_config(config: Optional[Dict[str, Any]] = None) -> TradingCon
         sell_fee_rate=float(fees.get("sell_rate", 0.00195)),
         enable_pre_market=trading.get("enable_pre_market", True),
         enable_next_market=trading.get("enable_next_market", True),
+        pre_market_slippage_buffer_pct=float(trading.get("pre_market_slippage_buffer_pct", 3.0)),
         risk=risk,
     )
 

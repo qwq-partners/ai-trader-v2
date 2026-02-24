@@ -958,6 +958,42 @@ class RiskManager:
             )
             return None
 
+        # 프리장 익절 슬리피지 필터 (PRE_MARKET + SELL 신호 대상)
+        # 단일가가 예상체결가(indicative)보다 크게 낮을 수 있어 익절 신호의 신뢰성이 낮음
+        # - 손절 신호("손절" in reason): 무조건 통과 (손실 방어 최우선)
+        # - 익절/트레일링 신호: entry_price × (1 + slippage_buffer) > indicative 이면 차단
+        if event.side == OrderSide.SELL:
+            current_session = self.engine._get_current_session()
+            if current_session == MarketSession.PRE_MARKET:
+                is_stop_loss = bool(event.reason and "손절" in event.reason)
+                if not is_stop_loss:
+                    pos = self.engine.portfolio.positions.get(event.symbol)
+                    buf_pct = self.config.pre_market_slippage_buffer_pct
+                    if pos and pos.avg_price > 0 and event.price and buf_pct > 0:
+                        # 슬리피지 적용 후 예상 체결가
+                        adjusted_price = event.price * Decimal(str(1 - buf_pct / 100))
+                        # 슬리피지 후에도 수익이면 허용, 아니면 정규장 대기
+                        if adjusted_price <= pos.avg_price:
+                            logger.info(
+                                f"[리스크] 프리장 익절 차단: {event.symbol} "
+                                f"indicative={float(event.price):,.0f}원 "
+                                f"→ 슬리피지({buf_pct:.1f}%) 후 {float(adjusted_price):,.0f}원 "
+                                f"≤ 진입가 {float(pos.avg_price):,.0f}원 (정규장 대기). 사유: {event.reason}"
+                            )
+                            trading_logger.log_signal_blocked(
+                                symbol=event.symbol, side=event.side.value,
+                                reason=f"프리장익절차단(슬리피지{buf_pct:.1f}%버퍼)",
+                                price=float(event.price or 0), score=event.score,
+                            )
+                            return None
+                        else:
+                            logger.info(
+                                f"[리스크] 프리장 익절 허용: {event.symbol} "
+                                f"indicative={float(event.price):,.0f}원 "
+                                f"→ 슬리피지({buf_pct:.1f}%) 후도 수익 "
+                                f"({float(adjusted_price):,.0f}원 > 진입가 {float(pos.avg_price):,.0f}원)"
+                            )
+
         # 이미 주문 진행 중인 종목 차단 + 신호 쿨다운 체크 (Lock 보호로 TOCTOU 방지)
         async with self._pending_lock:
             # 1차: pending 주문 체크

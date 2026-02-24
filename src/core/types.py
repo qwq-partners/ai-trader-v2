@@ -558,6 +558,7 @@ class TradingConfig:
     # 시간대
     enable_pre_market: bool = True
     enable_next_market: bool = True
+    pre_market_slippage_buffer_pct: float = 3.0  # 프리장 익절 슬리피지 버퍼 (%): 단일가가 indicative보다 낮을 때 대비
 
     # 리스크
     risk: RiskConfig = field(default_factory=RiskConfig)
