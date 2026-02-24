@@ -1042,7 +1042,7 @@ class KISBroker(BaseBroker):
                     break
                 # 무한루프 방지: 키가 이전 페이지와 동일하면 중단
                 if ctx_fk == prev_ctx_fk and ctx_nk == prev_ctx_nk:
-                    logger.warning(f"외부 계좌 페이지네이션 무한루프 감지 ({cano}), page={page} — 중단")
+                    logger.debug(f"외부 계좌 단일 페이지 ({cano}) — 정상 종료")
                     break
                 prev_ctx_fk = ctx_fk
                 prev_ctx_nk = ctx_nk
