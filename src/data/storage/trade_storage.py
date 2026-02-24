@@ -9,7 +9,7 @@ import asyncio
 import json
 import os
 from datetime import datetime, date, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional
 
 import asyncpg
@@ -667,9 +667,13 @@ class TradeStorage:
 
     # 수수료/세금 상수 — FeeCalculator 기준값 사용 (fee_calculator.py 단일 소스)
     _fee_config = FeeConfig()
-    BUY_FEE_RATE = float(_fee_config.buy_commission_rate)    # 매수 수수료 0.0140527%
-    SELL_FEE_RATE = float(_fee_config.sell_commission_rate)   # 매도 수수료 0.0130527%
-    SELL_TAX_RATE = float(_fee_config.sell_tax_rate)          # 증권거래세 0.20%
+    _BUY_FEE_RATE = _fee_config.buy_commission_rate    # Decimal 매수 수수료
+    _SELL_FEE_RATE = _fee_config.sell_commission_rate   # Decimal 매도 수수료
+    _SELL_TAX_RATE = _fee_config.sell_tax_rate          # Decimal 증권거래세
+    # float 호환 (기존 코드 하위호환)
+    BUY_FEE_RATE = float(_fee_config.buy_commission_rate)
+    SELL_FEE_RATE = float(_fee_config.sell_commission_rate)
+    SELL_TAX_RATE = float(_fee_config.sell_tax_rate)
 
     @staticmethod
     def _parse_kis_time(ord_tmd: str, base_date: date) -> Optional[datetime]:
@@ -684,21 +688,25 @@ class TradeStorage:
 
     @classmethod
     def calc_pnl(cls, entry_price: float, exit_price: float, quantity: int) -> tuple:
-        """KIS 체결 기반 정확한 PnL 계산 (수수료+세금 포함).
+        """KIS 체결 기반 정확한 PnL 계산 (수수료+세금 포함, Decimal 정밀 연산).
 
         Returns:
-            (pnl, pnl_pct) — 원 단위 손익, 퍼센트 수익률
+            (pnl, pnl_pct) — 원 단위 손익(int), 퍼센트 수익률(float)
         """
-        buy_amount = entry_price * quantity
-        sell_amount = exit_price * quantity
-        buy_fee = buy_amount * cls.BUY_FEE_RATE
-        sell_fee = sell_amount * cls.SELL_FEE_RATE
-        sell_tax = sell_amount * cls.SELL_TAX_RATE
+        d_entry = Decimal(str(entry_price))
+        d_exit = Decimal(str(exit_price))
+        d_qty = Decimal(str(quantity))
+
+        buy_amount = d_entry * d_qty
+        sell_amount = d_exit * d_qty
+        buy_fee = buy_amount * cls._BUY_FEE_RATE
+        sell_fee = sell_amount * cls._SELL_FEE_RATE
+        sell_tax = sell_amount * cls._SELL_TAX_RATE
         cost = buy_amount + buy_fee
         net = sell_amount - sell_fee - sell_tax
         pnl = net - cost
-        pnl_pct = (pnl / cost * 100) if cost > 0 else 0.0
-        return round(pnl), round(pnl_pct, 4)
+        pnl_pct = (pnl / cost * Decimal("100")) if cost > 0 else Decimal("0")
+        return int(pnl.to_integral_value(rounding=ROUND_HALF_UP)), float(pnl_pct.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP))
 
     def _find_recovery_target(self, symbol: str, today: date,
                               db_trades: Dict[str, 'TradeRecord'] = None) -> Optional[TradeRecord]:

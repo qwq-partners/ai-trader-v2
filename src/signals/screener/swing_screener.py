@@ -191,25 +191,33 @@ class SwingScreener:
         2단계: FDR 일봉 1년 조회 + 기술적 지표 계산
 
         FDR(FinanceDataReader)로 1년치 일봉 조회 (KIS API 60일 제한 우회).
+        Semaphore(10) + wait_for(10초) 로 병렬 조회.
         """
-        results = []
         start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+        sem = asyncio.Semaphore(10)
 
-        loop = asyncio.get_running_loop()
-
-        for stock in universe:
+        async def fetch_one(stock: Dict[str, str]) -> Optional[Dict[str, Any]]:
             symbol = stock["symbol"]
             name = stock["name"]
+            loop = asyncio.get_running_loop()
 
             try:
-                # FDR 일봉 조회 (동기 → 비동기 래핑)
-                df = await loop.run_in_executor(
-                    None, self._fetch_fdr_data, symbol, start_date
-                )
+                async with sem:
+                    df = await asyncio.wait_for(
+                        loop.run_in_executor(None, self._fetch_fdr_data, symbol, start_date),
+                        timeout=10.0,
+                    )
+            except asyncio.TimeoutError:
+                logger.warning(f"[스윙스크리너] {symbol} FDR 조회 타임아웃(10초), 스킵")
+                return None
+            except Exception as e:
+                logger.debug(f"[스윙스크리너] {symbol} FDR 조회 실패: {e}")
+                return None
 
+            try:
                 if df is None or len(df) < 50:
                     logger.debug(f"[스윙스크리너] {symbol} 데이터 부족 ({len(df) if df is not None else 0}일)")
-                    continue
+                    return None
 
                 # DataFrame → List[Dict]
                 daily_data = []
@@ -233,12 +241,12 @@ class SwingScreener:
                         f"[스윙스크리너] {symbol} 거래대금 부족: "
                         f"{avg_trade_value/1e8:.0f}억 (<10억)"
                     )
-                    continue
+                    return None
 
                 # 기술적 지표 계산
                 indicators = self._indicators.calculate_all(symbol, daily_data)
                 if not indicators:
-                    continue
+                    return None
 
                 # MRS 계산 (벤치마크 데이터 있을 경우)
                 if self._kospi_closes:
@@ -250,15 +258,27 @@ class SwingScreener:
                         indicators["mrs"] = mrs_result["mrs"]
                         indicators["mrs_slope"] = mrs_result["mrs_slope"]
 
-                results.append({
+                return {
                     "symbol": symbol,
                     "name": name,
                     "indicators": indicators,
                     "daily_data": daily_data,
-                })
+                }
 
             except Exception as e:
                 logger.debug(f"[스윙스크리너] {symbol} 지표 계산 실패: {e}")
+                return None
+
+        raw_results = await asyncio.gather(
+            *[fetch_one(s) for s in universe], return_exceptions=True
+        )
+
+        results = []
+        for r in raw_results:
+            if isinstance(r, dict):
+                results.append(r)
+            elif isinstance(r, Exception):
+                logger.debug(f"[스윙스크리너] 병렬 조회 예외: {r}")
 
         return results
 

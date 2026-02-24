@@ -957,72 +957,87 @@ class KISBroker(BaseBroker):
             tr_id = "TTTC8434R"
             url = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/inquire-balance"
 
-            params = {
-                "CANO": cano,
-                "ACNT_PRDT_CD": acnt_prdt_cd,
-                "AFHR_FLPR_YN": "N",
-                "FUND_STTL_ICLD_YN": "N",
-                "FNCG_AMT_AUTO_RDPT_YN": "N",
-                "INQR_DVSN": "01",
-                "OFL_YN": "N",
-                "PRCS_DVSN": "00",
-                "UNPR_DVSN": "01",
-                "CTX_AREA_FK100": "",
-                "CTX_AREA_NK100": "",
-            }
+            ctx_fk = ""
+            ctx_nk = ""
 
-            data = await self._api_get(url, tr_id, params)
-
-            rt_cd = data.get("rt_cd", "")
-            if str(rt_cd) != "0":
-                msg = data.get("msg1", "")
-                logger.warning(f"외부 계좌 조회 실패 ({cano}): {msg}")
-                return positions, summary
-
-            # output1: 종목별 보유 내역
-            output1 = data.get("output1", []) or []
-            if not isinstance(output1, list):
-                logger.warning(f"외부 계좌 output1 형식 오류 ({cano}): {type(output1)}")
-                output1 = []
-            for item in output1:
-                if not isinstance(item, dict):
-                    continue
-                qty = int(item.get("hldg_qty", "0") or "0")
-                if qty <= 0:
-                    continue
-
-                symbol = str(item.get("pdno", "")).zfill(6)
-                name = str(item.get("prdt_name", "") or "").strip()
-                avg_price = float(item.get("pchs_avg_pric", "0") or "0")
-                current_price = float(item.get("prpr", "0") or "0")
-                eval_amt = float(item.get("evlu_amt", "0") or "0")
-                pnl = float(item.get("evlu_pfls_amt", "0") or "0")
-                pnl_pct = float(item.get("evlu_pfls_rt", "0") or "0")
-                change_pct = float(item.get("fltt_rt", "0") or "0")
-
-                positions.append({
-                    "symbol": symbol,
-                    "name": name,
-                    "qty": qty,
-                    "avg_price": avg_price,
-                    "current_price": current_price,
-                    "eval_amt": eval_amt,
-                    "pnl": pnl,
-                    "pnl_pct": pnl_pct,
-                    "change_pct": change_pct,
-                })
-
-            # output2: 계좌 요약
-            output2 = data.get("output2", [])
-            if output2:
-                acct = output2[0] if isinstance(output2, list) else output2
-                summary = {
-                    "total_equity": float(acct.get("tot_evlu_amt", "0") or "0"),
-                    "stock_value": float(acct.get("scts_evlu_amt", "0") or "0"),
-                    "deposit": float(acct.get("dnca_tot_amt", "0") or "0"),
-                    "unrealized_pnl": float(acct.get("evlu_pfls_smtl_amt", "0") or "0"),
-                    "purchase_amount": float(acct.get("pchs_amt_smtl_amt", "0") or "0"),
+            for page in range(10):  # 최대 10페이지 (약 500건)
+                params = {
+                    "CANO": cano,
+                    "ACNT_PRDT_CD": acnt_prdt_cd,
+                    "AFHR_FLPR_YN": "N",
+                    "FUND_STTL_ICLD_YN": "N",
+                    "FNCG_AMT_AUTO_RDPT_YN": "N",
+                    "INQR_DVSN": "01",
+                    "OFL_YN": "N",
+                    "PRCS_DVSN": "00",
+                    "UNPR_DVSN": "01",
+                    "CTX_AREA_FK100": ctx_fk,
+                    "CTX_AREA_NK100": ctx_nk,
                 }
+
+                data = await self._api_get(url, tr_id, params)
+
+                rt_cd = data.get("rt_cd", "")
+                if str(rt_cd) != "0":
+                    if page == 0:
+                        msg = data.get("msg1", "")
+                        logger.warning(f"외부 계좌 조회 실패 ({cano}): {msg}")
+                    break
+
+                # output1: 종목별 보유 내역
+                output1 = data.get("output1", []) or []
+                if not isinstance(output1, list):
+                    if page == 0:
+                        logger.warning(f"외부 계좌 output1 형식 오류 ({cano}): {type(output1)}")
+                    break
+                for item in output1:
+                    if not isinstance(item, dict):
+                        continue
+                    qty = int(item.get("hldg_qty", "0") or "0")
+                    if qty <= 0:
+                        continue
+
+                    symbol = str(item.get("pdno", "")).zfill(6)
+                    name = str(item.get("prdt_name", "") or "").strip()
+                    avg_price = float(item.get("pchs_avg_pric", "0") or "0")
+                    current_price = float(item.get("prpr", "0") or "0")
+                    eval_amt = float(item.get("evlu_amt", "0") or "0")
+                    pnl_val = float(item.get("evlu_pfls_amt", "0") or "0")
+                    pnl_pct = float(item.get("evlu_pfls_rt", "0") or "0")
+                    change_pct = float(item.get("fltt_rt", "0") or "0")
+
+                    positions.append({
+                        "symbol": symbol,
+                        "name": name,
+                        "qty": qty,
+                        "avg_price": avg_price,
+                        "current_price": current_price,
+                        "eval_amt": eval_amt,
+                        "pnl": pnl_val,
+                        "pnl_pct": pnl_pct,
+                        "change_pct": change_pct,
+                    })
+
+                # output2: 계좌 요약 (첫 페이지에서만)
+                if page == 0:
+                    output2 = data.get("output2", [])
+                    if output2:
+                        acct = output2[0] if isinstance(output2, list) else output2
+                        summary = {
+                            "total_equity": float(acct.get("tot_evlu_amt", "0") or "0"),
+                            "stock_value": float(acct.get("scts_evlu_amt", "0") or "0"),
+                            "deposit": float(acct.get("dnca_tot_amt", "0") or "0"),
+                            "unrealized_pnl": float(acct.get("evlu_pfls_smtl_amt", "0") or "0"),
+                            "purchase_amount": float(acct.get("pchs_amt_smtl_amt", "0") or "0"),
+                        }
+
+                # 연속 조회 키 확인 — 비어있으면 마지막 페이지
+                ctx_fk = (data.get("ctx_area_fk100") or "").strip()
+                ctx_nk = (data.get("ctx_area_nk100") or "").strip()
+                if not ctx_fk and not ctx_nk:
+                    break
+                if len(output1) == 0:
+                    break
 
             logger.debug(
                 f"외부 계좌 조회 완료: {cano} ({len(positions)}종목)"
