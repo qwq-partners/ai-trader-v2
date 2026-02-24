@@ -32,3 +32,5 @@ data/*.csv
 # OS
 .DS_Store
 Thumbs.db
+.peon-*
+peon-*
