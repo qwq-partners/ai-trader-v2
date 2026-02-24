@@ -2,6 +2,35 @@
 
 ---
 
+## [2026-02-24] daily_stats 포맷 불일치 방어 + 문서 체계 정리
+
+### 🐛 `_load_daily_stats` KeyError 수정 (`src/risk/manager.py`)
+- **원인**: engine.py가 `daily_stats.json` → `engine_daily_stats.json`으로 분리 시 구 포맷 파일 잔존
+- 구 포맷(`daily_pnl`, `daily_trades`) vs 신 포맷(`trades`, `wins`, `losses`) 키 불일치 → 매 재시작 KeyError
+- **수정**: `"trades"` 키 존재 확인 가드 + `.get()` 방어 + 구 포맷 감지 시 재생성
+
+### 📝 문서 체계 정리
+- **MEMORY.md**: 452줄 → 129줄 축소 (교훈/규칙/패턴만 유지, 변경 이력 제거)
+- **CHANGELOG.md**: 장전 매도 중복 방지 항목 추가 (변경 이력 SSOT)
+- **CLAUDE.md**: 양쪽(전역+프로젝트)에 문서 업데이트 규칙 추가
+  - CHANGELOG = 변경 이력, MEMORY = 교훈/규칙, CLAUDE = 현재 상태
+
+---
+
+## [2026-02-24] 장전 매도 주문 중복 제출 방지
+
+### 🛡️ 장전 매도 주문 중복 방지 (`run_trader.py`, `engine.py`)
+
+**사건**: 08:22 애경산업(018250) 1차 익절 SELL 3주 시장가 → 장전 체결 불가 → stale 타임아웃(3분)이 KIS 취소 없이 pending 해제+stage 롤백 → 재트리거 3회 → 장 시작 시 9주 동시 체결 (의도 3주)
+
+**수정 내용**
+- **Fix 1** (`run_trader.py`): stale pending 해제 전 `cancel_all_for_symbol()` 호출 — KIS 미체결 주문 먼저 취소
+- **Fix 2** (`run_trader.py`): 장전(`hour < 9`) stale 타임아웃 3분 → 30분 연장 — 체결 불가 시간대 대기
+- **Fix 3** (`engine.py`): RiskManager 매도 90초 폴백에 `is_regular_hours` (09:00~15:30) 가드 — 장전 시장가 전환 방지
+- **Fix 4** (`run_trader.py`): 고아 pending 동기화 해제에도 KIS 주문 취소 추가
+
+---
+
 ## [2026-02-24] 프리장 익절 슬리피지 필터
 
 ### 🛡️ 프리장 익절 슬리피지 필터 (`engine.py`, `types.py`, `config.py`, `default.yml`)

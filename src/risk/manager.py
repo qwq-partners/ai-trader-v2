@@ -509,13 +509,19 @@ class RiskManager:
                 logger.info(f"날짜 변경 감지: {saved_date} → {today}, 일일 손익 리셋")
                 return
 
+            # 필수 키 존재 확인 (engine 포맷 파일이 남아있는 경우 방어)
+            if "trades" not in data:
+                logger.warning("일일 손익 파일 포맷 불일치 (구 engine 포맷) → 무시하고 재생성")
+                self._save_daily_stats()
+                return
+
             # 같은 날이면 복원
             self.daily_stats.trades = data["trades"]
-            self.daily_stats.wins = data["wins"]
-            self.daily_stats.losses = data["losses"]
-            self.daily_stats.total_pnl = Decimal(data["total_pnl"])
-            self.daily_stats.consecutive_losses = data["consecutive_losses"]
-            self.daily_stats.peak_equity = Decimal(data["peak_equity"])
+            self.daily_stats.wins = data.get("wins", 0)
+            self.daily_stats.losses = data.get("losses", 0)
+            self.daily_stats.total_pnl = Decimal(data.get("total_pnl", "0"))
+            self.daily_stats.consecutive_losses = data.get("consecutive_losses", 0)
+            self.daily_stats.peak_equity = Decimal(data.get("peak_equity", str(self.initial_capital)))
 
             logger.info(
                 f"일일 손익 복원: {self.daily_stats.total_pnl:,.0f}원 "
