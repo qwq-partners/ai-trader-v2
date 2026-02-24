@@ -372,20 +372,34 @@ class DailyReportGenerator:
         return recommendations
 
     def _calculate_tech_score(self, stock: ScreenedStock) -> float:
-        """기술적 점수 계산"""
-        score = 50  # 기본점수
+        """기술적 점수 계산 (수급 중심, 모멘텀 편향 제거)"""
+        score = 40  # 기본점수
+        reasons_str = " ".join(stock.reasons)
 
-        # 등락률 기반
-        if stock.change_pct > 5:
-            score += 30
-        elif stock.change_pct > 2:
+        # 수급 신호 (최우선, 신뢰도 높음)
+        if stock.has_foreign_buying:
+            score += 25
+        if stock.has_inst_buying:
             score += 20
-        elif stock.change_pct > 0:
-            score += 10
 
-        # 거래량 급증 여부
-        if "거래량" in " ".join(stock.reasons):
-            score += 20
+        # 기술적 지표
+        if "SPDI↑" in reasons_str:      score += 10  # 수급선행 지표
+        if "지속상승" in reasons_str:    score += 8
+        if "MA20+" in reasons_str:       score += 5
+        if "RSI" in reasons_str:         score += 5
+        if "저PER" in reasons_str:       score += 5
+        if "저PBR" in reasons_str:       score += 3
+        if "고ROE" in reasons_str:       score += 4
+
+        # 거래량 (있으면 가산, 단독으론 약한 신호)
+        if stock.volume_ratio >= 3.0:    score += 10
+        elif stock.volume_ratio >= 2.0:  score += 6
+        elif "거래량" in reasons_str:    score += 3
+
+        # 등락률 — 보조 신호만 (최대 8점)
+        if stock.change_pct > 5:         score += 8
+        elif stock.change_pct > 2:       score += 5
+        elif stock.change_pct > 0:       score += 2
 
         return min(score, 100)
 
@@ -416,41 +430,48 @@ class DailyReportGenerator:
         return level, factors
 
     def _generate_detailed_thesis(self, stock: ScreenedStock, theme: str) -> str:
-        """상세 투자 포인트 생성"""
+        """스크리너 reasons 기반 상세 투자 포인트 생성 (수급 → 테마 → 기술 순)"""
         parts = []
-
-        # 테마 관련
-        if theme:
-            parts.append(f"{theme} 테마 핵심 수혜주")
-
-        # 등락률 기반
-        if stock.change_pct > 10:
-            parts.append(f"전일 {stock.change_pct:+.1f}% 급등, 강한 상승 모멘텀")
-        elif stock.change_pct > 5:
-            parts.append(f"전일 {stock.change_pct:+.1f}% 상승, 추세 진행 중")
-        elif stock.change_pct > 2:
-            parts.append(f"전일 {stock.change_pct:+.1f}% 상승, 매수세 유입")
-        elif stock.change_pct > 0:
-            parts.append(f"전일 소폭 상승({stock.change_pct:+.1f}%), 저점 매수 기회")
-
-        # 거래량 기반
         reasons_str = " ".join(stock.reasons)
-        if "거래량" in reasons_str:
-            parts.append("거래량 급증으로 세력/기관 매수 포착")
 
-        # 신고가 기반
-        if "신고가" in reasons_str:
-            parts.append("52주 신고가 근접, 돌파 시 추가 상승 기대")
+        # 1. 수급 신호 (가장 신뢰도 높음 — 최우선)
+        for r in stock.reasons:
+            if "외국인 순매수" in r and r not in parts:
+                parts.append(r)
+                break
+        for r in stock.reasons:
+            if "기관 순매수" in r and r not in parts:
+                parts.append(r)
+                break
 
-        # 스크리너 이유 활용
-        for reason in stock.reasons:
-            if reason not in parts and "순위" not in reason:
-                parts.append(reason)
+        # 2. 테마 멤버십
+        if theme:
+            parts.append(f"{theme} 테마")
 
+        # 3. 기술적 신호 — 스크리너 reasons 직접 사용
+        TECH_KEYWORDS = ["SPDI↑", "지속상승", "MA20+", "RSI", "저PER", "저PBR", "고ROE", "흑자"]
+        for kw in TECH_KEYWORDS:
+            for r in stock.reasons:
+                if kw in r and r not in parts:
+                    parts.append(r)
+                    break
+            if len(parts) >= 4:
+                break
+
+        # 4. 거래량 (있으면 추가)
+        for r in stock.reasons:
+            if "거래량" in r and r not in parts:
+                parts.append(r)
+                break
+
+        # 5. 아무것도 없으면 등락률로 보완
         if not parts:
-            parts.append("기술적 돌파 신호 감지")
+            if abs(stock.change_pct) > 0.5:
+                parts.append(f"전일 {stock.change_pct:+.1f}%")
+            else:
+                parts.append("기술적 돌파 신호")
 
-        return " / ".join(parts[:3])
+        return " / ".join(parts[:4])
 
     def _generate_catalyst(self, stock: ScreenedStock, theme: str) -> str:
         """상승 촉매 생성"""
@@ -953,20 +974,11 @@ class DailyReportGenerator:
             risk_emoji = {"낮음": "🟢", "중": "🟡", "높음": "🔴"}.get(rec.risk_level, "⚪")
 
             lines.append(f"<b>{rec.rank}. {rec.name}</b> <code>{rec.symbol}</code> {risk_emoji}{rec.total_score:.0f}점")
-            lines.append(f"   📌 <b>추천이유:</b> {rec.investment_thesis}")
-            lines.append(f"   ⚡ <b>촉매:</b> {rec.catalyst}")
+            lines.append(f"   📌 {rec.investment_thesis}")
 
             if rec.key_news:
-                news_title = rec.key_news
-                if len(news_title) > 50:
-                    news_title = news_title[:50] + "..."
-                lines.append(f"   📰 <b>뉴스:</b> {news_title}")
-
-            lines.append(
-                f"   💰 진입: {rec.target_entry:,.0f}원 → "
-                f"목표: {rec.target_exit:,.0f}원(+3%) / "
-                f"손절: {rec.stop_loss:,.0f}원(-2%)"
-            )
+                news_title = rec.key_news[:55] + "..." if len(rec.key_news) > 55 else rec.key_news
+                lines.append(f"   📰 {news_title}")
 
             if rec.risk_factors:
                 lines.append(f"   ⚠️ {', '.join(rec.risk_factors)}")
@@ -1035,13 +1047,6 @@ class DailyReportGenerator:
                     f"   <code>{rec.result_price:>10,.0f}원</code>  "
                     f"<b>{rec.result_pct:+.1f}%</b>{tag}"
                 )
-                # 진입/목표/손절 참고 (한 줄, 작게)
-                if rec.target_entry > 0:
-                    lines.append(
-                        f"   <i>진입 {rec.target_entry:,.0f} / "
-                        f"목표 {rec.target_exit:,.0f} / "
-                        f"손절 {rec.stop_loss:,.0f}</i>"
-                    )
                 lines.append("")
             else:
                 lines.append(
