@@ -1,5 +1,95 @@
 # AI Trader v2 - 변경 이력
 
+---
+
+## [2026-02-24] 전체 코드리뷰 + 넥스트장 2차 스캔
+
+### 🔍 전체 코드리뷰 (81건 이슈 수정)
+
+#### P0 — 자금 직접 영향 (5건)
+- **engine.py**: 매수 수수료 이중 차감 제거 — 매도 PnL에서 buy_fee 재차감 버그 수정
+- **engine.py**: 일일 매수 5건 하드 제한 제거 — 가용 현금이 유일한 게이트
+- **batch_analyzer.py**: 금요일 배치 시그널 만료일 → 다음 영업일 계산 (주말에 만료되던 버그)
+- **batch_analyzer.py**: `utils.notification` → `utils.telegram` import 경로 수정
+- **risk/manager.py**: `_stop_loss_today` JSON 영속화 — 봇 재시작 시 당일 손절 종목 복원
+
+#### P1 — 버그/데이터 정합성 (10건)
+- **engine.py**: `strategy=None` AttributeError 방지, 취소 실패 시 중복 매도 주문 방지
+- **batch_analyzer.py**: 동일 종목 중복 시그널 dedup (score 높은 것 우선)
+- **batch_analyzer.py**: `score_penalty` abs() 강제 — 양수 설정 시 보너스 역전 방지
+- **bot_schedulers.py**: `_momentum_start` config화, `confidence` min/max 클램프, catch-up 재시도 방지
+- **rsi2_reversal.py / sepa_trend.py**: `or`/falsy → `is not None` 패턴 8건 일괄 수정
+- **sepa_trend.py**: `stop_loss_pct` 3.5 → 5.0 (`default.yml` 통일)
+- **trade_storage.py**: `_reconcile_pnl` 전 큐 drain 대기
+- **kis_broker.py**: `submit_order` 내 session 단일 캡처
+
+#### P2 — 성능/코드 품질 (9건)
+- **swing_screener.py**: FDR 직렬 조회 → `asyncio.gather() + Semaphore(10) + wait_for(10s)` 병렬화 (~10배 속도 향상)
+- **trade_storage.py**: `calc_pnl()` float → `Decimal(str(...))` 정밀 연산 전환
+- **kis_broker.py**: `get_positions_for_account()` 페이지네이션 구현 (50종목 초과 지원)
+- **risk/manager.py**: `pnl == 0` 손익분기 거래 → `consecutive_losses` 제외
+- **data_collector.py**: `_build_equity_summary()` empty snapshots IndexError 방어
+- **data_collector.py**: `get_config()` `dir()` → 명시적 whitelist
+- **swing_screener.py**: `_should_exclude()` `startswith` 로직 — ACE/SOL/BNK 등 일반 기업명 오탐 방지
+- **bot_schedulers.py**: `_fill_check_errors` `__init__` 선언, `hasattr` 제거
+
+---
+
+### 🌙 넥스트장 2차 스캔 (저녁 보정)
+
+15:40 1차 스캔 결과를 19:30에 넥스트장 데이터로 보정하는 2단계 스캔 추가.
+
+**흐름**
+```
+15:40 run_daily_scan()  → pending_signals.json 저장
+19:30 run_evening_scan() → 넥스트장 데이터로 스코어 보정 → 덮어쓰기
+09:01 execute_pending_signals() → 최종 시그널 실행
+```
+
+**보정 로직 (거래량 우선)**
+- 시간외 거래량 ≥ 정규장 1% + 가격 +2%↑ → 스코어 **+10점**
+- 시간외 가격 -3%↓ → 스코어 **-15점** 패널티
+- 시간외 +8% 이상 갭업 → **제거** (다음날 고점 위험)
+- 보정 후 60점 미만 → **제거**
+
+**설정** (`config/default.yml` → `batch.evening_scan.*`)
+```yaml
+evening_scan_enabled: true
+evening_scan_time: "19:30"
+evening_scan:
+  ovtm_vol_threshold: 0.01   # 정규장 대비 1%
+  gap_remove_pct: 8.0        # +8% 초과 갭업 제거
+  score_bonus: 10.0
+  score_penalty: -15.0
+```
+
+**KIS API**: `get_quote()` 응답에 `ovtm_price`, `ovtm_vol`, `ovtm_change_pct` 필드 추가
+
+---
+
+### 📅 스케줄 업데이트
+
+| 시간 | 작업 |
+|------|------|
+| 07:30 | US 시장 모닝 리포트 (S&P500 섹터 트리맵 + 인덱스 카드) |
+| 15:35 | 전략적 사전분석 (수급 추세 탐지) |
+| **15:40** | **1차 스캔 (정규장 마감 후)** |
+| **19:30** | **2차 스캔 (넥스트장 반영 보정) ← NEW** |
+| 09:01 | 시그널 실행 |
+
+---
+
+### 💰 수수료 계산 수정 (dashboard)
+
+미실현 손익 계산 공식 변경:
+```
+이전: (현재가 - 평균단가) × 수량  (raw mark-to-market)
+이후: (예상매도금액 - 예상매도비용) - (매수금액 + 매수수수료)  (net-if-sold)
+```
+동일 가격에서 -0.227% 표시 (왕복 거래비용 반영, 실현 PnL 공식과 일치)
+
+---
+
 ## [2026-02-06] 종목 마스터 DB + 다중 소스 뉴스 + LLM 파이프라인 개선
 
 ### 🎯 개요

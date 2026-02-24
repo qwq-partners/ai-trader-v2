@@ -1,5 +1,5 @@
 # AI Trading Bot v2 - CLAUDE.md
-> 최종 업데이트: 2026-02-11 | 상세 변경 이력은 MEMORY.md 참조
+> 최종 업데이트: 2026-02-24 | 상세 변경 이력은 CHANGELOG.md 참조
 
 ## Project Structure
 The main project directory is `/home/user/projects/ai-trader-v2/` (NOT `~/ai-trader/` or other paths). Always verify the working directory before reading or editing files.
@@ -16,11 +16,20 @@ The main project directory is `/home/user/projects/ai-trader-v2/` (NOT `~/ai-tra
 
 ## 검증 프로토콜 (절대 규칙)
 코드 수정 후 반드시 아래 순서 수행:
-1. `python -m py_compile <수정파일>` — 문법 검증
-2. 기존 프로세스 종료: `ps aux | grep run_trader` → `kill <PID>`
-3. 봇 재시작: `nohup python scripts/run_trader.py --config config/default.yml > /tmp/trader_restart.log 2>&1 &`
-4. 로그 확인: `sleep 5 && grep "ERROR" /tmp/trader_restart.log`
+1. `python3 -m py_compile <수정파일>` — 문법 검증
+2. **봇 재시작: `echo 'user123!' | sudo -S -k systemctl restart ai-trader`**
+   - ⚠️ `nohup python scripts/run_trader.py` 직접 실행 **절대 금지** (systemd와 충돌)
+3. 상태 확인: `systemctl is-active ai-trader`
+4. 로그 확인: `journalctl -u ai-trader -n 20 --no-pager`
 5. 에러 없으면 완료 보고, 있으면 즉시 수정
+
+```bash
+# 봇 관리 명령어
+echo 'user123!' | sudo -S -k systemctl restart ai-trader  # 재시작
+echo 'user123!' | sudo -S -k systemctl stop ai-trader     # 중지
+systemctl is-active ai-trader                              # 상태
+journalctl -u ai-trader -f                                 # 실시간 로그
+```
 
 ## 코드 리뷰 프로토콜
 사용자가 "리뷰해봐" 요청 시:
@@ -138,6 +147,7 @@ _run_sync_portfolio (2분)   → KIS 잔고 동기화
 _run_health_monitor         → 운영 모니터링 (15초/60초/5분 주기)
 theme_detector (15분)       → 테마 탐지 (네이버 뉴스 + LLM)
 batch: 15:40 daily_scan     → 전략별 일일 스캔 → pending_signals.json 저장
+batch: 19:30 evening_scan   → 넥스트장 데이터로 스코어 보정 → 덮어쓰기
 batch: 09:01 execute        → 전일 시그널 실행 (T+1)
 evolve (20:30)              → 자가 진화 (복기 → 파라미터 조정)
 dashboard (8080)            → 웹 대시보드 + 외부 계좌 뷰어
@@ -255,9 +265,24 @@ dashboard (8080)            → 웹 대시보드 + 외부 계좌 뷰어
 ### 패턴
 - **비동기**: 모든 I/O는 `async/await` (aiohttp, asyncio)
 - **데이터클래스**: 도메인 모델은 `@dataclass`
-- **정밀 계산**: 금액/가격은 `Decimal` 사용
+- **정밀 계산**: 금액/가격은 `Decimal` 사용 — `Decimal(str(value))` 로 변환 (float → Decimal 오차 방지)
 - **한국어**: 주석, 로그 메시지 모두 한국어
 - **로그 태그**: `[리스크]`, `[스크리닝]`, `[진화]` 등
+- **pykrx**: 반드시 `await asyncio.to_thread(pykrx_func)` 래핑 — 동기 블로킹 금지
+
+### ⛔ 절대 금지 패턴 (2026-02-24 코드리뷰 발견)
+
+```python
+# ❌ 잘못된 패턴 — 0, 0.0, "" 이 False로 처리됨
+if value and value < 0:        # 0.0은 통과 안 됨
+if atr and atr > 0:            # atr=0 조건 누락
+result = value or default      # value=0 이면 default 반환
+
+# ✅ 올바른 패턴
+if value is not None and value < 0:
+if atr is not None and atr > 0:
+result = value if value is not None else default
+```
 
 ### 주의사항
 - `.env`에 API 키 저장 (커밋 금지)
@@ -266,6 +291,9 @@ dashboard (8080)            → 웹 대시보드 + 외부 계좌 뷰어
 - **pending 상태 관리**: 예외 핸들러에서 반드시 `clear_pending()` 호출 (누수 방지)
 - **시간 기반 dict**: 만료항목 자동 정리 로직 필수 (메모리 누수 방지)
 - **파일 수정 시 연관 체크**: types.py ↔ engine.py, exit_manager.py ↔ run_trader.py, config.py ↔ YAML
+- **수수료 계산**: `FeeCalculator` 단일 사용 — data_collector/trade_storage 내 하드코딩 금지
+- **영업일 계산**: 만료일/스케줄에 `is_kr_market_holiday()` 반드시 사용 (주말/공휴일 처리)
+- **aiohttp timeout**: `timeout=30` 숫자 리터럴 금지 → `aiohttp.ClientTimeout(total=30)` 사용
 
 ## 환경변수 (.env)
 ```
@@ -288,11 +316,19 @@ INITIAL_CAPITAL (기본 10000000)
 
 ## 트러블슈팅
 
-### PID 파일 충돌로 시작 안 될 때
+### 봇이 응답 없거나 이상할 때
 ```bash
-ps aux | grep run_trader | grep -v grep   # 실제 프로세스 확인
-kill <PID>                                 # 기존 종료
-rm -f *.pid /tmp/trader_*.pid             # PID 파일 정리
+# 상태 확인
+systemctl status ai-trader.service
+journalctl -u ai-trader -n 50 --no-pager
+
+# 재시작 (코드 변경 후 포함)
+echo 'user123!' | sudo -S -k systemctl restart ai-trader
+
+# 싱글톤 락 파일 충돌 시 (재시작해도 안 될 때)
+echo 'user123!' | sudo -S -k systemctl stop ai-trader
+rm -f ~/.cache/ai_trader/*.lock
+echo 'user123!' | sudo -S -k systemctl start ai-trader
 ```
 
 ### 포트폴리오 동기화 이슈
