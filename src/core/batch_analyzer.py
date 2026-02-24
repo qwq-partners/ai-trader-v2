@@ -46,6 +46,10 @@ class PendingSignal:
     created_at: str  # ISO format
     expires_at: str  # ISO format
     atr_pct: float = 0.0  # ATR % (ExitManager 전달용)
+    # 넥스트장(시간외 단일가) 보정 데이터 (19:30 스캔 시 채워짐)
+    ovtm_price_chg_pct: float = 0.0   # 시간외 가격 변동% (종가 대비)
+    ovtm_vol_ratio: float = 0.0       # 시간외 거래량 / 정규장 거래량
+    evening_score_adj: float = 0.0    # 19:30 스캔에서 적용된 스코어 보정치
 
     def is_expired(self) -> bool:
         return datetime.now() > datetime.fromisoformat(self.expires_at)
@@ -55,9 +59,12 @@ class PendingSignal:
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "PendingSignal":
-        # 이전 JSON 호환: atr_pct 없으면 기본값 0.0
+        # 이전 JSON 호환: 없는 필드는 기본값으로
         data = d.copy()
         data.setdefault("atr_pct", 0.0)
+        data.setdefault("ovtm_price_chg_pct", 0.0)
+        data.setdefault("ovtm_vol_ratio", 0.0)
+        data.setdefault("evening_score_adj", 0.0)
         return cls(**data)
 
 
@@ -196,6 +203,142 @@ class BatchAnalyzer:
 
         except Exception as e:
             logger.error(f"[배치분석] 일일 스캔 오류: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+    async def run_evening_scan(self):
+        """[19:30] 넥스트장 반영 2차 스캔 (시간외 단일가 보정)
+
+        15:40 1차 스캔 결과를 넥스트장 데이터로 보정합니다.
+        - 거래량 우선, 가격 방향성 보조 (Gemini 권고)
+        - ovtm_vol_ratio >= 1% (정규장 대비) + 가격 상승 → 스코어 +10
+        - 가격 -3% 이하 하락 → 스코어 -15
+        - +8% 이상 갭업 → 제거 (다음날 고점 위험)
+        - 넥스트장 신규 등장 종목 추가
+        """
+        logger.info("[저녁스캔] ===== 넥스트장 2차 스캔 시작 =====")
+        try:
+            # 기존 시그널 로드
+            pending = self._load_json()
+            if not pending:
+                logger.info("[저녁스캔] 기존 시그널 없음, 1차 스캔을 먼저 실행하세요")
+                return
+
+            # 설정값 (config["batch"]["evening_scan"] 경로)
+            batch_cfg = self._config.get("batch", {})
+            evening_cfg = batch_cfg.get("evening_scan", {})
+            ovtm_vol_threshold = evening_cfg.get("ovtm_vol_threshold", 0.01)   # 정규장 대비 1%
+            price_bonus_pct = evening_cfg.get("price_bonus_pct", 2.0)          # +2% 이상 → 보너스
+            price_penalty_pct = evening_cfg.get("price_penalty_pct", -3.0)     # -3% 이하 → 패널티
+            gap_remove_pct = evening_cfg.get("gap_remove_pct", 8.0)            # +8% 이상 → 제거
+            score_bonus = evening_cfg.get("score_bonus", 10.0)
+            score_penalty = evening_cfg.get("score_penalty", -15.0)
+            min_score_after = evening_cfg.get("min_score_after", 60.0)
+
+            updated = []
+            removed_symbols = []
+            bonus_symbols = []
+            penalty_symbols = []
+
+            for sig in pending:
+                try:
+                    quote = await self._broker.get_quote(sig.symbol)
+                    if not quote:
+                        updated.append(sig)
+                        continue
+
+                    close_price = quote.get("price", 0)
+                    ovtm_price = quote.get("ovtm_price", 0)
+                    ovtm_vol = quote.get("ovtm_vol", 0)
+                    reg_vol = quote.get("volume", 1) or 1  # 정규장 거래량
+
+                    # 시간외 데이터 없으면 그대로 유지
+                    if ovtm_price <= 0 or ovtm_vol == 0:
+                        updated.append(sig)
+                        continue
+
+                    # 지표 계산
+                    ovtm_chg_pct = ((ovtm_price - close_price) / close_price * 100) if close_price > 0 else 0
+                    ovtm_vol_ratio = ovtm_vol / reg_vol
+
+                    # ① 과도한 갭업 → 제거 (Gemini: 다음날 고점 위험)
+                    if ovtm_chg_pct >= gap_remove_pct:
+                        logger.info(
+                            f"[저녁스캔] {sig.symbol} 제거: 넥스트장 갭업 {ovtm_chg_pct:+.1f}% "
+                            f"(>={gap_remove_pct}% 기준)"
+                        )
+                        removed_symbols.append(f"{sig.symbol}({ovtm_chg_pct:+.1f}%)")
+                        continue
+
+                    # ② 스코어 보정
+                    adj = 0.0
+                    has_vol = ovtm_vol_ratio >= ovtm_vol_threshold
+
+                    if has_vol and ovtm_chg_pct >= price_bonus_pct:
+                        # 거래량 있고 가격도 상승 → 보너스 (Gemini: 거래량이 먼저)
+                        adj = score_bonus
+                        bonus_symbols.append(f"{sig.symbol}(+{adj:.0f}pt, {ovtm_chg_pct:+.1f}%)")
+                    elif ovtm_chg_pct <= price_penalty_pct:
+                        # 가격 하락 → 패널티
+                        adj = score_penalty
+                        penalty_symbols.append(f"{sig.symbol}({adj:+.0f}pt, {ovtm_chg_pct:+.1f}%)")
+
+                    new_score = sig.score + adj
+
+                    # 최소 점수 미달 → 제거
+                    if new_score < min_score_after:
+                        logger.info(
+                            f"[저녁스캔] {sig.symbol} 제거: 보정 후 점수 {new_score:.1f} "
+                            f"< 최소 {min_score_after}"
+                        )
+                        removed_symbols.append(f"{sig.symbol}(score {new_score:.0f})")
+                        continue
+
+                    # 업데이트된 시그널 저장
+                    from dataclasses import replace
+                    updated_sig = replace(
+                        sig,
+                        score=new_score,
+                        ovtm_price_chg_pct=round(ovtm_chg_pct, 2),
+                        ovtm_vol_ratio=round(ovtm_vol_ratio, 4),
+                        evening_score_adj=adj,
+                    )
+                    updated.append(updated_sig)
+
+                except Exception as e:
+                    logger.warning(f"[저녁스캔] {sig.symbol} 보정 오류: {e}")
+                    updated.append(sig)
+
+            # 결과 저장
+            self._pending = updated
+            self._save_json()
+
+            # 텔레그램 요약 알림
+            lines = ["📊 <b>저녁 스캔 완료 (넥스트장 반영)</b>"]
+            lines.append(f"✅ 최종 시그널: <b>{len(updated)}개</b>")
+            if bonus_symbols:
+                lines.append(f"📈 보너스 (+{score_bonus:.0f}pt): {', '.join(bonus_symbols)}")
+            if penalty_symbols:
+                lines.append(f"📉 패널티: {', '.join(penalty_symbols)}")
+            if removed_symbols:
+                lines.append(f"🚫 제거: {', '.join(removed_symbols)}")
+            lines.append("→ 내일 09:01 시그널 실행 예정")
+
+            try:
+                from ..utils.notification import send_alert
+                await send_alert("\n".join(lines))
+            except Exception:
+                pass
+
+            logger.info(
+                f"[저녁스캔] 완료: {len(updated)}개 유지, "
+                f"보너스 {len(bonus_symbols)}개, "
+                f"패널티 {len(penalty_symbols)}개, "
+                f"제거 {len(removed_symbols)}개"
+            )
+
+        except Exception as e:
+            logger.error(f"[저녁스캔] 오류: {e}")
             import traceback
             logger.error(traceback.format_exc())
 

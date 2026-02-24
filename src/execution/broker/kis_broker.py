@@ -1171,6 +1171,10 @@ class KISBroker(BaseBroker):
                 "volume": int(output.get("acml_vol", "0") or "0"),
                 "change": float(output.get("prdy_vrss", "0") or "0"),
                 "change_pct": float(output.get("prdy_ctrt", "0") or "0"),
+                # 시간외 단일가 (넥스트장) 데이터
+                "ovtm_price": float(output.get("ovtm_untp_prpr", "0") or "0"),
+                "ovtm_vol": int(output.get("ovtm_untp_vol", "0") or "0"),
+                "ovtm_change_pct": float(output.get("ovtm_untp_prdy_ctrt", "0") or "0"),
             }
 
         except Exception as e:

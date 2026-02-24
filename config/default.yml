@@ -230,11 +230,22 @@ exit_manager:
 
 # 배치 분석 설정 (스윙 모멘텀)
 batch:
-  daily_scan_time: "15:40"           # 일일 스캔 시간
+  daily_scan_time: "15:40"           # 1차 스캔 시간 (정규장 마감 후)
   execute_time: "09:01"              # 시그널 실행 시간
   position_update_interval: 30       # 포지션 시세 갱신 간격 (분)
   max_entry_slippage_pct: 3.0        # 분석가 대비 최대 3% 상승까지 진입 허용
   max_holding_days: 10               # 최대 보유일수
+  # 넥스트장 2차 스캔 (저녁 보정)
+  evening_scan_enabled: true         # 19:30 넥스트장 반영 2차 스캔 활성화
+  evening_scan_time: "19:30"         # 2차 스캔 시간
+  evening_scan:
+    ovtm_vol_threshold: 0.01         # 정규장 대비 시간외 거래량 최소 1% (의미있는 수급)
+    price_bonus_pct: 2.0             # 시간외 +2% 이상 + 거래량 충족 → 스코어 보너스
+    price_penalty_pct: -3.0          # 시간외 -3% 이하 → 스코어 패널티
+    gap_remove_pct: 8.0              # 시간외 +8% 이상 갭업 → 제거 (다음날 고점 위험)
+    score_bonus: 10.0                # 보너스 점수
+    score_penalty: -15.0             # 패널티 점수
+    min_score_after: 60.0            # 보정 후 최소 점수 (미달 시 제거)
 
 
 # 종목 스크리너

@@ -1517,7 +1517,9 @@ class SchedulerMixin:
         스윙 모멘텀 배치 스케줄러
 
         - 15:35 전략적 사전분석 (수급 추세 + VCP)
+        - 15:35 전략적 사전분석 (수급 추세 + VCP)
         - 15:40 일일 스캔 (장 마감 후)
+        - 19:30 저녁 스캔 (넥스트장 반영 2차 보정)
         - 09:01 시그널 실행 (장 시작 후)
         - 09:30~15:20 매 30분 포지션 모니터링
         - 일요일 21:00 전문가 패널 (주 1회)
@@ -1531,9 +1533,12 @@ class SchedulerMixin:
         scan_time_str = batch_cfg.get("daily_scan_time", "15:40")
         execute_time_str = batch_cfg.get("execute_time", "09:01")
         monitor_interval = batch_cfg.get("position_update_interval", 30)  # 분
+        evening_scan_enabled = batch_cfg.get("evening_scan_enabled", True)
+        evening_scan_time_str = batch_cfg.get("evening_scan_time", "19:30")
 
         scan_hour, scan_min = (int(x) for x in scan_time_str.split(":"))
         exec_hour, exec_min = (int(x) for x in execute_time_str.split(":"))
+        evening_hour, evening_min = (int(x) for x in evening_scan_time_str.split(":"))
 
         # 전략적 사전분석: 배치 스캔 5분 전
         prescan_hour, prescan_min = scan_hour, max(scan_min - 5, 0)
@@ -1543,6 +1548,7 @@ class SchedulerMixin:
 
         last_scan_date = None
         last_execute_date = None
+        last_evening_scan_date = None
         last_monitor_time = None
         last_prescan_date = None
         last_expert_panel_week = None
@@ -1594,6 +1600,19 @@ class SchedulerMixin:
                     except Exception as e:
                         logger.error(f"[배치스케줄러] 일일 스캔 오류: {e}")
                     last_scan_date = today
+
+                # 19:30 저녁 스캔 (넥스트장 반영 2차 보정)
+                if (evening_scan_enabled
+                        and now.hour == evening_hour
+                        and evening_min <= now.minute < evening_min + 5
+                        and last_evening_scan_date != today
+                        and last_scan_date == today):  # 1차 스캔이 완료된 날만 실행
+                    logger.info("[배치스케줄러] 저녁 스캔 시작 (넥스트장 보정)")
+                    try:
+                        await self.batch_analyzer.run_evening_scan()
+                    except Exception as e:
+                        logger.error(f"[배치스케줄러] 저녁 스캔 오류: {e}")
+                    last_evening_scan_date = today
 
                 # 09:01 시그널 실행
                 if (now.hour == exec_hour
