@@ -309,7 +309,7 @@ stock_master:
 # 스케줄러 설정
 scheduler:
   morning_report_time: "08:00"
-  evening_report_time: "17:00"
+  evening_report_time: "16:00"
   evolution_time: "20:30"
   nxt_refresh_hour: 6
   news_impact_threshold: 5

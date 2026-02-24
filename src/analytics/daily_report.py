@@ -6,13 +6,19 @@ AI Trading Bot v2 - 일일 투자 레포트 시스템
 """
 
 import asyncio
+import dataclasses
+import json
 import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, date, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from loguru import logger
+
+# 추천 종목 캐시 경로
+_REC_CACHE_DIR = Path.home() / ".cache" / "ai_trader"
 
 # 프로젝트 내 모듈
 from ..utils.telegram import get_telegram_notifier, TelegramNotifier
@@ -138,9 +144,10 @@ class DailyReportGenerator:
         # 4. 종목별 대표뉴스 수집
         await self._collect_per_stock_news(recommendations)
 
-        # 5. 추천 종목 저장 (오후 리포트용)
+        # 5. 추천 종목 저장 (오후 리포트용) + 파일 영속화
         self._today_recommendations = recommendations
         self._recommendation_date = today
+        self._save_recommendations(today)
 
         # 5-1. 업종 동향 데이터 조회
         sector_lines = await self._fetch_sector_summary()
@@ -174,16 +181,22 @@ class DailyReportGenerator:
 
         today = date.today()
 
-        # 오늘 추천 종목이 없으면 스킵
+        # 메모리에 없으면 파일에서 복원 시도 (봇 재시작 대응)
         if not self._today_recommendations or self._recommendation_date != today:
-            logger.warning("[레포트] 오늘 추천 종목이 없습니다")
-            return ""
+            loaded = self._load_recommendations(today)
+            if loaded:
+                self._today_recommendations = loaded
+                self._recommendation_date = today
+                logger.info(f"[레포트] 추천 종목 파일 복원: {len(loaded)}종목")
+            else:
+                logger.warning("[레포트] 오늘 추천 종목이 없습니다 (메모리 + 파일 모두 없음)")
+                return ""
 
         # 현재가 조회 및 결과 계산
         await self._update_results()
 
-        # 실거래 결과 조회 (TradeJournal)
-        trade_summary = self._get_trade_summary()
+        # 실거래 결과 조회 (DB 기반)
+        trade_summary = await self._get_trade_summary()
 
         # 레포트 생성
         report = self._format_evening_report(self._today_recommendations, today)
@@ -202,54 +215,59 @@ class DailyReportGenerator:
 
         return report
 
-    def _get_trade_summary(self) -> str:
-        """TradeJournal에서 당일 실거래 결과 조회"""
+    async def _get_trade_summary(self) -> str:
+        """DB에서 당일 실거래 결과 조회 (봇 재시작 대응)"""
         try:
-            from ..core.evolution.trade_journal import get_trade_journal
-            journal = get_trade_journal()
-            today_trades = journal.get_today_trades()
-
-            if not today_trades:
+            from ..data.storage.trade_storage import get_trade_storage
+            storage = get_trade_storage()
+            if storage is None:
                 return ""
+
+            # DB에서 오늘 청산된 거래 조회
+            stats = await storage.get_statistics_from_db(days=1)
+            # 오늘 오픈 포지션은 엔진에서 직접 가져옴
+            open_positions = []
+            try:
+                from ..core.evolution.trade_journal import get_trade_journal
+                journal = get_trade_journal()
+                for t in journal.get_today_trades():
+                    if not t.get("exit_price"):
+                        open_positions.append(t)
+            except Exception:
+                pass
+
+            if not stats and not open_positions:
+                return ""
+
+            total_trades = stats.get("total_trades", 0)
+            wins = stats.get("wins", 0)
+            losses = stats.get("losses", 0)
+            total_pnl = stats.get("total_pnl", 0.0)
+            win_rate = stats.get("win_rate", 0.0)
+            avg_pnl_pct = stats.get("avg_pnl_pct", 0.0)
+            best = stats.get("best_trade")
+            worst = stats.get("worst_trade")
 
             lines = [
                 "─" * 20,
-                "<b>당일 실거래 결과</b>",
+                "<b>📊 봇 실거래 결과</b>",
                 "",
             ]
 
-            total_pnl = 0
-            closed_count = 0
-            open_count = 0
-
-            for trade in today_trades:
-                symbol = trade.get("symbol", "")
-                name = trade.get("name", symbol)
-                entry_price = trade.get("entry_price", 0)
-                exit_price = trade.get("exit_price")
-                pnl = trade.get("pnl", 0)
-                pnl_pct = trade.get("pnl_pct", 0)
-                exit_reason = trade.get("exit_reason", "")
-
-                if exit_price:
-                    # 청산 완료
-                    closed_count += 1
-                    total_pnl += pnl
-                    emoji = "📈" if pnl >= 0 else "📉"
-                    lines.append(
-                        f"{emoji} {name}: {pnl_pct:+.1f}% ({pnl:+,.0f}원) - {exit_reason}"
-                    )
-                else:
-                    # 보유 중
-                    open_count += 1
-                    lines.append(f"🔄 {name}: 보유 중 (진입가 {entry_price:,.0f}원)")
-
-            if closed_count > 0:
+            if total_trades > 0:
                 lines.extend([
-                    "",
-                    f"• 청산: {closed_count}건, 보유: {open_count}건",
-                    f"• 실현 손익: {total_pnl:+,.0f}원",
+                    f"• 총 거래: {total_trades}건 (승 {wins} / 패 {losses})",
+                    f"• 승률: {win_rate:.1f}% / 평균 손익률: {avg_pnl_pct:+.2f}%",
+                    f"• 실현 손익: <b>{total_pnl:+,.0f}원</b>",
                 ])
+                if best and worst and total_trades >= 2:
+                    lines.append(
+                        f"• 최고: {best['name']} {best['pnl_pct']:+.1f}% / "
+                        f"최저: {worst['name']} {worst['pnl_pct']:+.1f}%"
+                    )
+
+            if open_positions:
+                lines.append(f"• 보유 중: {len(open_positions)}종목")
 
             return "\n".join(lines)
 
@@ -496,15 +514,50 @@ class DailyReportGenerator:
                 logger.warning(f"종목 뉴스 검색 실패 ({rec.name}): {e}")
                 rec.key_news = ""
 
+    def _save_recommendations(self, report_date: date) -> None:
+        """추천 종목을 파일에 영속화 (봇 재시작 대응)"""
+        try:
+            _REC_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            path = _REC_CACHE_DIR / f"morning_recs_{report_date.isoformat()}.json"
+            data = {
+                "date": report_date.isoformat(),
+                "stocks": [dataclasses.asdict(r) for r in self._today_recommendations],
+            }
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            logger.debug(f"[레포트] 추천 종목 저장: {path} ({len(self._today_recommendations)}종목)")
+        except Exception as e:
+            logger.warning(f"[레포트] 추천 종목 저장 실패: {e}")
+
+    def _load_recommendations(self, report_date: date) -> List["RecommendedStock"]:
+        """파일에서 추천 종목 복원"""
+        try:
+            path = _REC_CACHE_DIR / f"morning_recs_{report_date.isoformat()}.json"
+            if not path.exists():
+                return []
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if raw.get("date") != report_date.isoformat():
+                return []
+            stocks = []
+            for d in raw.get("stocks", []):
+                # risk_factors 필드 타입 보정
+                d["risk_factors"] = d.get("risk_factors") or []
+                stocks.append(RecommendedStock(**d))
+            return stocks
+        except Exception as e:
+            logger.warning(f"[레포트] 추천 종목 로드 실패: {e}")
+            return []
+
     async def _update_results(self):
-        """추천 종목 결과 업데이트 (KIS API 우선, 네이버 금융 폴백)"""
+        """추천 종목 결과 업데이트 (KIS API → pykrx 종가 → 네이버 금융 순)"""
         import aiohttp
+
+        today_str = date.today().strftime("%Y%m%d")
 
         for rec in self._today_recommendations:
             try:
                 price = None
 
-                # 1차: KIS API (정확하고 안정적)
+                # 1차: KIS API (실시간, 정확)
                 if hasattr(self, '_bot') and hasattr(self._bot, 'broker') and self._bot.broker:
                     try:
                         quote = await self._bot.broker.get_quote(rec.symbol)
@@ -513,25 +566,37 @@ class DailyReportGenerator:
                     except Exception:
                         pass
 
-                # 2차: 네이버 금융 폴백 (HTML 파싱, 다중 패턴)
+                # 2차: pykrx 종가 (장 마감 후 안정적)
                 if price is None:
-                    async with aiohttp.ClientSession() as session:
-                        url = f"https://finance.naver.com/item/main.nhn?code={rec.symbol}"
-                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                            if resp.status == 200:
-                                html = await resp.text()
-                                # 패턴 1: <span class="blind">현재가</span>XX,XXX
-                                price_match = re.search(r'<span class="blind">현재가</span>([0-9,]+)', html)
-                                if not price_match:
-                                    # 패턴 2: no_today 영역의 현재가
-                                    price_match = re.search(r'class="no_today"[^>]*>.*?<span[^>]*>([0-9,]+)', html, re.DOTALL)
-                                if not price_match:
-                                    # 패턴 3: sise_last 등의 시세 영역
-                                    price_match = re.search(r'id="chart_area".*?([0-9]{2,}(?:,[0-9]{3})*)', html, re.DOTALL)
-                                if price_match:
-                                    price = float(price_match.group(1).replace(",", ""))
-                                else:
-                                    logger.warning(f"[결과] {rec.symbol} 네이버 금융 파싱 실패 (HTML 구조 변경 가능)")
+                    try:
+                        def _fetch_pykrx(sym: str, date_str: str) -> Optional[float]:
+                            from pykrx import stock as pykrx_stock
+                            df = pykrx_stock.get_market_ohlcv(date_str, date_str, sym)
+                            if df is not None and not df.empty:
+                                return float(df["종가"].iloc[-1])
+                            return None
+
+                        price = await asyncio.to_thread(_fetch_pykrx, rec.symbol, today_str)
+                        if price:
+                            logger.debug(f"[결과] {rec.symbol} pykrx 종가: {price:,.0f}원")
+                    except Exception as e:
+                        logger.debug(f"[결과] {rec.symbol} pykrx 조회 실패: {e}")
+
+                # 3차: 네이버 금융 HTML 파싱 (최후 폴백)
+                if price is None:
+                    try:
+                        async with aiohttp.ClientSession() as session:
+                            url = f"https://finance.naver.com/item/main.nhn?code={rec.symbol}"
+                            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                                if resp.status == 200:
+                                    html = await resp.text()
+                                    price_match = re.search(r'<span class="blind">현재가</span>([0-9,]+)', html)
+                                    if not price_match:
+                                        price_match = re.search(r'class="no_today"[^>]*>.*?<span[^>]*>([0-9,]+)', html, re.DOTALL)
+                                    if price_match:
+                                        price = float(price_match.group(1).replace(",", ""))
+                    except Exception as e:
+                        logger.debug(f"[결과] {rec.symbol} 네이버 조회 실패: {e}")
 
                 if price and price > 0:
                     rec.result_price = price
@@ -540,6 +605,8 @@ class DailyReportGenerator:
                     else:
                         rec.result_pct = 0.0
                     logger.debug(f"[결과] {rec.symbol}: {rec.result_price:,.0f}원 ({rec.result_pct:+.1f}%)")
+                else:
+                    logger.warning(f"[결과] {rec.symbol}: 종가 조회 실패 (3개 소스 모두 실패)")
 
             except Exception as e:
                 logger.warning(f"현재가 조회 실패 ({rec.symbol}): {e}")
@@ -931,8 +998,8 @@ class DailyReportGenerator:
         date_str = report_date.strftime("%Y년 %m월 %d일")
 
         lines = [
-            f"<b>오늘의 추천 종목 결과</b>",
-            f"<i>{date_str} 17:00 기준</i>",
+            f"📋 <b>오늘의 추천 종목 결과</b>",
+            f"<i>{date_str} 장 마감 기준</i>",
             "",
         ]
 
@@ -955,24 +1022,51 @@ class DailyReportGenerator:
 
                 total_pct += rec.result_pct
 
+                # 목표가 달성 여부 표시
+                target_tag = ""
+                if rec.target_exit > 0 and rec.result_price and rec.result_price >= rec.target_exit:
+                    target_tag = " 🏆목표달성"
+                elif rec.stop_loss > 0 and rec.result_price and rec.result_price <= rec.stop_loss:
+                    target_tag = " 🛑손절"
+
                 lines.append(
                     f"{emoji} <b>{rec.name}</b> <code>{rec.symbol}</code>: "
-                    f"{rec.result_pct:+.1f}%"
+                    f"<b>{rec.result_pct:+.1f}%</b> "
+                    f"({rec.result_price:,.0f}원){target_tag}"
                 )
+                # 목표가/손절가 참고선 (작은 글씨)
+                if rec.target_exit > 0 or rec.stop_loss > 0:
+                    ref = []
+                    if rec.target_exit > 0:
+                        ref.append(f"목표 {rec.target_exit:,.0f}")
+                    if rec.stop_loss > 0:
+                        ref.append(f"손절 {rec.stop_loss:,.0f}")
+                    lines.append(f"   <i>({' / '.join(ref)})</i>")
             else:
                 lines.append(
-                    f"⏳ <b>{rec.name}</b> <code>{rec.symbol}</code>: 데이터 없음"
+                    f"⏳ <b>{rec.name}</b> <code>{rec.symbol}</code>: 종가 데이터 없음"
                 )
 
         # 요약
-        evaluated = sum(1 for r in recommendations if r.result_pct is not None)
-        lines.extend([
-            "",
-            "─" * 20,
-            f"<b>성과 요약</b>",
-            f"• 적중률: {wins}/{evaluated} ({wins/evaluated*100:.0f}%)" if evaluated > 0 else f"• 적중률: 0/0 (결과 없음)",
-            f"• 평균 수익률: {total_pct/evaluated:+.1f}%" if evaluated > 0 else "• 평균 수익률: N/A",
-        ])
+        evaluated = [r for r in recommendations if r.result_pct is not None]
+        n = len(evaluated)
+        lines.extend(["", "─" * 20, "<b>📈 성과 요약</b>"])
+
+        if n > 0:
+            avg_pct = total_pct / n
+            hit_rate = wins / n * 100
+            lines.extend([
+                f"• 적중률 (0% 이상): <b>{wins}/{n}</b> ({hit_rate:.0f}%)",
+                f"• 평균 수익률: <b>{avg_pct:+.2f}%</b>",
+            ])
+            # 상위 / 하위 종목
+            sorted_recs = sorted(evaluated, key=lambda r: r.result_pct or 0, reverse=True)
+            if sorted_recs:
+                best = sorted_recs[0]
+                worst = sorted_recs[-1]
+                lines.append(f"• 최고: {best.name} {best.result_pct:+.1f}% / 최저: {worst.name} {worst.result_pct:+.1f}%")
+        else:
+            lines.append("• 결과 데이터 없음 (장 마감 후 재시도 필요)")
 
         return "\n".join(lines)
 
