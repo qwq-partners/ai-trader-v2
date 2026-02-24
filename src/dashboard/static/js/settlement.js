@@ -5,7 +5,6 @@
 let currentDate = new Date().toISOString().slice(0, 10);
 
 // esc()는 common.js에서 글로벌 정의
-}
 
 document.addEventListener('DOMContentLoaded', () => {
     const dateInput = document.getElementById('settlement-date');
