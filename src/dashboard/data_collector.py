@@ -1124,10 +1124,38 @@ class DashboardDataCollector:
             logger.warning(f"[자산추적] 실시간 오늘 스냅샷 생성 실패: {e}")
             return None
 
-    def _inject_live_today(self, snapshots: list) -> list:
+    async def _fetch_today_trade_stats_from_db(self) -> Dict:
+        """DB에서 오늘 거래 통계 비동기 조회"""
+        try:
+            tj = getattr(self.bot, 'trade_journal', None)
+            pool = getattr(tj, 'pool', None)
+            if not pool:
+                return {}
+            today = date.today()
+            row = await pool.fetchrow(
+                "SELECT COUNT(*) as cnt, "
+                "COUNT(*) FILTER (WHERE pnl > 0) as wins, "
+                "COALESCE(SUM(pnl), 0) as total_pnl "
+                "FROM trade_events WHERE event_type='SELL' "
+                "AND DATE(event_time AT TIME ZONE 'Asia/Seoul')=$1 "
+                "AND pnl IS NOT NULL",
+                today,
+            )
+            if row and row['cnt'] > 0:
+                cnt = row['cnt']
+                return {
+                    'trades_count': cnt,
+                    'win_rate': round(row['wins'] / cnt * 100, 1),
+                    'realized_pnl': float(row['total_pnl']),
+                }
+        except Exception as e:
+            logger.debug(f"[자산추적] DB 거래통계 조회 실패: {e}")
+        return {}
+
+    def _inject_live_today(self, snapshots: list, db_stats: Dict = None) -> list:
         """스냅샷 리스트에서 오늘 날짜를 실시간 포트폴리오 데이터로 교체/추가"""
         today_str = date.today().isoformat()
-        live = self._make_live_today_snapshot()
+        live = self._make_live_today_snapshot(db_stats=db_stats)
         if live is None:
             return snapshots
         # 오늘 날짜 스냅샷 제거 후 실시간으로 교체
@@ -1178,7 +1206,7 @@ class DashboardDataCollector:
             },
         }
 
-    def get_equity_history(self, days: int = 30) -> Dict[str, Any]:
+    def get_equity_history(self, days: int = 30, today_stats: Dict = None) -> Dict[str, Any]:
         """일별 자산 히스토리 + 요약 통계 (days 기반)
         오늘 날짜는 항상 실시간 포트폴리오 데이터로 교체됩니다.
         """
@@ -1188,13 +1216,13 @@ class DashboardDataCollector:
 
         snapshots = tracker.load_history(days)
         # 오늘 날짜를 실시간 데이터로 교체 (스냅샷 파일이 오래됐거나 없어도 정상 표시)
-        snapshots = self._inject_live_today(snapshots)
+        snapshots = self._inject_live_today(snapshots, db_stats=today_stats)
         if not snapshots:
             return {"snapshots": [], "summary": {"oldest_date": tracker.get_oldest_date()}}
 
         return self._build_equity_summary(snapshots)
 
-    def get_equity_history_range(self, date_from: str, date_to: str) -> Dict[str, Any]:
+    def get_equity_history_range(self, date_from: str, date_to: str, today_stats: Dict = None) -> Dict[str, Any]:
         """일별 자산 히스토리 + 요약 통계 (from~to 범위)
         오늘 날짜가 범위에 포함되면 실시간 포트폴리오 데이터로 교체됩니다.
         """
@@ -1206,19 +1234,19 @@ class DashboardDataCollector:
         # date_to가 오늘이면 실시간 inject
         today_str = date.today().isoformat()
         if date_to >= today_str:
-            snapshots = self._inject_live_today(snapshots)
+            snapshots = self._inject_live_today(snapshots, db_stats=today_stats)
         if not snapshots:
             return {"snapshots": [], "summary": {"oldest_date": tracker.get_oldest_date()}}
 
         return self._build_equity_summary(snapshots)
 
-    def get_equity_history_positions(self, date_str: str) -> Dict[str, Any]:
+    def get_equity_history_positions(self, date_str: str, today_stats: Dict = None) -> Dict[str, Any]:
         """특정일 자산 스냅샷 + 포지션 상세
         오늘 날짜는 실시간 포트폴리오 데이터로 반환합니다.
         """
         today_str = date.today().isoformat()
         if date_str == today_str:
-            live = self._make_live_today_snapshot()
+            live = self._make_live_today_snapshot(db_stats=today_stats)
             if live:
                 return live.to_dict()
 

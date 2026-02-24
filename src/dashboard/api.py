@@ -152,8 +152,10 @@ class APIHandler:
                 return web.json_response(
                     {"error": "Invalid date format. Use YYYY-MM-DD"}, status=400
                 )
+            # 오늘 거래통계를 DB에서 비동기로 선조회 (inject 정확도 향상)
+            today_stats = await self.dc._fetch_today_trade_stats_from_db()
             return web.json_response(
-                self.dc.get_equity_history_range(date_from, date_to)
+                self.dc.get_equity_history_range(date_from, date_to, today_stats=today_stats)
             )
         # fallback: days 파라미터
         try:
@@ -161,7 +163,8 @@ class APIHandler:
         except ValueError:
             return web.json_response({"error": "Invalid days parameter"}, status=400)
         days = max(1, min(days, 365))
-        return web.json_response(self.dc.get_equity_history(days))
+        today_stats = await self.dc._fetch_today_trade_stats_from_db()
+        return web.json_response(self.dc.get_equity_history(days, today_stats=today_stats))
 
     async def get_daily_review(self, request: web.Request) -> web.Response:
         date_str = request.query.get("date")
@@ -183,7 +186,11 @@ class APIHandler:
         date_str = request.query.get("date")
         if not date_str:
             return web.json_response({"error": "date parameter required"}, status=400)
-        return web.json_response(self.dc.get_equity_history_positions(date_str))
+        # 오늘 날짜 요청 시 DB에서 정확한 거래 통계 조회
+        today_stats = None
+        if date_str == date.today().isoformat():
+            today_stats = await self.dc._fetch_today_trade_stats_from_db()
+        return web.json_response(self.dc.get_equity_history_positions(date_str, today_stats=today_stats))
 
     async def apply_evolution_parameter(self, request: web.Request) -> web.Response:
         """
