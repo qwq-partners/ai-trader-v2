@@ -1514,13 +1514,18 @@ class SchedulerMixin:
         """
         스윙 모멘텀 배치 스케줄러
 
-        - 15:35 전략적 사전분석 (수급 추세 + VCP)
+        [아침 스캔 모드 - morning_scan_enabled=true (기본)]
+        - 08:15 전략적 사전분석 (수급 추세 + VCP)
+        - 08:20 아침 스캔 (전일 종가 + 미국 오버나이트 반영)
+        - 09:01 시그널 실행 (장 시작 후)
+        - 09:30~15:20 매 30분 포지션 모니터링
+        - 일요일 21:00 전문가 패널 (주 1회)
+
+        [전일 마감 후 스캔 모드 - morning_scan_enabled=false]
         - 15:35 전략적 사전분석 (수급 추세 + VCP)
         - 15:40 일일 스캔 (장 마감 후)
         - 19:30 저녁 스캔 (넥스트장 반영 2차 보정)
         - 09:01 시그널 실행 (장 시작 후)
-        - 09:30~15:20 매 30분 포지션 모니터링
-        - 일요일 21:00 전문가 패널 (주 1회)
         """
         if not hasattr(self, 'batch_analyzer') or not self.batch_analyzer:
             logger.info("[배치스케줄러] batch_analyzer 없음, 스킵")
@@ -1534,17 +1539,27 @@ class SchedulerMixin:
         evening_scan_enabled = batch_cfg.get("evening_scan_enabled", True)
         evening_scan_time_str = batch_cfg.get("evening_scan_time", "19:30")
 
+        # 아침 스캔 설정 (morning_scan_enabled=true 시 15:40/19:30 대체)
+        morning_scan_enabled = batch_cfg.get("morning_scan_enabled", False)
+        morning_scan_time_str = batch_cfg.get("morning_scan_time", "08:20")
+        morning_hour, morning_min = (int(x) for x in morning_scan_time_str.split(":"))
+
         scan_hour, scan_min = (int(x) for x in scan_time_str.split(":"))
         exec_hour, exec_min = (int(x) for x in execute_time_str.split(":"))
         evening_hour, evening_min = (int(x) for x in evening_scan_time_str.split(":"))
 
-        # 전략적 사전분석: 배치 스캔 5분 전
-        prescan_hour, prescan_min = scan_hour, max(scan_min - 5, 0)
-        if scan_min < 5:
-            prescan_hour = scan_hour - 1 if scan_hour > 0 else 23
-            prescan_min = 60 + scan_min - 5
+        # 전략적 사전분석: 배치 스캔 5분 전 (morning_scan_enabled 시 08:15)
+        if morning_scan_enabled:
+            prescan_hour = morning_hour
+            prescan_min = max(morning_min - 5, 0)
+        else:
+            prescan_hour, prescan_min = scan_hour, max(scan_min - 5, 0)
+            if scan_min < 5:
+                prescan_hour = scan_hour - 1 if scan_hour > 0 else 23
+                prescan_min = 60 + scan_min - 5
 
         last_scan_date = None
+        last_morning_scan_date = None
         last_execute_date = None
         last_evening_scan_date = None
         last_monitor_time = None
@@ -1569,7 +1584,42 @@ class SchedulerMixin:
                     await asyncio.sleep(60)
                     continue
 
-                # catch-up: 봇 시작 시 오늘 미실행 시그널이 있으면 즉시 실행
+                # ── catch-up 로직 ────────────────────────────────────────────
+                # [아침 스캔 모드] 봇이 08:20 이후 ~ 09:01 이전에 재시작된 경우:
+                #   유효한 시그널이 없으면 아침 스캔 즉시 실행
+                if (morning_scan_enabled
+                        and last_morning_scan_date != today
+                        and (now.hour > morning_hour
+                             or (now.hour == morning_hour and now.minute >= morning_min))
+                        and now.hour < exec_hour):
+                    # 유효한(미만료) 시그널 존재 여부 확인
+                    has_valid = False
+                    if pending_signals_path.exists():
+                        try:
+                            import json as _json
+                            _sigs = _json.loads(pending_signals_path.read_text())
+                            has_valid = any(
+                                datetime.fromisoformat(s.get("expires_at", "2000-01-01"))
+                                > now
+                                for s in _sigs
+                            )
+                        except Exception:
+                            has_valid = False
+
+                    if not has_valid:
+                        logger.info("[배치스케줄러] catch-up: 아침 스캔 즉시 실행")
+                        try:
+                            await self._run_strategic_prescan()
+                            await self.batch_analyzer.run_morning_scan()
+                            last_morning_scan_date = today
+                            last_prescan_date = today
+                        except Exception as e:
+                            logger.error(f"[배치] catch-up 아침 스캔 오류: {e}")
+                            last_morning_scan_date = today  # 무한 재시도 방지
+                    else:
+                        last_morning_scan_date = today  # 이미 유효한 시그널 있음, 재스캔 불필요
+
+                # [공통] 시그널 있고 09:01 이후면 즉시 실행
                 if (last_execute_date != today
                         and now.hour >= exec_hour
                         and now.hour < 15  # 장 마감 전까지만
@@ -1582,15 +1632,28 @@ class SchedulerMixin:
                         logger.error(f"[배치] catch-up 실행 오류: {e}")
                         last_execute_date = today  # 무한 재시도 방지
 
-                # 15:35 전략적 사전분석 (수급 추세 탐지)
+                # ── 사전분석 (prescan_hour:prescan_min) ──────────────────────
                 if (now.hour == prescan_hour
                         and prescan_min <= now.minute < prescan_min + 4
                         and last_prescan_date != today):
                     await self._run_strategic_prescan()
                     last_prescan_date = today
 
-                # 15:40 일일 스캔
-                if (now.hour == scan_hour
+                # ── 08:20 아침 스캔 (morning_scan_enabled=true 시) ───────────
+                if (morning_scan_enabled
+                        and now.hour == morning_hour
+                        and morning_min <= now.minute < morning_min + 5
+                        and last_morning_scan_date != today):
+                    logger.info("[배치스케줄러] 아침 스캔 시작")
+                    try:
+                        await self.batch_analyzer.run_morning_scan()
+                    except Exception as e:
+                        logger.error(f"[배치스케줄러] 아침 스캔 오류: {e}")
+                    last_morning_scan_date = today
+
+                # ── 15:40 일일 스캔 (morning_scan_enabled=false 시만) ─────────
+                if (not morning_scan_enabled
+                        and now.hour == scan_hour
                         and scan_min <= now.minute < scan_min + 5
                         and last_scan_date != today):
                     logger.info("[배치스케줄러] 일일 스캔 시작")
@@ -1600,12 +1663,13 @@ class SchedulerMixin:
                         logger.error(f"[배치스케줄러] 일일 스캔 오류: {e}")
                     last_scan_date = today
 
-                # 19:30 저녁 스캔 (넥스트장 반영 2차 보정)
-                if (evening_scan_enabled
+                # ── 19:30 저녁 스캔 (morning_scan_enabled=false 시만) ─────────
+                if (not morning_scan_enabled
+                        and evening_scan_enabled
                         and now.hour == evening_hour
                         and evening_min <= now.minute < evening_min + 5
                         and last_evening_scan_date != today
-                        and last_scan_date == today):  # 1차 스캔이 완료된 날만 실행
+                        and last_scan_date == today):  # 1차 스캔 완료된 날만
                     logger.info("[배치스케줄러] 저녁 스캔 시작 (넥스트장 보정)")
                     try:
                         await self.batch_analyzer.run_evening_scan()
@@ -1613,7 +1677,7 @@ class SchedulerMixin:
                         logger.error(f"[배치스케줄러] 저녁 스캔 오류: {e}")
                     last_evening_scan_date = today
 
-                # 09:01 시그널 실행
+                # ── 09:01 시그널 실행 ─────────────────────────────────────────
                 if (now.hour == exec_hour
                         and exec_min <= now.minute < exec_min + 4
                         and last_execute_date != today):

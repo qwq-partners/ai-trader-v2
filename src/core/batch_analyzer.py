@@ -132,88 +132,231 @@ class BatchAnalyzer:
         except (ValueError, KeyError):
             return StrategyType.MOMENTUM_BREAKOUT
 
-    async def run_daily_scan(self):
-        """[15:40] 일일 배치 스캔"""
-        logger.info("[배치분석] ===== 일일 스캔 시작 =====")
+    async def _scan_and_build(self, expire_today: bool = False):
+        """공통 스캔 로직: 스크리닝 → 시그널 생성 → PendingSignal 리스트 반환
 
-        try:
-            # 스크리너 실행
-            candidates = await self._screener.run_full_scan()
+        Args:
+            expire_today: True → 오늘 15:30 만료 (아침 스캔)
+                          False → 익영업일 15:30 만료 (전일 마감 후 스캔)
+        Returns:
+            PendingSignal 리스트 또는 None (오류/후보 없음)
+        """
+        from .engine import is_kr_market_holiday
 
-            if not candidates:
-                logger.info("[배치분석] 후보 종목 없음")
-                self._pending = []
-                self._save_json()
-                return
-
-            # 전략별 시그널 생성
-            rsi2_candidates = [c for c in candidates if c.strategy == "rsi2_reversal"]
-            sepa_candidates = [c for c in candidates if c.strategy == "sepa_trend"]
-
-            rsi2_signals = await self._rsi2.generate_batch_signals(rsi2_candidates)
-            sepa_signals = await self._sepa.generate_batch_signals(sepa_candidates)
-
-            # strategic_swing 시그널: 2계층+ 복합신호 종목
-            strategic_signals = self._generate_strategic_signals(candidates)
-
-            all_signals = rsi2_signals + sepa_signals + strategic_signals
-
-            # 동일 종목 중복 제거 (score 높은 것 우선)
-            seen: dict = {}
-            for sig in all_signals:
-                if sig.symbol not in seen or sig.score > seen[sig.symbol].score:
-                    seen[sig.symbol] = sig
-            all_signals = list(seen.values())
-
-            # PendingSignal 변환
+        # 스크리너 실행
+        candidates = await self._screener.run_full_scan()
+        if not candidates:
+            logger.info("[배치분석] 후보 종목 없음")
             self._pending = []
-            now = datetime.now()
+            self._save_json()
+            return None
+
+        # 전략별 시그널 생성
+        rsi2_candidates = [c for c in candidates if c.strategy == "rsi2_reversal"]
+        sepa_candidates = [c for c in candidates if c.strategy == "sepa_trend"]
+
+        rsi2_signals = await self._rsi2.generate_batch_signals(rsi2_candidates)
+        sepa_signals = await self._sepa.generate_batch_signals(sepa_candidates)
+        strategic_signals = self._generate_strategic_signals(candidates)
+
+        all_signals = rsi2_signals + sepa_signals + strategic_signals
+
+        # 동일 종목 중복 제거 (score 높은 것 우선)
+        seen: dict = {}
+        for sig in all_signals:
+            if sig.symbol not in seen or sig.score > seen[sig.symbol].score:
+                seen[sig.symbol] = sig
+        all_signals = list(seen.values())
+
+        # 만료일 계산
+        now = datetime.now()
+        if expire_today:
+            # 오늘 15:30 만료
+            expires = datetime.combine(now.date(), time(15, 30, 0))
+        else:
             # 익영업일 15:30 만료 (주말/공휴일 건너뜀)
-            from .engine import is_kr_market_holiday
             expires_date = now.date() + timedelta(days=1)
             while is_kr_market_holiday(expires_date) or expires_date.weekday() >= 5:
                 expires_date += timedelta(days=1)
             expires = datetime.combine(expires_date, time(15, 30, 0))
 
-            for sig in all_signals:
-                entry_price = float(sig.price) if sig.price else 0
-                if entry_price <= 0:
-                    continue
+        # PendingSignal 변환
+        result: List[PendingSignal] = []
+        for sig in all_signals:
+            entry_price = float(sig.price) if sig.price else 0
+            if entry_price <= 0:
+                continue
 
-                max_entry = entry_price * (1 + self._max_entry_slippage_pct / 100)
+            max_entry = entry_price * (1 + self._max_entry_slippage_pct / 100)
 
-                pending = PendingSignal(
-                    symbol=sig.symbol,
-                    name=sig.metadata.get("candidate_name", sig.symbol),
-                    strategy=sig.strategy.value,
-                    side=sig.side.value,
-                    entry_price=entry_price,
-                    max_entry_price=max_entry,
-                    stop_price=float(sig.stop_price) if sig.stop_price else entry_price * 0.95,
-                    target_price=float(sig.target_price) if sig.target_price else entry_price * 1.10,
-                    score=sig.score,
-                    reason=sig.reason,
-                    created_at=now.isoformat(),
-                    expires_at=expires.isoformat(),
-                    atr_pct=float(sig.metadata.get("atr_pct", 0)),
-                )
-                self._pending.append(pending)
-
-            # JSON 저장
-            self._save_json()
-
-            logger.info(
-                f"[배치분석] 스캔 완료: "
-                f"RSI2={len(rsi2_signals)}개, SEPA={len(sepa_signals)}개, "
-                f"전략스윙={len(strategic_signals)}개 → "
-                f"대기 시그널 {len(self._pending)}개 저장"
+            pending = PendingSignal(
+                symbol=sig.symbol,
+                name=sig.metadata.get("candidate_name", sig.symbol),
+                strategy=sig.strategy.value,
+                side=sig.side.value,
+                entry_price=entry_price,
+                max_entry_price=max_entry,
+                stop_price=float(sig.stop_price) if sig.stop_price else entry_price * 0.95,
+                target_price=float(sig.target_price) if sig.target_price else entry_price * 1.10,
+                score=sig.score,
+                reason=sig.reason,
+                created_at=now.isoformat(),
+                expires_at=expires.isoformat(),
+                atr_pct=float(sig.metadata.get("atr_pct", 0)),
             )
+            result.append(pending)
 
-            # 텔레그램 알림
+        logger.info(
+            f"[배치분석] 스캔 완료: "
+            f"RSI2={len(rsi2_signals)}개, SEPA={len(sepa_signals)}개, "
+            f"전략스윙={len(strategic_signals)}개 → "
+            f"시그널 {len(result)}개"
+        )
+        return result, rsi2_signals, sepa_signals, strategic_signals
+
+    async def run_daily_scan(self):
+        """[15:40] 전일 마감 후 일일 배치 스캔 (morning_scan_enabled=false 시 사용)"""
+        logger.info("[배치분석] ===== 일일 스캔 시작 (15:40) =====")
+        try:
+            result = await self._scan_and_build(expire_today=False)
+            if result is None:
+                return
+            pending_list, rsi2_signals, sepa_signals, strategic_signals = result
+
+            self._pending = pending_list
+            self._save_json()
+            logger.info(f"[배치분석] 저장 완료: 대기 시그널 {len(self._pending)}개")
             await self._send_telegram_report()
 
         except Exception as e:
             logger.error(f"[배치분석] 일일 스캔 오류: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+    async def run_morning_scan(self):
+        """[08:20] 아침 배치 스캔 (전일 종가 + 미국 오버나이트 반영)
+
+        run_daily_scan 대체 버전:
+        - 전일 종가 기반 스크리닝 (결과 동일, pykrx/KIS 전일 데이터 사용)
+        - 미국 오버나이트 데이터 기반 점수 보정
+            · 평균 지수 -2% 이하 → 전 종목 -15점 (한국 시장 하방 압력)
+            · 평균 지수 -1% 이하 → 전 종목 -7점
+            · 평균 지수 +1% 이상 → 전 종목 +3점 (상승 탄력)
+        - 프리장 현재가 조회 후 max_entry_price 초과 종목 사전 제거
+        - expires_at = 오늘 15:30 (당일 소비)
+        """
+        logger.info("[배치분석] ===== 아침 스캔 시작 (08:20) =====")
+        try:
+            # 1. 공통 스캔 로직 실행
+            result = await self._scan_and_build(expire_today=True)
+            if result is None:
+                return
+            pending_list, rsi2_signals, sepa_signals, strategic_signals = result
+
+            # 2. 미국 오버나이트 점수 보정
+            us_adj = 0.0
+            us_summary = "데이터 없음"
+            try:
+                from ..data.providers.us_market_data import get_us_market_data
+                umd = get_us_market_data()
+                overnight = await umd.get_overnight_signal()
+                sentiment = overnight.get("sentiment", "neutral")
+                indices = overnight.get("indices", {})
+                idx_pcts = [v.get("change_pct", 0) for v in indices.values() if isinstance(v, dict)]
+                avg_idx = sum(idx_pcts) / len(idx_pcts) if idx_pcts else 0.0
+
+                if avg_idx <= -2.0:
+                    us_adj = -15.0
+                elif avg_idx <= -1.0:
+                    us_adj = -7.0
+                elif avg_idx >= 1.0:
+                    us_adj = +3.0
+
+                us_summary = (
+                    f"{sentiment} (평균 {avg_idx:+.1f}%"
+                    + (f", 보정 {us_adj:+.0f}pt" if us_adj != 0 else "")
+                    + ")"
+                )
+                logger.info(f"[아침스캔] 미국 오버나이트: {us_summary}")
+            except Exception as e:
+                logger.warning(f"[아침스캔] US 오버나이트 조회 실패: {e}")
+
+            # 3. 점수 보정 + 최소 점수 필터링
+            min_score = self._config.get("batch", {}).get("min_score", 60.0)
+            adjusted: List[PendingSignal] = []
+            removed_us: List[str] = []
+
+            from dataclasses import replace
+            for sig in pending_list:
+                if us_adj != 0:
+                    new_score = sig.score + us_adj
+                    if new_score < min_score:
+                        logger.info(
+                            f"[아침스캔] {sig.symbol} US 보정 후 제거: "
+                            f"{sig.score:.1f}{us_adj:+.0f}={new_score:.1f} < {min_score}"
+                        )
+                        removed_us.append(f"{sig.symbol}({new_score:.0f}점)")
+                        continue
+                    sig = replace(sig, score=new_score)
+                adjusted.append(sig)
+
+            # 4. 프리장 현재가 체크 (이미 갭업된 종목 사전 제거)
+            removed_gap: List[str] = []
+            if self._broker:
+                final: List[PendingSignal] = []
+                for sig in adjusted:
+                    try:
+                        quote = await self._broker.get_quote(sig.symbol)
+                        cur_price = float(quote.get("price", 0)) if quote else 0.0
+                        # 현재가가 진입가보다 명확히 높을 때만 필터 (전일 종가 = 진입가인 경우 차이 없음)
+                        if cur_price > 0 and cur_price > sig.max_entry_price:
+                            logger.info(
+                                f"[아침스캔] {sig.symbol} 갭업 제거: "
+                                f"현재가 {cur_price:,.0f} > 최대진입가 {sig.max_entry_price:,.0f}"
+                            )
+                            removed_gap.append(
+                                f"{sig.symbol}({cur_price:,.0f}>{sig.max_entry_price:,.0f})"
+                            )
+                            continue
+                    except Exception as e:
+                        logger.debug(f"[아침스캔] {sig.symbol} 현재가 조회 실패: {e}")
+                    final.append(sig)
+            else:
+                final = adjusted
+
+            # 5. 저장
+            self._pending = final
+            self._save_json()
+
+            # 6. 텔레그램 알림
+            lines = [f"🌅 <b>아침 스캔 완료</b>"]
+            lines.append(f"🇺🇸 US 오버나이트: {us_summary}")
+            lines.append(f"✅ 최종 시그널: <b>{len(self._pending)}개</b>")
+            if removed_us:
+                lines.append(f"🔻 US 보정 제거: {', '.join(removed_us)}")
+            if removed_gap:
+                lines.append(f"🚀 갭업 제거: {', '.join(removed_gap)}")
+            lines.append(f"⏰ 09:01 시그널 실행 예정 (만료: 오늘 15:30)")
+
+            for sig in self._pending:
+                lines.append(
+                    f"  • {sig.name}({sig.symbol}) "
+                    f"점수={sig.score:.0f} 진입={sig.entry_price:,.0f}원"
+                )
+
+            try:
+                from ..utils.telegram import send_alert
+                await send_alert("\n".join(lines))
+            except Exception:
+                pass
+
+            logger.info(
+                f"[아침스캔] 완료: {len(self._pending)}개 시그널 "
+                f"(US보정제거={len(removed_us)}, 갭업제거={len(removed_gap)})"
+            )
+
+        except Exception as e:
+            logger.error(f"[배치분석] 아침 스캔 오류: {e}")
             import traceback
             logger.error(traceback.format_exc())
 

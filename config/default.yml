@@ -231,7 +231,10 @@ exit_manager:
 
 # 배치 분석 설정 (스윙 모멘텀)
 batch:
-  daily_scan_time: "15:40"           # 1차 스캔 시간 (정규장 마감 후)
+  # 아침 스캔 모드 (true: 08:20 전일종가+US오버나이트 기반 스캔, 15:40/19:30 비활성화)
+  morning_scan_enabled: true
+  morning_scan_time: "08:20"         # 아침 스캔 시간 (장 전 08:00~08:50 사이 권장)
+  daily_scan_time: "15:40"           # 전일 마감 후 스캔 (morning_scan_enabled=false 시만 사용)
   execute_time: "09:01"              # 시그널 실행 시간
   position_update_interval: 30       # 포지션 시세 갱신 간격 (분)
   max_entry_slippage_pct: 3.0        # 분석가 대비 최대 3% 상승까지 진입 허용
