@@ -98,6 +98,9 @@ class DashboardDataCollector:
         portfolio = self.bot.engine.portfolio
         effective_pnl = portfolio.effective_daily_pnl
 
+        total_unrealized_net = sum(
+            p.unrealized_pnl_net for p in portfolio.positions.values()
+        )
         return _serialize({
             "cash": portfolio.cash,
             "total_position_value": portfolio.total_position_value,
@@ -108,6 +111,7 @@ class DashboardDataCollector:
             "daily_pnl": effective_pnl,
             "realized_daily_pnl": portfolio.daily_pnl,
             "unrealized_pnl": portfolio.total_unrealized_pnl,
+            "unrealized_pnl_net": total_unrealized_net,   # 수수료 포함 미실현 순손익
             "daily_pnl_pct": (
                 float(effective_pnl / portfolio.initial_capital * 100)
                 if portfolio.initial_capital > 0 else 0.0
@@ -156,6 +160,8 @@ class DashboardDataCollector:
                 "cost_basis": pos.cost_basis,
                 "unrealized_pnl": pos.unrealized_pnl,
                 "unrealized_pnl_pct": pos.unrealized_pnl_pct,
+                "unrealized_pnl_net": pos.unrealized_pnl_net,          # 수수료 포함 순손익
+                "unrealized_pnl_net_pct": pos.unrealized_pnl_net_pct,  # 수수료 포함 순손익률
                 "strategy": pos.strategy,
                 "entry_time": pos.entry_time,
                 "stop_loss": pos.stop_loss,

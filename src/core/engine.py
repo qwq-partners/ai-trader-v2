@@ -6,9 +6,11 @@ AI Trading Bot v2 - 이벤트 기반 트레이딩 엔진
 
 import asyncio
 import heapq
+import json
 from collections import deque
 from datetime import datetime, date, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Dict, List, Optional, Any, Callable, Coroutine, Set
 from dataclasses import dataclass, field
 import signal
@@ -480,6 +482,7 @@ class TradingEngine:
             # 현금 증가 = 매도 대금 - 매도비용
             self.portfolio.cash += fill.total_value - sell_fee
             self.portfolio.daily_pnl += realized_pnl
+            self._save_daily_stats()  # 실현손익 즉시 영속화
 
             # 포지션 종료 시 제거
             if pos.quantity <= 0:
@@ -622,6 +625,51 @@ class TradingEngine:
         logger.info(
             f"일일 통계 초기화 (시작 미실현손익: {self.portfolio.daily_start_unrealized_pnl:+,.0f}원)"
         )
+        self._save_daily_stats()
+
+    # ----------------------------------------------------------
+    # 일일 통계 영속화 (재시작 시 복원)
+    # ----------------------------------------------------------
+
+    _DAILY_STATS_PATH = Path.home() / ".cache" / "ai_trader" / "daily_stats.json"
+
+    def _save_daily_stats(self):
+        """daily_pnl + daily_start_unrealized_pnl을 JSON에 저장 (재시작 복원용)"""
+        try:
+            self._DAILY_STATS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "date": date.today().isoformat(),
+                "daily_pnl": str(self.portfolio.daily_pnl),
+                "daily_start_unrealized_pnl": str(self.portfolio.daily_start_unrealized_pnl),
+                "daily_trades": self.portfolio.daily_trades,
+            }
+            with open(self._DAILY_STATS_PATH, "w") as f:
+                json.dump(data, f)
+        except Exception as e:
+            logger.warning(f"[DailyStats] 저장 실패: {e}")
+
+    def restore_daily_stats(self):
+        """재시작 시 오늘 날짜 daily_pnl/daily_start_unrealized_pnl 복원"""
+        try:
+            if not self._DAILY_STATS_PATH.exists():
+                logger.info("[DailyStats] 저장 파일 없음 → 복원 생략")
+                return
+            with open(self._DAILY_STATS_PATH, "r") as f:
+                data = json.load(f)
+            saved_date = data.get("date", "")
+            if saved_date != date.today().isoformat():
+                logger.info(f"[DailyStats] 날짜 불일치({saved_date} ≠ 오늘) → 복원 생략")
+                return
+            self.portfolio.daily_pnl = Decimal(data["daily_pnl"])
+            self.portfolio.daily_start_unrealized_pnl = Decimal(data["daily_start_unrealized_pnl"])
+            self.portfolio.daily_trades = int(data.get("daily_trades", 0))
+            logger.info(
+                f"[DailyStats] 복원 완료 → 실현PnL={self.portfolio.daily_pnl:+,.0f}원, "
+                f"시작미실현={self.portfolio.daily_start_unrealized_pnl:+,.0f}원, "
+                f"거래={self.portfolio.daily_trades}건"
+            )
+        except Exception as e:
+            logger.warning(f"[DailyStats] 복원 실패: {e}")
 
 
 class StrategyManager:

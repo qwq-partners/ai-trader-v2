@@ -247,22 +247,49 @@ class Position:
 
     @property
     def unrealized_pnl(self) -> Decimal:
-        """미실현 손익"""
+        """미실현 손익 (수수료 미포함 — 매입가 대비 단순 평가차익)"""
         if self.quantity == 0:
             return Decimal("0")
         return self.market_value - self.cost_basis
 
     @property
+    def unrealized_pnl_net(self) -> Decimal:
+        """미실현 순손익 (지금 매도했을 때 실제로 손에 쥐는 금액)
+
+        = (현재가 - 평균단가) × 수량 - 매수수수료 - 매도수수료 - 거래세
+        매수수수료는 fill.total_cost에 이미 포함됐으므로 cost_basis에서 빼지 않고
+        별도 추산해서 차감합니다.
+        """
+        if self.quantity == 0:
+            return Decimal("0")
+        # 수수료 상수 (fee_calculator와 동일)
+        BUY_FEE_RATE  = Decimal("0.000141")
+        SELL_FEE_RATE = Decimal("0.000131")
+        SELL_TAX_RATE = Decimal("0.002")
+        buy_fee  = self.cost_basis * BUY_FEE_RATE
+        sell_fee = self.market_value * (SELL_FEE_RATE + SELL_TAX_RATE)
+        return self.unrealized_pnl - buy_fee - sell_fee
+
+    @property
+    def unrealized_pnl_net_pct(self) -> float:
+        """미실현 순손익률 (수수료 포함, cost_basis + 매수수수료 대비)"""
+        if self.cost_basis == 0:
+            return 0.0
+        BUY_FEE_RATE = Decimal("0.000141")
+        total_cost = self.cost_basis * (1 + BUY_FEE_RATE)
+        return float(self.unrealized_pnl_net / total_cost * 100)
+
+    @property
     def unrealized_pnl_pct(self) -> float:
-        """미실현 손익률 (%)"""
+        """미실현 손익률 (수수료 미포함, %)"""
         if self.cost_basis == 0:
             return 0.0
         return float(self.unrealized_pnl / self.cost_basis * 100)
 
     @property
     def is_profit(self) -> bool:
-        """수익 상태"""
-        return self.unrealized_pnl > 0
+        """수익 상태 (수수료 포함 기준)"""
+        return self.unrealized_pnl_net > 0
 
 
 @dataclass

@@ -649,6 +649,9 @@ class TradingBot(SchedulerMixin):
                     if self.engine.portfolio.positions:
                         await self._restore_position_metadata(self.engine.portfolio.positions)
 
+                # 일일 통계 복원 (재시작 시 daily_pnl / daily_start_unrealized_pnl 유지)
+                self.engine.restore_daily_stats()
+
                 self.strategy_evolver = get_strategy_evolver()
 
                 # 전략 등록 (파라미터 자동 조정용)

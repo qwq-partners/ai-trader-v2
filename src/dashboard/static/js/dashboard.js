@@ -35,10 +35,15 @@ sse.on('portfolio', (data) => {
     // 실현/미실현 분리 표시
     const breakdownEl = document.getElementById('p-pnl-breakdown');
     if (breakdownEl && (data.realized_daily_pnl || data.unrealized_pnl)) {
+        const unrealizedNet = data.unrealized_pnl_net ?? data.unrealized_pnl;
+        const netLabel = data.unrealized_pnl_net != null ? '미실현(순)' : '미실현';
+        const netTitle = data.unrealized_pnl_net != null
+            ? `title="수수료 포함: ${formatPnl(unrealizedNet)} / 평가: ${formatPnl(data.unrealized_pnl)}"`
+            : '';
         breakdownEl.innerHTML =
             `<span style="color:var(--text-muted);">실현</span> <span class="mono ${pnlClass(data.realized_daily_pnl)}">${formatPnl(data.realized_daily_pnl)}</span>` +
             ` <span style="color:var(--text-muted); margin:0 6px;">|</span> ` +
-            `<span style="color:var(--text-muted);">미실현</span> <span class="mono ${pnlClass(data.unrealized_pnl)}">${formatPnl(data.unrealized_pnl)}</span>`;
+            `<span style="color:var(--text-muted);" ${netTitle}>${netLabel}</span> <span class="mono ${pnlClass(unrealizedNet)}" ${netTitle}>${formatPnl(unrealizedNet)}</span>`;
     }
 
     // 파이 차트 업데이트
@@ -156,7 +161,10 @@ function renderSortedPositions() {
 
     const now = new Date();
     const rows = sorted.map(pos => {
-        const pnlCls = pnlClass(pos.unrealized_pnl);
+        // 수수료 포함 순손익 (unrealized_pnl_net)을 우선 사용
+        const netPnl = pos.unrealized_pnl_net ?? pos.unrealized_pnl;
+        const netPct = pos.unrealized_pnl_net_pct ?? pos.unrealized_pnl_pct;
+        const pnlCls = pnlClass(netPnl);
         const stageLabel = exitStageLabel(pos.exit_state);
         const stName = strategyNames[pos.strategy] || pos.strategy || '--';
 
@@ -179,8 +187,8 @@ function renderSortedPositions() {
             <td class="py-2 pr-3 text-right mono text-gray-400">${formatNumber(pos.avg_price)}</td>
             <td class="py-2 pr-3 text-right mono">${pos.quantity}</td>
             <td class="py-2 pr-3 text-right mono" style="color:var(--text-secondary);">${formatNumber(pos.market_value || (pos.current_price * pos.quantity))}</td>
-            <td class="py-2 pr-3 text-right mono ${pnlCls}">${formatPnl(pos.unrealized_pnl)}</td>
-            <td class="py-2 pr-3 text-right mono ${pnlCls}">${formatPct(pos.unrealized_pnl_pct)}</td>
+            <td class="py-2 pr-3 text-right mono ${pnlCls}" title="평가손익: ${formatPnl(pos.unrealized_pnl)}">${formatPnl(netPnl)}</td>
+            <td class="py-2 pr-3 text-right mono ${pnlCls}" title="평가수익률: ${formatPct(pos.unrealized_pnl_pct)}">${formatPct(netPct)}</td>
             <td class="py-2 pr-3 mono" style="font-size:0.75rem; color:var(--text-secondary);">${holdStr}</td>
             <td class="py-2">${stageLabel}</td>
         </tr>`;
