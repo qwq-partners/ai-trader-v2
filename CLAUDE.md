@@ -1,5 +1,16 @@
 # AI Trading Bot v2 - CLAUDE.md
-> 최종 업데이트: 2026-02-24 | 상세 변경 이력은 CHANGELOG.md 참조
+> 최종 업데이트: 2026-02-24
+
+## ⚡ 세션 시작 시 필수 읽기 (MANDATORY)
+
+작업 시작 전 **반드시** 아래 파일을 읽을 것:
+
+1. **`CHANGELOG.md`** — 최근 변경 이력 확인
+   - 이미 구현된 기능 중복 작업 방지
+   - 설계 결정 맥락 파악 (왜 이렇게 짜여 있는지)
+   - 알려진 미해결 이슈 파악
+
+> 예: 유저가 "X 기능 추가해줘" 요청 시 → CHANGELOG에서 이미 구현됐는지 먼저 확인
 
 ## Project Structure
 The main project directory is `/home/user/projects/ai-trader-v2/` (NOT `~/ai-trader/` or other paths). Always verify the working directory before reading or editing files.
