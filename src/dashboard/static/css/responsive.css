@@ -4,25 +4,34 @@
 
 /* -- Navigation -- */
 @media (max-width: 768px) {
+  /* 로고 + status를 1행, 네비 pill을 2행으로 분리 */
   .nav-container {
-    flex-direction: column !important;
-    gap: 8px !important;
+    flex-wrap: wrap !important;
     padding: 10px 16px !important;
+    gap: 6px 0 !important;
+    align-items: center !important;
   }
-  .nav-top-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    width: 100%;
+  /* 로고: 1행 왼쪽, 남은 공간 차지 */
+  .nav-logo {
+    flex: 1 !important;
+    min-width: 0 !important;
   }
+  /* status: 1행 오른쪽 */
+  .nav-status {
+    flex-shrink: 0 !important;
+    font-size: 0.7rem !important;
+    gap: 8px !important;
+  }
+  /* pill 행: 강제로 2행으로 */
   .nav-links {
-    display: flex;
-    gap: 4px;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    width: 100%;
-    padding-bottom: 2px;
+    flex: 0 0 100% !important;
+    order: 3 !important;
+    display: flex !important;
+    gap: 4px !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    scrollbar-width: none !important;
+    padding-bottom: 2px !important;
   }
   .nav-links::-webkit-scrollbar { display: none; }
   .nav-pill {
@@ -30,10 +39,6 @@
     padding: 6px 12px !important;
     font-size: 0.75rem !important;
     flex-shrink: 0;
-  }
-  .nav-status {
-    font-size: 0.7rem !important;
-    gap: 8px !important;
   }
   #sb-uptime { display: none !important; }
   #sb-session { font-size: 0.68rem !important; }

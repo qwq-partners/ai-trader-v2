@@ -116,15 +116,15 @@
 <body>
     <!-- Navigation -->
     <nav style="border-bottom: 1px solid var(--border-subtle); background: rgba(11,11,20,0.85); backdrop-filter: blur(12px); position: sticky; top: 0; z-index: 50;">
-        <div class="nav-container" style="max-width: 1280px; margin: 0 auto; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between;">
-            <div style="display: flex; align-items: center; gap: 32px; min-width: 0; flex: 1;">
-                <div style="display: flex; align-items: center; gap: 10px;">
+        <div class="nav-container" style="max-width: 1280px; margin: 0 auto; padding: 12px 24px; display: flex; align-items: center; gap: 24px;">
+            
+                <div class="nav-logo" style="display: flex; align-items: center; gap: 10px; flex-shrink: 0;">
                     <div style="width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple)); display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 10px rgba(99,102,241,0.25);">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
                     </div>
                     <span style="font-weight: 700; font-size: 0.95rem; color: #fff;">AI Trader <span style="color: var(--text-muted); font-weight: 400;">v2</span></span>
                 </div>
-                <div class="nav-links" style="display: flex; gap: 4px;">
+                <div class="nav-links" style="display: flex; gap: 4px; flex: 1;">
                     <a href="/" class="nav-pill" data-page="index">실시간</a>
                     <a href="/trades" class="nav-pill" data-page="trades">거래</a>
                     <a href="/performance" class="nav-pill active" data-page="performance">성과</a>
@@ -133,8 +133,7 @@
                     <a href="/evolution" class="nav-pill" data-page="evolution">복기</a>
                     <a href="/settings" class="nav-pill" data-page="settings">설정</a>
                 </div>
-            </div>
-            <div id="status-bar" class="nav-status" style="display: flex; align-items: center; gap: 20px; font-size: 0.78rem; color: var(--text-muted);">
+            <div id="status-bar" class="nav-status" style="display: flex; align-items: center; gap: 20px; font-size: 0.78rem; color: var(--text-muted); flex-shrink: 0;">
                 <span id="sb-status" style="display: flex; align-items: center; gap: 6px;"><span class="status-dot yellow"></span> 연결 중...</span>
                 <span id="sb-session" class="mono" style="color: var(--text-secondary); font-size: 0.75rem;">--</span>
                 <span id="sb-uptime" class="mono" style="color: var(--text-muted); font-size: 0.72rem;">--</span>
