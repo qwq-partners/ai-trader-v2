@@ -152,6 +152,25 @@ class SchedulerMixin:
                             logger.warning(f"[휴장일] 익월 휴장일 갱신 실패: {e}")
 
                 # 자정: 일일 통계 + 전략 상태 초기화 (공휴일 포함 매일 실행)
+                # ⚠️ 재시작 안전장치: 봇 재시작 시 last_daily_reset=None이 되어
+                #   장중에도 reset_daily_stats()가 실행되는 버그 방지.
+                #   JSON 파일에 오늘 날짜가 이미 있으면 당일 통계 복원 완료 상태 →
+                #   리셋 없이 last_daily_reset만 today로 업데이트.
+                if last_daily_reset != today:
+                    if last_daily_reset is None:
+                        # 재시작 여부 확인: JSON에 오늘 날짜가 있으면 이미 초기화됨
+                        try:
+                            import json as _json
+                            _stats = _json.loads(self.engine._DAILY_STATS_PATH.read_text())
+                            if _stats.get("date") == today.isoformat():
+                                logger.info(
+                                    f"[DailyStats] 재시작 감지: 오늘 통계 복원 완료 "
+                                    f"(daily_pnl={self.engine.portfolio.daily_pnl:+,.0f}원) → 리셋 생략"
+                                )
+                                last_daily_reset = today
+                        except Exception:
+                            pass  # JSON 없거나 파싱 실패 → 아래에서 정상 리셋
+
                 if last_daily_reset != today:
                     try:
                         self.engine.reset_daily_stats()
