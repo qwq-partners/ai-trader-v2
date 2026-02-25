@@ -399,21 +399,34 @@ class DashboardDataCollector:
 
             # 미청산 거래의 전략별 통계 추가
             by_strategy = stats.get('by_strategy', {})
+            # 전략별 미청산 pnl_pct 누적 (avg_pnl_pct 재계산용)
+            open_pnl_pcts_by_strat: Dict[str, List[float]] = {}
             for t in enriched:
                 strategy = t.get('entry_strategy') or 'unknown'
                 if strategy not in by_strategy:
                     by_strategy[strategy] = {
-                        'trades': 0, 'wins': 0, 'total_pnl': 0, 'win_rate': 0
+                        'trades': 0, 'wins': 0, 'total_pnl': 0,
+                        'avg_pnl_pct': 0, 'win_rate': 0,
                     }
                 by_strategy[strategy]['trades'] += 1
                 by_strategy[strategy]['total_pnl'] += t.get('pnl', 0)
                 # 미청산은 수익 중이면 wins로 카운트 (참고용)
                 if t.get('pnl', 0) > 0:
                     by_strategy[strategy]['wins'] += 1
+                # pnl_pct 수집 (avg_pnl_pct 재계산용)
+                pct = t.get('pnl_pct', 0)
+                open_pnl_pcts_by_strat.setdefault(strategy, []).append(pct)
                 # 승률 재계산
                 by_strategy[strategy]['win_rate'] = (
                     by_strategy[strategy]['wins'] / by_strategy[strategy]['trades'] * 100
                 )
+            # avg_pnl_pct 보정: 미청산 거래가 있는 전략은 pnl_pct 평균 재계산
+            for strategy, pcts in open_pnl_pcts_by_strat.items():
+                s = by_strategy[strategy]
+                closed_cnt = s['trades'] - len(pcts)
+                closed_avg = s.get('avg_pnl_pct', 0) or 0
+                total_pct = closed_avg * closed_cnt + sum(pcts)
+                s['avg_pnl_pct'] = total_pct / s['trades'] if s['trades'] > 0 else 0
             stats['by_strategy'] = by_strategy
         else:
             stats['open_trades'] = 0

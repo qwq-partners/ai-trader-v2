@@ -272,7 +272,8 @@ function renderStrategyTable(byStrategy) {
         const pnlCls = s.total_pnl > 0 ? 'text-profit' : s.total_pnl < 0 ? 'text-loss' : '';
         const wrCls = s.win_rate >= 50 ? 'text-profit' : 'text-loss';
         const losses = (s.trades || 0) - (s.wins || 0);
-        const avgPct = s.avg_pnl_pct != null ? s.avg_pnl_pct : (s.trades > 0 ? (s.total_pnl / s.trades) : 0);
+        // avg_pnl_pct: undefined/null 모두 안전 처리 (원 단위 total_pnl/trades 오계산 방지)
+        const avgPct = (s.avg_pnl_pct !== undefined && s.avg_pnl_pct !== null) ? s.avg_pnl_pct : 0;
         const avgCls = avgPct > 0 ? 'text-profit' : avgPct < 0 ? 'text-loss' : '';
 
         const tr = document.createElement('tr');
