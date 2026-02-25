@@ -46,32 +46,32 @@ class ExitStage(Enum):
 
 @dataclass
 class ExitConfig:
-    """청산 설정"""
+    """청산 설정 — default.yml exit_manager 섹션과 일치 (run_trader.py 기준값)"""
     # 분할 익절 설정
     enable_partial_exit: bool = True
 
-    # 1차 익절 (40%) - 변경: 3%->2%, 30%->40%, 손익비 개선
-    first_exit_pct: float = 2.0       # 목표 수익률 (%) - 조기 수익 확정
-    first_exit_ratio: float = 0.40    # 청산 비율 (40%)
+    # 1차 익절: +5% → 30% 매도
+    first_exit_pct: float = 5.0       # 목표 수익률 (%)
+    first_exit_ratio: float = 0.30    # 청산 비율 (원래 30%의 30%)
 
-    # 2차 익절 (30% 추가 = 전체 70%) - 변경: 6%->4%, 비율 조정
-    second_exit_pct: float = 4.0      # 목표 수익률 (%)
-    second_exit_ratio: float = 0.50   # 남은 60%의 50% = 전체의 30%
+    # 2차 익절: +10% → 잔여 70%의 50% = 전체 35% 매도
+    second_exit_pct: float = 10.0     # 목표 수익률 (%)
+    second_exit_ratio: float = 0.50   # 잔여의 50%
 
-    # 3차 익절 (15% 추가 = 전체 85%) - 변경: 10%->7%
-    third_exit_pct: float = 7.0       # 목표 수익률 (%)
-    third_exit_ratio: float = 0.5     # 남은 30%의 50% = 전체의 15%
+    # 3차 익절: +12% → 잔여 35%의 50% = 전체 17.5% 매도
+    third_exit_pct: float = 12.0      # 목표 수익률 (%) — 15→12: 실전 달성 가능 목표
+    third_exit_ratio: float = 0.50    # 잔여의 50%
 
-    # 손절 - ATR 기반 동적 손절 (변경: 손절폭 축소하여 손익비 1:1 이상 확보)
-    stop_loss_pct: float = 2.5        # 기본 손실률 (%) - 4%->2.5% 축소
+    # 손절 — 스윙 변동성 허용
+    stop_loss_pct: float = 5.0        # 기본 손실률 (%)
     enable_dynamic_stop: bool = True  # ATR 기반 동적 손절 활성화
-    atr_multiplier: float = 1.5       # ATR 배수 - 2.0->1.5 축소
-    min_stop_pct: float = 2.0         # 최소 손절폭 (%) - 3%->2%
-    max_stop_pct: float = 4.0         # 최대 손절폭 (%) - 6%->4%
+    atr_multiplier: float = 2.0       # ATR 배수
+    min_stop_pct: float = 4.0         # 최소 손절폭 (%)
+    max_stop_pct: float = 7.0         # 최대 손절폭 (%)
 
-    # 트레일링 스탑 (변경: 축소하여 수익 보호)
-    trailing_stop_pct: float = 1.5    # 고점 대비 하락률 (%) - 2.5%->1.5%
-    trailing_activate_pct: float = 2.0  # 트레일링 활성화 수익률 (%) - 3%->2%, 1차 익절과 동시
+    # 트레일링 스탑 — 스윙 하락 허용
+    trailing_stop_pct: float = 3.0    # 고점 대비 하락률 (%)
+    trailing_activate_pct: float = 5.0  # 트레일링 활성화 수익률 (%)
 
     # 수수료 포함 계산
     include_fees: bool = True
@@ -493,6 +493,7 @@ class ExitManager:
         elif state.current_stage == ExitStage.THIRD:
             if net_pnl_pct >= third_pct + 1.0:
                 state.current_stage = ExitStage.TRAILING
+                self._persist_states()  # TRAILING 전환 즉시 영속화 (재시작 시 THIRD 오복원 방지)
                 logger.info(
                     f"[ExitManager] {state.symbol} 트레일링 단계 진입 "
                     f"(+{net_pnl_pct:.2f}%, 고점={state.highest_price:,.0f}원)"
