@@ -104,7 +104,7 @@ class VCPDetector:
 
         # 1) 52주 고점 대비 위치
         high_252 = np.max(highs[-252:]) if len(highs) >= 252 else np.max(highs)
-        high_proximity = current_close / high_252 if high_252 > 0 else 0
+        high_proximity = float(current_close / high_252) if high_252 > 0 else 0.0  # numpy.float64 → float
 
         if high_proximity < 0.75:
             return None
@@ -155,7 +155,7 @@ class VCPDetector:
         # 4) 거래량 감소 추세
         vol_10 = np.mean(volumes[-10:])
         vol_30 = np.mean(volumes[-30:])
-        vol_declining = vol_10 < vol_30 * 0.8
+        vol_declining = bool(vol_10 < vol_30 * 0.8)  # numpy.bool_ → Python bool (JSON 직렬화 안전)
 
         # 5) MA 정배열 (50 > 150 > 200)
         ma_aligned = False
@@ -163,7 +163,7 @@ class VCPDetector:
             ma50 = np.mean(closes[-50:])
             ma150 = np.mean(closes[-150:])
             ma200 = np.mean(closes[-200:])
-            ma_aligned = ma50 > ma150 > ma200
+            ma_aligned = bool(ma50 > ma150 > ma200)  # numpy.bool_ → Python bool
 
             # 200일 MA 상승 중
             ma200_20d_ago = np.mean(closes[-220:-20]) if len(closes) >= 220 else ma200

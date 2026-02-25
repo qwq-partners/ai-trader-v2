@@ -160,8 +160,7 @@ class SchedulerMixin:
                     if last_daily_reset is None:
                         # 재시작 여부 확인: JSON에 오늘 날짜가 있으면 이미 초기화됨
                         try:
-                            import json as _json
-                            _stats = _json.loads(self.engine._DAILY_STATS_PATH.read_text())
+                            _stats = json.loads(self.engine._DAILY_STATS_PATH.read_text())
                             if _stats.get("date") == today.isoformat():
                                 logger.info(
                                     f"[DailyStats] 재시작 감지: 오늘 통계 복원 완료 "

@@ -259,13 +259,14 @@ class Position:
         = (현재가 - 평균단가) × 수량 - 매수수수료 - 매도수수료 - 거래세
         매수수수료는 fill.total_cost에 이미 포함됐으므로 cost_basis에서 빼지 않고
         별도 추산해서 차감합니다.
+        수수료 상수는 FeeConfig 기본값 기준 (fee_calculator.py와 동일).
         """
         if self.quantity == 0:
             return Decimal("0")
-        # 수수료 상수 (fee_calculator와 동일)
-        BUY_FEE_RATE  = Decimal("0.000141")
-        SELL_FEE_RATE = Decimal("0.000131")
-        SELL_TAX_RATE = Decimal("0.002")
+        # 수수료 상수 — FeeConfig 기본값과 일치 유지 (fee_calculator.py 참조)
+        BUY_FEE_RATE  = Decimal("0.000140527")   # 매수 수수료 0.0140527%
+        SELL_FEE_RATE = Decimal("0.000130527")   # 매도 수수료 0.0130527%
+        SELL_TAX_RATE = Decimal("0.002")          # 증권거래세 0.20%
         buy_fee  = self.cost_basis * BUY_FEE_RATE
         sell_fee = self.market_value * (SELL_FEE_RATE + SELL_TAX_RATE)
         return self.unrealized_pnl - buy_fee - sell_fee
@@ -275,7 +276,7 @@ class Position:
         """미실현 순손익률 (수수료 포함, cost_basis + 매수수수료 대비)"""
         if self.cost_basis == 0:
             return 0.0
-        BUY_FEE_RATE = Decimal("0.000141")
+        BUY_FEE_RATE = Decimal("0.000140527")  # FeeConfig 기본값과 일치
         total_cost = self.cost_basis * (1 + BUY_FEE_RATE)
         return float(self.unrealized_pnl_net / total_cost * 100)
 

@@ -435,7 +435,15 @@ class TradingEngine:
         symbol = fill.symbol
 
         if symbol not in self.portfolio.positions:
-            # 새 포지션
+            if fill.side == OrderSide.SELL:
+                # SELL fill인데 포지션이 없으면 avg_price=0으로 daily_pnl 폭등 위험
+                # → 무시하고 경고 로그만 남김
+                logger.error(
+                    f"[엔진] SELL fill 수신했으나 포지션 없음: {symbol} {fill.quantity}주 "
+                    f"@ {fill.price} → daily_pnl 오염 방지를 위해 무시"
+                )
+                return
+            # 새 포지션 (BUY)
             self.portfolio.positions[symbol] = Position(
                 symbol=symbol,
                 quantity=0,
@@ -686,7 +694,7 @@ class TradingEngine:
                 "SELECT COALESCE(SUM(pnl), 0) AS total_pnl, "
                 "COUNT(*) FILTER (WHERE pnl IS NOT NULL) AS cnt "
                 "FROM trade_events WHERE event_type='SELL' "
-                "AND DATE(event_time AT TIME ZONE 'Asia/Seoul') = $1",
+                "AND event_time::date = $1",  # naive timestamp 직접 비교 (서버 TZ 독립)
                 today,
             )
             if row and row["cnt"] > 0:
