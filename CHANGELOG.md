@@ -2,6 +2,35 @@
 
 ---
 
+## [2026-02-25] 익절 로직 개선 (stage 영속화 + 파라미터 현실화)
+
+### commit `11275c7`
+
+**P1 — ExitStage 영속화 (재시작 stage 복원 버그 수정)**
+- `exit_manager.py`: 봇 시작 시 `~/.cache/ai_trader/exit_stages_YYYY-MM-DD.json` 로드
+- 포지션 등록 시 파일 우선 복원 → stage/highest_price/breakeven_activated 정확히 복원
+- `on_fill()` + `breakeven_activated` 변경 시마다 즉시 파일 저장
+- 완전 청산 시 파일 항목 제거
+- 기존 방식(현재가 기반 추정)은 파일 없을 때 폴백으로 유지
+
+**P2 — 익절 파라미터 현실화**
+- `second_exit_ratio`: 0.40 → 0.50 (2차에서 35% 확보, 기존 28%)
+- `third_exit_pct`: 15.0 → 12.0 (실전 달성 가능 목표, 기존 유명무실)
+- 분할 구조: 1차 30% → 2차 35% → 3차 17.5% → 트레일링 17.5%
+- `ExitManager` 초기화 기본값을 `default.yml`과 일치시킴
+
+---
+
+## [2026-02-25] 포지션 사이징 Half-Kelly 상향
+
+### commit `1068862`
+- SEPA 종목당 비중: 15% → 25% (Half-Kelly, strategy_allocation 40% cap으로 자연 제한)
+- RSI2 종목당 비중: 10% → 20% (Half-Kelly, strategy_allocation 60% cap으로 자연 제한)
+- max_position_pct: 35% → 28% (단일 종목 오버 방지)
+- 근거: 장중 신규 신호 없음 + 전역 ATR손절 + daily 5% CB로 실질 리스크 커버
+
+---
+
 ## [2026-02-25] 대시보드 반응형(Responsive) 개편
 
 ### 변경
