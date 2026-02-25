@@ -2,6 +2,25 @@
 
 ---
 
+## [2026-02-25] exit_manager P2 수정 (ExitConfig 기본값 + TRAILING 영속화)
+
+### commit `6ee1c69`
+
+**P2-1: ExitConfig 클래스 기본값을 실제 운영값으로 정합**
+- first_exit_pct: 2.0→5.0 / first_exit_ratio: 0.40→0.30
+- second_exit_pct: 4.0→10.0 / third_exit_pct: 7.0→12.0
+- stop_loss_pct: 2.5→5.0 / atr_multiplier: 1.5→2.0
+- min_stop_pct: 2.0→4.0 / max_stop_pct: 4.0→7.0
+- trailing_stop_pct: 1.5→3.0 / trailing_activate_pct: 2.0→5.0
+- 동작 변경 없음: run_trader.py에서 모든 값 명시적 오버라이드
+- get_exit_manager() 싱글톤이 파라미터 없이 생성될 때의 오동작 위험 제거
+
+**P2-2: THIRD→TRAILING 전환 시 _persist_states() 누락 수정**
+- `_check_partial_exit`: `state.current_stage = ExitStage.TRAILING` 직후 즉시 파일 저장
+- 재시작 시 TRAILING이 THIRD로 오복원되던 문제 방지
+
+---
+
 ## [2026-02-25] ExitStage 날짜 경계 유실 버그 수정
 
 ### commit `179ecd2`
