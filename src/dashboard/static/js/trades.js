@@ -219,12 +219,16 @@ function renderEvents(events) {
         tdName.className = 'py-2 pr-3 font-medium';
         tdName.style.color = '#fff';
         if (ev.name && ev.name !== ev.symbol) {
-            tdName.textContent = ev.name + ' ';
-            const code = document.createElement('span');
-            code.style.cssText = 'color:var(--text-muted); font-size:0.72rem;';
-            code.textContent = ev.symbol || '';
-            tdName.appendChild(code);
+            const nameDiv = document.createElement('div');
+            nameDiv.style.cssText = 'white-space: nowrap; font-weight: 600;';
+            nameDiv.textContent = ev.name;
+            const codeDiv = document.createElement('div');
+            codeDiv.style.cssText = 'color:var(--text-muted); font-size:0.72rem; white-space: nowrap;';
+            codeDiv.textContent = ev.symbol || '';
+            tdName.appendChild(nameDiv);
+            tdName.appendChild(codeDiv);
         } else {
+            tdName.style.whiteSpace = 'nowrap';
             tdName.textContent = ev.symbol || '--';
         }
 
@@ -353,10 +357,10 @@ function renderHoldings(holdings) {
         const tdName = document.createElement('td');
         tdName.style.padding = '10px 12px 10px 0';
         const nameDiv = document.createElement('div');
-        nameDiv.style.cssText = 'font-weight:600; font-size:0.85rem;';
+        nameDiv.style.cssText = 'font-weight:600; font-size:0.85rem; white-space:nowrap;';
         nameDiv.textContent = h.name || h.symbol;
         const codeDiv = document.createElement('div');
-        codeDiv.style.cssText = 'font-size:0.7rem; color:var(--text-muted);';
+        codeDiv.style.cssText = 'font-size:0.7rem; color:var(--text-muted); white-space:nowrap;';
         codeDiv.textContent = h.symbol;
         tdName.appendChild(nameDiv);
         tdName.appendChild(codeDiv);

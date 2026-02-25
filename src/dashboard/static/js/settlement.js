@@ -152,7 +152,7 @@ function renderSells(sells) {
 
         tbody.appendChild(buildRow([
             { text: s.time, style: 'padding:10px 12px 10px 0;font-size:0.8rem;color:var(--text-secondary);', className: 'mono' },
-            { html: `<div style="font-weight:600;font-size:0.85rem;">${esc(s.name)}</div><div style="font-size:0.7rem;color:var(--text-muted);">${esc(s.symbol)}</div>`, style: 'padding:10px 12px 10px 0;' },
+            { html: `<div style="font-weight:600;font-size:0.85rem;white-space:nowrap;">${esc(s.name)}</div><div style="font-size:0.7rem;color:var(--text-muted);white-space:nowrap;">${esc(s.symbol)}</div>`, style: 'padding:10px 12px 10px 0;' },
             { text: formatNumber(s.quantity), style: 'padding:10px 12px 10px 0;text-align:right;', className: 'mono' },
             { text: formatNumber(s.price), style: 'padding:10px 12px 10px 0;text-align:right;', className: 'mono' },
             { text: s.entry_price > 0 ? formatNumber(s.entry_price) : '-', style: 'padding:10px 12px 10px 0;text-align:right;color:var(--text-secondary);', className: 'mono' },
@@ -187,7 +187,7 @@ function renderBuys(buys) {
         totalAmount += b.amount;
         tbody.appendChild(buildRow([
             { text: b.time, style: 'padding:10px 12px 10px 0;font-size:0.8rem;color:var(--text-secondary);', className: 'mono' },
-            { html: `<div style="font-weight:600;font-size:0.85rem;">${esc(b.name)}</div><div style="font-size:0.7rem;color:var(--text-muted);">${esc(b.symbol)}</div>`, style: 'padding:10px 12px 10px 0;' },
+            { html: `<div style="font-weight:600;font-size:0.85rem;white-space:nowrap;">${esc(b.name)}</div><div style="font-size:0.7rem;color:var(--text-muted);white-space:nowrap;">${esc(b.symbol)}</div>`, style: 'padding:10px 12px 10px 0;' },
             { text: formatNumber(b.quantity), style: 'padding:10px 12px 10px 0;text-align:right;', className: 'mono' },
             { text: formatNumber(b.price), style: 'padding:10px 12px 10px 0;text-align:right;', className: 'mono' },
             { text: formatCurrency(b.amount), style: 'padding:10px 12px 10px 0;text-align:right;', className: 'mono' },
@@ -226,7 +226,7 @@ function renderHoldings(holdings) {
         const badgeCls = h.unrealized_pnl >= 0 ? 'badge-sell-win' : 'badge-sell-loss';
 
         tbody.appendChild(buildRow([
-            { html: `<div style="font-weight:600;font-size:0.85rem;">${esc(h.name)}</div><div style="font-size:0.7rem;color:var(--text-muted);">${esc(h.symbol)}</div>`, style: 'padding:10px 12px 10px 0;' },
+            { html: `<div style="font-weight:600;font-size:0.85rem;white-space:nowrap;">${esc(h.name)}</div><div style="font-size:0.7rem;color:var(--text-muted);white-space:nowrap;">${esc(h.symbol)}</div>`, style: 'padding:10px 12px 10px 0;' },
             { text: formatNumber(h.quantity), style: 'padding:10px 12px 10px 0;text-align:right;', className: 'mono' },
             { text: formatNumber(h.avg_price), style: 'padding:10px 12px 10px 0;text-align:right;', className: 'mono' },
             { text: formatNumber(h.current_price), style: 'padding:10px 12px 10px 0;text-align:right;', className: 'mono' },

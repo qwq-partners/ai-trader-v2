@@ -90,6 +90,16 @@
     display: none !important;
   }
 }
+
+/* -- Badges: 줄바꿈 방지 -- */
+.badge {
+  white-space: nowrap;
+}
+
+/* -- 테이블 헤더: 줄바꿈 방지 -- */
+table th {
+  white-space: nowrap;
+}
 @media (max-width: 480px) {
   table th, table td {
     font-size: 0.65rem !important;
