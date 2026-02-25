@@ -752,15 +752,8 @@ class SchedulerMixin:
                             )
                             await self.engine.emit(event)
 
-                            # 테마 관련 종목 WebSocket 구독 추가
-                            if self.ws_feed and theme.related_stocks:
-                                async with self._watch_symbols_lock:
-                                    new_symbols = [s for s in theme.related_stocks
-                                                 if s not in self._watch_symbols]
-                                    if new_symbols:
-                                        await self.ws_feed.subscribe(new_symbols[:10])
-                                        self._watch_symbols.extend(new_symbols[:10])
-                                        logger.info(f"[테마 탐지] 신규 종목 구독: {new_symbols[:10]}")
+                            # [스윙 배치 전략] theme_chasing 비활성화 → 테마 종목 WS 구독 제외
+                            # logger.debug(f"[테마 탐지] {theme.name} 관련 {len(theme.related_stocks)}종목 (WS 구독 안함)")
 
                         # 종목별 뉴스 임팩트 → NewsEvent 발행 + WS 구독
                         sentiments = self.theme_detector.get_all_stock_sentiments()
@@ -782,16 +775,7 @@ class SchedulerMixin:
                                 )
                                 await self.engine.emit(news_event)
 
-                                # WebSocket 구독에 자동 추가
-                                if self.ws_feed:
-                                    async with self._watch_symbols_lock:
-                                        if symbol not in self._watch_symbols:
-                                            await self.ws_feed.subscribe([symbol])
-                                            self._watch_symbols.append(symbol)
-                                            logger.info(
-                                                f"[뉴스 임팩트] {symbol} 구독 추가 "
-                                                f"(impact={impact}, {direction})"
-                                            )
+                                # [스윙 배치 전략] 뉴스 임팩트 종목 WS 구독 제외 (장중 매수 신호 없음)
 
                 except Exception as e:
                     logger.warning(f"테마 스캔 오류: {e}")
@@ -841,27 +825,13 @@ class SchedulerMixin:
                                     f"점수={stock.score:.0f}, {', '.join(stock.reasons[:2])}"
                                 )
 
-                    # 신규 종목 WebSocket 구독 (점수와 함께)
-                    if self.ws_feed:
-                        # 전체 점수 업데이트
-                        self.ws_feed.set_symbol_scores(scores)
-
-                        if new_symbols:
-                            # 신규 종목 구독 (롤링 방식으로 자동 관리)
-                            await self.ws_feed.subscribe(new_symbols, scores)
-                            stats = self.ws_feed.get_subscription_stats()
-                            logger.info(
-                                f"[스크리닝] 신규 {len(new_symbols)}개 추가 → "
-                                f"총 감시={stats['total_watch']}, 구독={stats['subscribed_count']}, "
-                                f"롤링대기={stats['rolling_queue_size']}"
-                            )
-
-                            # 감시 종목 변경 로그
-                            trading_logger.log_watchlist_update(
-                                added=new_symbols,
-                                removed=[],
-                                total=stats['total_watch'],
-                            )
+                    # [스윙 배치 전략] 장중 신규 매수 신호 없음 →
+                    # 스크리닝 결과를 WS/REST에 추가하지 않음 (보유종목만 실시간 수신)
+                    # 참고: 스크리닝 자체는 복기/저녁 스캔용으로 유지
+                    if new_symbols:
+                        logger.info(
+                            f"[스크리닝] {len(new_symbols)}개 발굴 (복기용, 장중 WS/REST 구독 제외)"
+                        )
 
                     # 스크리닝 결과 로그 기록 (복기용)
                     if screened:
@@ -1205,21 +1175,17 @@ class SchedulerMixin:
                         await asyncio.sleep(45)
                         continue
 
-                    # 대상 종목 수집: 보유 포지션 + 스크리닝 상위
-                    # WS가 보유종목 실시간 시세를 담당하면 REST에서는 제외
+                    # 대상 종목: 보유 포지션만 (WS 백업)
+                    # [스윙 배치 전략] 장중 신규 매수 없음 → 스크리닝 종목 REST 폴링 제외
                     ws_covered = set()
                     if self.ws_feed and self.ws_feed._connected:
                         ws_covered = self.ws_feed._subscribed_symbols
 
-                    position_symbols = [
+                    # WS가 커버 못 하는 보유종목만 REST로 백업 폴링
+                    target_symbols = [
                         s for s in self.engine.portfolio.positions.keys()
                         if s.zfill(6) not in ws_covered
                     ]
-                    screened_symbols = [
-                        s.symbol for s in self._last_screened
-                        if s.symbol not in self.engine.portfolio.positions
-                    ]
-                    target_symbols = position_symbols + screened_symbols[:max(0, 20 - len(position_symbols))]
 
                     if not target_symbols:
                         await asyncio.sleep(45)
@@ -1257,10 +1223,10 @@ class SchedulerMixin:
                         await asyncio.sleep(0.15)  # API rate limit (초당 ~6건)
 
                     if success_count > 0:
-                        ws_info = f", WS실시간={len(ws_covered)}" if ws_covered else ""
+                        ws_info = f", WS={len(ws_covered)}종목" if ws_covered else ""
                         logger.info(
-                            f"[REST피드] {success_count}/{len(target_symbols)}개 시세 갱신 "
-                            f"(보유={len(self.engine.portfolio.positions)}, 세션={current_session.value}{ws_info})"
+                            f"[REST피드] 보유종목 WS백업 {success_count}/{len(target_symbols)}개 갱신 "
+                            f"(세션={current_session.value}{ws_info})"
                         )
 
                 except Exception as e:
