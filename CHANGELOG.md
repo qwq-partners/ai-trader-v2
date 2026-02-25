@@ -899,3 +899,26 @@ KIS_SYNC_032350_20260220 레코드의 sync 버그:
 `sector_momentum 10pt` → `change_20d` 기반 단기 모멘텀 10pt로 대체
 - `> 20%` → 10pt, `> 10%` → 7pt, `> 5%` → 4pt, `> 0%` → 2pt
 - `change_20d`는 `technical.py:97`에서 이미 계산됨
+
+## [2026-02-25] 2차 코드 리뷰 — risk/manager, kis_broker, trade_storage, exit_manager
+
+### 전체 평가: 양호 (추가 P0 없음)
+
+**OK 확인된 영역:**
+- `kis_broker._api_post()`: 401/429/5xx 지수 백오프 재시도, 토큰 자동 갱신 ✅
+- `kis_broker._rate_limit()`: 슬라이딩 윈도우 Lock+sleep 패턴 (asyncio 친화적) ✅
+- `exit_manager.rollback_stage()`: stale timeout/고아 pending/주문 실패 3경로 모두 호출 ✅
+- `risk/manager._load_stop_loss_today()`: 날짜 검증 (오늘 날짜 아니면 빈 set 반환) ✅
+- `trade_storage.calc_pnl()`: FeeConfig 단일 소스 + Decimal 정밀 연산 ✅
+- `trade_storage._db_writer()`: 재시도 최대 3회 + 지수 백오프 ✅
+- WebSocket 재연결: max_reconnect 초과 시 경고만 (중단 없음, 의도적 설계) ✅
+
+**P2 문제 (수정 불필요 or 낮은 우선순위):**
+1. `trade_storage._write_queue`: maxsize 미지정 (asyncio.Queue() 무한 성장 가능)
+   - DB 완전 다운 시에만 발생, 재시작으로 해소. 로컬 DB라 실질 위험 낮음
+2. `risk/manager.can_open_position()`: 예약 현금(_reserved_by_order) 미반영
+   - 후속 `engine.can_open_position(reserved_cash=...)` 2단계 체크로 보완됨
+3. `_find_recovery_target()`: 032350 exit_qty=71 버그 원인 확인
+   - 원인: db_total 집계가 `event_time::date=today`인데, 2/23 익절분이 포함안되고
+     `already_sold=0`으로 계산됨 → 이전 days분 sync 수량 합산 후 클램핑 강화 필요
+   - 현재: 수동 DB 수정 완료, 클램핑 로직 존재하나 edge case 미커버
