@@ -2,6 +2,35 @@
 
 ---
 
+## [2026-02-25] 대시보드 반응형(Responsive) 개편
+
+### 변경
+모바일/태블릿에서 대시보드가 올바르게 표시되도록 반응형 레이아웃 적용.
+기존 디자인/색상/애니메이션은 100% 유지, 레이아웃만 개선.
+
+### 수정 파일
+- **`static/css/responsive.css`** (신규): 768px/480px 브레이크포인트 미디어쿼리
+- **8개 HTML 템플릿** (index/trades/settlement/performance/equity/themes/evolution/settings):
+  - `nav-container`, `nav-links`, `nav-status` 클래스 → 모바일 네비 2행 분리 + 가로 스크롤
+  - `grid-2col`, `grid-5col`, `perf-grid`, `grid-auto` → 모바일 그리드 축소 (1~2열)
+  - `card-inner` → 모바일 카드 패딩 24px→16px 축소
+  - `col-hide-mobile`, `col-avg-price/quantity/market-value/holding` → 테이블 컬럼 숨김
+- **`static/js/dashboard.js`**: 포지션 테이블 TD에 col 클래스 추가 (JS 렌더링 동기화)
+
+### 반응형 동작
+| 요소 | PC (>768px) | 모바일 (≤768px) |
+|------|------------|----------------|
+| 네비게이션 | 1행 (로고+탭+상태바) | 2행 (탭 가로 스크롤) |
+| 2열 그리드 | 2열 | 1열 |
+| 5~6열 stats | 5~6열 | 2열 |
+| 포지션 테이블 | 10컬럼 전체 | 6컬럼 (평균가/수량/평가/보유 숨김) |
+| 카드 패딩 | 24px | 16px |
+| 업타임 표시 | 표시 | 숨김 |
+
+**커밋**: `923f6fc`
+
+---
+
 ## [2026-02-25] 아침 스캔 수급 데이터 확보 (pykrx 전일 폴백)
 
 ### 문제
