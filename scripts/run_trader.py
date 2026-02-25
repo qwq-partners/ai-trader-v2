@@ -573,21 +573,21 @@ class TradingBot(SchedulerMixin):
                     "trailing_stop_pct": 3.0,
                     "first_exit_pct": 5.0,
                     "second_exit_pct": 10.0,
-                    "third_exit_pct": 15.0,
+                    "third_exit_pct": 12.0,   # 15→12: 실전 달성 가능 목표
                 },
                 "sepa_trend": {
                     "stop_loss_pct": sepa_cfg.get("stop_loss_pct", 5.0),
                     "trailing_stop_pct": 3.0,
                     "first_exit_pct": 5.0,
                     "second_exit_pct": 10.0,
-                    "third_exit_pct": 15.0,
+                    "third_exit_pct": 12.0,   # 15→12: 실전 달성 가능 목표
                 },
                 "strategic_swing": {
                     "stop_loss_pct": 5.0,
                     "trailing_stop_pct": 3.0,
                     "first_exit_pct": 5.0,
                     "second_exit_pct": 10.0,
-                    "third_exit_pct": 15.0,
+                    "third_exit_pct": 12.0,
                 },
             }
 
@@ -601,16 +601,18 @@ class TradingBot(SchedulerMixin):
             exit_cfg = self.config.get("exit_manager") or {}
             self.exit_manager = ExitManager(ExitConfig(
                 enable_partial_exit=exit_cfg.get("enable_partial_exit", True),
-                first_exit_pct=exit_cfg.get("first_exit_pct", 3.0),
-                first_exit_ratio=exit_cfg.get("first_exit_ratio", 0.25),
-                second_exit_pct=exit_cfg.get("second_exit_pct", 5.0),
-                second_exit_ratio=exit_cfg.get("second_exit_ratio", 0.3),
-                stop_loss_pct=exit_cfg.get("stop_loss_pct", 2.5),
-                trailing_stop_pct=exit_cfg.get("trailing_stop_pct", 1.5),
-                trailing_activate_pct=exit_cfg.get("trailing_activate_pct", 3.0),
-                min_stop_pct=exit_cfg.get("min_stop_pct", 2.0),
-                max_stop_pct=exit_cfg.get("max_stop_pct", 4.0),
-                atr_multiplier=exit_cfg.get("atr_multiplier", 1.5),
+                first_exit_pct=exit_cfg.get("first_exit_pct", 5.0),
+                first_exit_ratio=exit_cfg.get("first_exit_ratio", 0.30),
+                second_exit_pct=exit_cfg.get("second_exit_pct", 10.0),
+                second_exit_ratio=exit_cfg.get("second_exit_ratio", 0.50),
+                third_exit_pct=exit_cfg.get("third_exit_pct", 12.0),
+                third_exit_ratio=exit_cfg.get("third_exit_ratio", 0.50),
+                stop_loss_pct=exit_cfg.get("stop_loss_pct", 5.0),
+                trailing_stop_pct=exit_cfg.get("trailing_stop_pct", 3.0),
+                trailing_activate_pct=exit_cfg.get("trailing_activate_pct", 5.0),
+                min_stop_pct=exit_cfg.get("min_stop_pct", 4.0),
+                max_stop_pct=exit_cfg.get("max_stop_pct", 7.0),
+                atr_multiplier=exit_cfg.get("atr_multiplier", 2.0),
                 include_fees=exit_cfg.get("include_fees", True),
             ))
             logger.info("분할 익절 관리자 초기화 완료")

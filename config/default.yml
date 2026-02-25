@@ -211,10 +211,10 @@ exit_manager:
   # 3단계 익절 시스템 (R:R 비율 2:1 목표)
   first_exit_pct: 5.0             # 1차 익절 +5% (3→5: 스윙 목표 상향)
   first_exit_ratio: 0.30          # 30% 매도
-  second_exit_pct: 10.0           # 2차 익절 +10% (6→10: 스윙 목표 상향)
-  second_exit_ratio: 0.40         # 잔여 70%의 40% = 전체 28% 매도
-  third_exit_pct: 15.0            # 3차 익절 +15% (10→15: 스윙 목표 상향)
-  third_exit_ratio: 0.5           # 잔여 42%의 50% = 전체 21% 매도 (나머지 21%는 trailing)
+  second_exit_pct: 10.0           # 2차 익절 +10%
+  second_exit_ratio: 0.50         # 잔여 70%의 50% = 전체 35% 매도 (40→50: 2차에서 더 확보)
+  third_exit_pct: 12.0            # 3차 익절 +12% (15→12: 실전 달성 가능 목표)
+  third_exit_ratio: 0.5           # 잔여 35%의 50% = 전체 17.5% 매도
 
   # ATR 기반 동적 손절 (변동성 대응)
   stop_loss_pct: 5.0              # 기본 손절 5.0% (4→5: 스윙 변동성 허용)

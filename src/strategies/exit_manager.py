@@ -21,9 +21,11 @@ ATR 기반 동적 손절 (축소하여 손익비 개선):
 수수료 포함 계산으로 실제 순수익 기준 청산
 """
 
+import json
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, date
 from decimal import Decimal
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from enum import Enum
 from loguru import logger
@@ -118,6 +120,46 @@ class ExitManager:
         self._entry_times: Dict[str, datetime] = {}
         self._max_holding_days: int = 10  # 설정에서 오버라이드 가능
 
+        # stage 영속화: 재시작 후 정확한 stage 복원
+        _cache_dir = Path.home() / ".cache" / "ai_trader"
+        _cache_dir.mkdir(parents=True, exist_ok=True)
+        self._stage_file = _cache_dir / f"exit_stages_{date.today().isoformat()}.json"
+        self._persisted: Dict[str, Dict] = self._load_persisted_states()
+
+    # ------------------------------------------------------------------ #
+    # Stage 영속화                                                        #
+    # ------------------------------------------------------------------ #
+
+    def _load_persisted_states(self) -> Dict[str, Dict]:
+        """당일 stage 파일 로드. 파일 없거나 파싱 실패 시 빈 dict 반환."""
+        try:
+            if self._stage_file.exists():
+                with open(self._stage_file, "r") as f:
+                    data = json.load(f)
+                logger.info(
+                    f"[ExitManager] stage 복원 파일 로드: {len(data)}종목 "
+                    f"({self._stage_file.name})"
+                )
+                return data
+        except Exception as e:
+            logger.warning(f"[ExitManager] stage 파일 로드 실패: {e}")
+        return {}
+
+    def _persist_states(self) -> None:
+        """현재 모든 포지션의 stage/highest_price를 파일에 저장."""
+        data = {}
+        for sym, state in self._states.items():
+            data[sym] = {
+                "stage": state.current_stage.value,
+                "highest_price": float(state.highest_price),
+                "breakeven_activated": state.breakeven_activated,
+            }
+        try:
+            with open(self._stage_file, "w") as f:
+                json.dump(data, f)
+        except Exception as e:
+            logger.warning(f"[ExitManager] stage 파일 저장 실패: {e}")
+
     def register_position(
         self,
         position: Position,
@@ -195,34 +237,54 @@ class ExitManager:
             except Exception as e:
                 logger.warning(f"[ExitManager] {position.symbol} ATR 계산 실패: {e}")
 
-        # 현재 수익률 기반으로 초기 단계 결정 (재시작/재등록 시)
         # 전략별 익절 목표 우선, 없으면 글로벌 기본값
         eff_first = first_exit_pct or self.config.first_exit_pct
         eff_second = second_exit_pct or self.config.second_exit_pct
         eff_third = third_exit_pct or self.config.third_exit_pct
 
-        initial_stage = ExitStage.NONE
         current_price = position.current_price or position.avg_price
-        if position.avg_price and position.avg_price > 0 and current_price > position.avg_price:
-            pnl_pct = float((current_price - position.avg_price) / position.avg_price * 100)
-            if pnl_pct >= eff_third:
-                initial_stage = ExitStage.TRAILING
+        persisted = self._persisted.get(position.symbol)
+
+        if persisted:
+            # ① 영속화 파일 우선 복원 (재시작 시 정확한 stage 보장)
+            try:
+                initial_stage = ExitStage(persisted["stage"])
+                saved_high = Decimal(str(persisted.get("highest_price", float(current_price))))
+                breakeven_was = bool(persisted.get("breakeven_activated", False))
                 logger.info(
-                    f"[ExitManager] {position.symbol} 수익률 +{pnl_pct:.1f}% → "
-                    f"트레일링 단계로 등록 (고점={current_price:,.0f}원, 3차목표={eff_third:.1f}%)"
+                    f"[ExitManager] {position.symbol} stage 파일 복원: "
+                    f"stage={initial_stage.value} / 고점={saved_high:,.0f} / BE={breakeven_was}"
                 )
-            elif pnl_pct >= eff_second:
-                initial_stage = ExitStage.THIRD
-                logger.info(
-                    f"[ExitManager] {position.symbol} 수익률 +{pnl_pct:.1f}% → "
-                    f"3차 익절 완료 단계로 등록 (2차목표={eff_second:.1f}%)"
-                )
-            elif pnl_pct >= eff_first:
-                initial_stage = ExitStage.FIRST
-                logger.info(
-                    f"[ExitManager] {position.symbol} 수익률 +{pnl_pct:.1f}% → "
-                    f"1차 익절 완료 단계로 등록 (1차목표={eff_first:.1f}%)"
-                )
+            except Exception as e:
+                logger.warning(f"[ExitManager] {position.symbol} stage 복원 실패({e}), 추정으로 폴백")
+                initial_stage = ExitStage.NONE
+                saved_high = current_price
+                breakeven_was = False
+        else:
+            # ② 영속화 없음 → 현재가 기반 추정 (신규 진입 or 당일 첫 등록)
+            saved_high = current_price
+            breakeven_was = False
+            initial_stage = ExitStage.NONE
+            if position.avg_price and position.avg_price > 0 and current_price > position.avg_price:
+                pnl_pct = float((current_price - position.avg_price) / position.avg_price * 100)
+                if pnl_pct >= eff_third:
+                    initial_stage = ExitStage.TRAILING
+                    logger.info(
+                        f"[ExitManager] {position.symbol} 수익률 추정 +{pnl_pct:.1f}% → "
+                        f"트레일링 단계 (3차목표={eff_third:.1f}%)"
+                    )
+                elif pnl_pct >= eff_second:
+                    initial_stage = ExitStage.THIRD
+                    logger.info(
+                        f"[ExitManager] {position.symbol} 수익률 추정 +{pnl_pct:.1f}% → "
+                        f"3차 익절 완료 단계"
+                    )
+                elif pnl_pct >= eff_first:
+                    initial_stage = ExitStage.FIRST
+                    logger.info(
+                        f"[ExitManager] {position.symbol} 수익률 추정 +{pnl_pct:.1f}% → "
+                        f"1차 익절 완료 단계"
+                    )
 
         self._states[position.symbol] = PositionExitState(
             symbol=position.symbol,
@@ -230,7 +292,8 @@ class ExitManager:
             original_quantity=position.quantity,
             remaining_quantity=position.quantity,
             current_stage=initial_stage,
-            highest_price=current_price,
+            highest_price=saved_high,        # 영속화 고점 복원 (기존: current_price)
+            breakeven_activated=breakeven_was,  # 영속화 BE 복원
             stop_loss_pct=stop_loss_pct,
             trailing_stop_pct=trailing_stop_pct,
             first_exit_pct=first_exit_pct,
@@ -318,6 +381,7 @@ class ExitManager:
             one_r = state.dynamic_stop_pct or state.stop_loss_pct or self.config.stop_loss_pct
             if net_pnl_pct >= one_r:
                 state.breakeven_activated = True
+                self._persist_states()  # breakeven 활성화 즉시 영속화
                 logger.info(
                     f"[ExitManager] {symbol} 1차익절후 1R({one_r:.1f}%) 도달 → 본전 이동 활성화 "
                     f"(현재 +{net_pnl_pct:.2f}%)"
@@ -506,7 +570,11 @@ class ExitManager:
             total_pnl = state.total_realized_pnl
             del self._states[symbol]
             self._entry_times.pop(symbol, None)
+            self._persisted.pop(symbol, None)  # 영속화 항목도 제거
             logger.info(f"[ExitManager] {symbol} 완전 청산, 총 실현손익: {total_pnl:+,.0f}원")
+
+        # 체결마다 stage 영속화 (재시작 대비)
+        self._persist_states()
 
     def get_state(self, symbol: str) -> Optional[PositionExitState]:
         """포지션 청산 상태 조회"""
