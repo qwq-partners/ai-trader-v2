@@ -187,7 +187,7 @@ function renderSummaryCards(summary, llmReview) {
 
     // 총손익
     const totalPnl = summary.total_pnl;
-    pnlEl.textContent = (totalPnl >= 0 ? '+' : '') + Number(totalPnl).toLocaleString('ko-KR') + '원';
+    pnlEl.textContent = (totalPnl >= 0 ? '+' : '') + Number(totalPnl).toLocaleString('ko-KR')
     pnlEl.style.color = totalPnl >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
 
     // 평가

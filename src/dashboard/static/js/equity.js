@@ -163,7 +163,7 @@ function renderEquityChart(snapshots) {
             gridcolor: 'rgba(99,102,241,0.06)',
             tickfont: { size: 11, family: 'JetBrains Mono, monospace', color: '#5a6480' },
             tickformat: ',.0f',
-            ticksuffix: '원',
+            ticksuffix: '',
             range: [yMin, yMax],
             showspikes: true,
             spikemode: 'across',

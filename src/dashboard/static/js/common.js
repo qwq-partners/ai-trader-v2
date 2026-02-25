@@ -103,7 +103,7 @@ function formatNumber(n, decimals = 0) {
 
 function formatCurrency(n) {
     if (n === null || n === undefined || isNaN(n)) return '--';
-    return formatNumber(n, 0) + '원';
+    return formatNumber(n, 0);
 }
 
 function formatPct(n, decimals = 2) {
@@ -115,7 +115,7 @@ function formatPct(n, decimals = 2) {
 function formatPnl(n) {
     if (n === null || n === undefined || isNaN(n)) return '--';
     const prefix = n > 0 ? '+' : '';
-    return prefix + formatNumber(n, 0) + '원';
+    return prefix + formatNumber(n, 0);
 }
 
 function pnlClass(n) {
