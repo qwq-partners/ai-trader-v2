@@ -852,3 +852,50 @@ for stock in result:
 
 ### 검증
 재시작 후 `realized_daily_pnl = 132,044원` 정상 표시 확인
+
+## [2026-02-25] 코드 리뷰 P1/P2 이슈 수정 (commit `2d5e4ce`)
+
+### P1-1 vcp_detector.py: numpy.bool_ JSON 직렬화 버그
+- `vol_declining = vol_10 < vol_30 * 0.8` → numpy.bool_ 반환 → json.dump에서 TypeError
+- `ma_aligned = ma50 > ma150 > ma200` → 동일 문제
+- 수정: `bool()`, `float()` 명시적 래핑으로 Python 네이티브 타입 보장
+- 영향: VCP 캐시 저장 실패 → 다음 재시작 시 VCP 패턴 재계산 필요 (성능 영향 소)
+
+### P1-2 engine.py update_position(): 포지션 없는 SELL fill 방어
+- 포지션 미추적 종목에 SELL fill 도달 시 `avg_price=0`으로 `daily_pnl` 폭등 위험
+- `(sell_price - 0) × qty - fee` = 매도 대금 전액이 수익으로 계상
+- 수정: SELL + 포지션 없음 → early return + error 로그 (BUY는 기존 동작 유지)
+
+### P2-1 bot_schedulers.py: 인라인 import 정리
+- `import json as _json` (인라인) → 상단 `import json` 직접 참조
+
+### P2-2 types.py: unrealized_pnl_net 수수료 상수 FeeConfig 기준 통일
+- `0.000141` → `0.000140527` (매수), `0.000131` → `0.000130527` (매도)
+
+### P2-3 engine.py: DB 백필 쿼리 이식성 개선
+- `DATE(event_time AT TIME ZONE 'Asia/Seoul')` → `event_time::date`
+- 서버 타임존(Asia/Seoul) 의존 제거
+
+## [2026-02-25] 032350 DB 불일치 수동 수정
+
+### 문제
+KIS_SYNC_032350_20260220 레코드의 sync 버그:
+- `exit_quantity = 71` (실제: 32주 손절)
+- `pnl = -50,026` (실제: -22,548원)
+- `trade_events` SELL pnl도 -50,026 (잘못된 값)
+
+### 수정 (수동 SQL)
+- `trades.exit_quantity = 32`, `trades.pnl = -22,548`
+- `trade_events.pnl = -22,548`
+- 기준: KIS 정산 API 실거래 내역
+
+## [2026-02-25] SEPA sector_momentum 항상 0 버그 수정 (commit `7d64c55`)
+
+### 문제
+`swing_screener.py`에서 `sector_momentum` 필드를 계산하지 않음
+→ `ind.get("sector_momentum", 0)` 항상 0 → SEPA 최대 80pt (명목 90pt)
+
+### 수정
+`sector_momentum 10pt` → `change_20d` 기반 단기 모멘텀 10pt로 대체
+- `> 20%` → 10pt, `> 10%` → 7pt, `> 5%` → 4pt, `> 0%` → 2pt
+- `change_20d`는 `technical.py:97`에서 이미 계산됨
