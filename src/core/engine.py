@@ -1356,10 +1356,12 @@ class RiskManager:
             base_pct, max_pct, pool_equity = self._get_hybrid_params(signal.strategy, equity)
         else:
             # 전략별 종목당 비중 차등 적용
+            # Half-Kelly 기반: 승률75%×R:R2.3 → Full Kelly 64% → Half 32% → 전략별 조정
+            # 장중 신규신호 없음 + 전역 ATR손절 + daily circuit breaker로 리스크 커버
             strategy_position_pct = {
-                StrategyType.SEPA_TREND: 15.0,          # SEPA: 15% (검증된 고승률)
-                StrategyType.MOMENTUM_BREAKOUT: 7.0,    # 모멘텀: 7% (승률 개선 중)
-                StrategyType.RSI2_REVERSAL: 10.0,       # RSI2: 10% (테스트)
+                StrategyType.SEPA_TREND: 25.0,          # SEPA: 25% (15→25, Half-Kelly, strategy_allocation 40%로 자연 캡)
+                StrategyType.MOMENTUM_BREAKOUT: 7.0,    # 모멘텀: 7% (비활성화)
+                StrategyType.RSI2_REVERSAL: 20.0,       # RSI2: 20% (10→20, strategy_allocation 60%로 자연 캡)
                 StrategyType.THEME_CHASING: 7.0,        # 테마: 7%
                 StrategyType.GAP_AND_GO: 7.0,           # 갭: 7%
             }

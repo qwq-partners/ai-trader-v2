@@ -31,7 +31,7 @@ risk:
 
   # === 포지션 관리 (진짜 스윙 전략: 집중 투자) ===
   base_position_pct: 25.0        # 기본 포지션 비율 25% (18→25: 스윙 집중 투자)
-  max_position_pct: 35.0         # 최대 포지션 비율 35%
+  max_position_pct: 28.0         # 최대 포지션 비율 28% (35→28: 단일 종목 오버 방지, Half-Kelly 상한)
   max_positions: 7               # 최대 동시 포지션 7개
   min_cash_reserve_pct: 5.0      # 최소 현금 보유 5%
   min_position_value: 200000     # 최소 포지션 금액 (20만원)
