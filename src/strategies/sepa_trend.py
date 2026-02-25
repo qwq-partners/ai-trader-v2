@@ -69,10 +69,12 @@ class SEPATrendStrategy(BaseStrategy):
             Signal 리스트
         """
         signals = []
+        all_scores: List[tuple] = []  # (score, symbol, name) — 분포 확인용
 
         for candidate in candidates:
             try:
                 score = self._calculate_sepa_score(candidate)
+                all_scores.append((score, candidate.symbol, candidate.name))
 
                 if score < self.config.min_score:
                     continue
@@ -123,6 +125,30 @@ class SEPATrendStrategy(BaseStrategy):
 
             except Exception as e:
                 logger.warning(f"[SEPA] {candidate.symbol} 시그널 생성 실패: {e}")
+
+        # 점수 분포 요약 로그 (min_score 미달 원인 파악용)
+        if all_scores:
+            all_scores.sort(reverse=True)
+            top = all_scores[:10]
+            passed = sum(1 for s, _, _ in all_scores if s >= self.config.min_score)
+            logger.info(
+                f"[SEPA] 점수분포: 전체={len(all_scores)}개, "
+                f"통과={passed}개 (min={self.config.min_score}), "
+                f"평균={sum(s for s,_,_ in all_scores)/len(all_scores):.1f}, "
+                f"최고={all_scores[0][0]:.1f}"
+            )
+            logger.info(f"[SEPA] 상위 10개 점수:")
+            for score, sym, name in top:
+                lci = None
+                # lci 찾기
+                for c in candidates:
+                    if c.symbol == sym:
+                        lci = c.indicators.get("lci")
+                        break
+                mark = "✅" if score >= self.config.min_score else "  "
+                logger.info(
+                    f"  {mark} {sym} {name}: {score:.1f}pt  LCI={lci:.2f if lci is not None else 'None'}"
+                )
 
         return signals
 
