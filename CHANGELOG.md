@@ -2,6 +2,18 @@
 
 ---
 
+## [2026-02-25] ExitStage 날짜 경계 유실 버그 수정
+
+### commit `179ecd2`
+- `exit_manager.py` `_load_persisted_states()`: 당일 파일 없으면 최근 3일 파일 폴백
+  - 날짜 경계 문제 대응: 장 마감 후 재시작 시 fill 없음 → 당일 파일 미생성 → 다음날 재시작 시 stage 오추정
+  - `exit_stages_오늘.json` → `exit_stages_어제.json` → `exit_stages_그제.json` 순서 탐색
+- `register_position()` 마지막에 `_persist_states()` 즉시 호출
+  - 봇 시작 시 포지션 등록 즉시 오늘 날짜 파일 생성 → 이후 재시작해도 오늘 파일에서 복원
+- `timedelta` import 추가
+
+---
+
 ## [2026-02-25] 익절 로직 개선 (stage 영속화 + 파라미터 현실화)
 
 ### commit `11275c7`
