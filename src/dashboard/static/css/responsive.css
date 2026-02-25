@@ -1,0 +1,135 @@
+/* ===========================
+   AI Trader v2 - Responsive
+   =========================== */
+
+/* -- Navigation -- */
+@media (max-width: 768px) {
+  .nav-container {
+    flex-direction: column !important;
+    gap: 8px !important;
+    padding: 10px 16px !important;
+  }
+  .nav-top-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+  }
+  .nav-links {
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    width: 100%;
+    padding-bottom: 2px;
+  }
+  .nav-links::-webkit-scrollbar { display: none; }
+  .nav-pill {
+    white-space: nowrap;
+    padding: 6px 12px !important;
+    font-size: 0.75rem !important;
+    flex-shrink: 0;
+  }
+  .nav-status {
+    font-size: 0.7rem !important;
+    gap: 8px !important;
+  }
+  #sb-uptime { display: none !important; }
+  #sb-session { font-size: 0.68rem !important; }
+}
+
+/* -- Main Container -- */
+@media (max-width: 768px) {
+  main {
+    padding: 12px !important;
+  }
+  .main-container {
+    padding: 12px !important;
+  }
+}
+
+/* -- Card -- */
+@media (max-width: 768px) {
+  .card {
+    border-radius: 12px !important;
+  }
+  .card-inner {
+    padding: 16px !important;
+  }
+}
+
+/* -- 2-col grid -> 1-col -- */
+@media (max-width: 768px) {
+  .grid-2col {
+    grid-template-columns: 1fr !important;
+  }
+  .grid-5col {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+  .grid-auto {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)) !important;
+  }
+}
+
+/* -- Hero numbers -- */
+@media (max-width: 768px) {
+  .value-hero {
+    font-size: 1.4rem !important;
+  }
+}
+
+/* -- Tables -- */
+@media (max-width: 768px) {
+  table th, table td {
+    font-size: 0.72rem !important;
+    padding-left: 6px !important;
+    padding-right: 6px !important;
+  }
+  .col-hide-mobile {
+    display: none !important;
+  }
+}
+@media (max-width: 480px) {
+  table th, table td {
+    font-size: 0.65rem !important;
+  }
+}
+
+/* -- Position table column hiding (mobile) -- */
+@media (max-width: 768px) {
+  #positions-table .col-avg-price,
+  #positions-table .col-quantity,
+  #positions-table .col-market-value,
+  #positions-table .col-holding { display: none !important; }
+}
+
+/* -- Event log height -- */
+@media (max-width: 768px) {
+  #event-log { max-height: 200px !important; }
+}
+
+/* -- Metric row font -- */
+@media (max-width: 480px) {
+  .metric-label { font-size: 0.75rem !important; }
+  .metric-value { font-size: 0.8rem !important; }
+}
+
+/* -- Plotly chart -- */
+@media (max-width: 768px) {
+  #pie-chart { height: 120px !important; }
+}
+
+/* -- Settings page -- */
+@media (max-width: 768px) {
+  .settings-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* -- Performance page -- */
+@media (max-width: 768px) {
+  .perf-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+}

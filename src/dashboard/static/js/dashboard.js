@@ -184,12 +184,12 @@ function renderSortedPositions() {
             <td class="py-2 pr-3 font-medium text-white" style="white-space:nowrap;">${esc(pos.name || pos.symbol)} <span style="color:var(--text-muted); font-size:0.72rem; font-weight:400;">${esc(pos.symbol)}</span></td>
             <td class="py-2 pr-3" style="font-size:0.75rem; color:var(--accent-purple);">${esc(stName)}</td>
             <td class="py-2 pr-3 text-right mono">${formatNumber(pos.current_price)}</td>
-            <td class="py-2 pr-3 text-right mono text-gray-400">${formatNumber(pos.avg_price)}</td>
-            <td class="py-2 pr-3 text-right mono">${pos.quantity}</td>
-            <td class="py-2 pr-3 text-right mono" style="color:var(--text-secondary);">${formatNumber(pos.market_value || (pos.current_price * pos.quantity))}</td>
+            <td class="col-avg-price py-2 pr-3 text-right mono text-gray-400">${formatNumber(pos.avg_price)}</td>
+            <td class="col-quantity py-2 pr-3 text-right mono">${pos.quantity}</td>
+            <td class="col-market-value py-2 pr-3 text-right mono" style="color:var(--text-secondary);">${formatNumber(pos.market_value || (pos.current_price * pos.quantity))}</td>
             <td class="py-2 pr-3 text-right mono ${pnlCls}" title="평가손익: ${formatPnl(pos.unrealized_pnl)}">${formatPnl(netPnl)}</td>
             <td class="py-2 pr-3 text-right mono ${pnlCls}" title="평가수익률: ${formatPct(pos.unrealized_pnl_pct)}">${formatPct(netPct)}</td>
-            <td class="py-2 pr-3 mono" style="font-size:0.75rem; color:var(--text-secondary);">${holdStr}</td>
+            <td class="col-holding py-2 pr-3 mono" style="font-size:0.75rem; color:var(--text-secondary);">${holdStr}</td>
             <td class="py-2">${stageLabel}</td>
         </tr>`;
     }).join('');
