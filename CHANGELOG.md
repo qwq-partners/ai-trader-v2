@@ -836,3 +836,19 @@ for stock in result:
 - 기존 스캘핑 중심 → 스윙 중심 전략으로 전환
 - 종목 수 확대 + 평균 보유 금액 증가
 - 목표: 일 1% → **주 5%** 수익률
+
+## [2026-02-25] daily_pnl 재시작 리셋 버그 수정
+
+### 문제
+스케줄러 루프 변수 `last_daily_reset=None`(재시작 초기값)이 `None != today`를 만족시켜
+**장중 봇 재시작 시에도 `reset_daily_stats()`가 발동**, 방금 복원한 `daily_pnl`을 0으로 덮어씀.
+
+증상: 재시작 후 `daily_pnl = 908,908원` (실제 132,044원 대비 7배 부풀림)
+
+### 수정 (commit `2aa66a6`)
+`bot_schedulers.py` 스케줄러 루프 첫 진입 시 JSON 파일 날짜 확인:
+- JSON에 오늘 날짜 있음 → "재시작 감지" 로그 + `last_daily_reset=today` → 리셋 생략
+- JSON에 오늘 날짜 없음 (자정 전환 or 첫 시작) → 정상 리셋 실행
+
+### 검증
+재시작 후 `realized_daily_pnl = 132,044원` 정상 표시 확인
