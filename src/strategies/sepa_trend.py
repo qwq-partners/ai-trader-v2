@@ -267,9 +267,20 @@ class SEPATrendStrategy(BaseStrategy):
         elif vol_ratio > 1.0:
             score += 4
 
-        # 5. 섹터 모멘텀 (10점)
-        sector_score = ind.get("sector_momentum", 0)
-        if sector_score > 0:
-            score += min(sector_score / 10, 10)
+        # 5. 단기 가격 모멘텀 (10점) — change_20d 기반 (섹터 데이터 미제공으로 대체)
+        # 스크리너에서 sector_momentum 미계산 → change_20d(20일 수익률)로 대체
+        change_20d = ind.get("change_20d", 0) or 0
+        try:
+            change_20d = float(change_20d)
+        except (TypeError, ValueError):
+            change_20d = 0.0
+        if change_20d > 20:
+            score += 10
+        elif change_20d > 10:
+            score += 7
+        elif change_20d > 5:
+            score += 4
+        elif change_20d > 0:
+            score += 2
 
         return min(score, 100)
