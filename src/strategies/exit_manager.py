@@ -23,7 +23,7 @@ ATR 기반 동적 손절 (축소하여 손익비 개선):
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -131,18 +131,27 @@ class ExitManager:
     # ------------------------------------------------------------------ #
 
     def _load_persisted_states(self) -> Dict[str, Dict]:
-        """당일 stage 파일 로드. 파일 없거나 파싱 실패 시 빈 dict 반환."""
-        try:
-            if self._stage_file.exists():
-                with open(self._stage_file, "r") as f:
+        """당일 stage 파일 로드. 없으면 최근 3일 파일에서 폴백 (날짜 경계 대응).
+
+        날짜 경계 문제: 당일 파일이 없으면 (재시작 후 fill 없었던 경우 등)
+        전일 파일에서 stage를 복원해 포지션 stage 오추정을 방지.
+        """
+        _cache_dir = self._stage_file.parent
+        for delta in range(0, 3):
+            candidate = _cache_dir / f"exit_stages_{(date.today() - timedelta(days=delta)).isoformat()}.json"
+            if not candidate.exists():
+                continue
+            try:
+                with open(candidate, "r") as f:
                     data = json.load(f)
-                logger.info(
-                    f"[ExitManager] stage 복원 파일 로드: {len(data)}종목 "
-                    f"({self._stage_file.name})"
-                )
-                return data
-        except Exception as e:
-            logger.warning(f"[ExitManager] stage 파일 로드 실패: {e}")
+                if data:
+                    logger.info(
+                        f"[ExitManager] stage 복원 파일 로드: {len(data)}종목 "
+                        f"({candidate.name})"
+                    )
+                    return data
+            except Exception as e:
+                logger.warning(f"[ExitManager] stage 파일 로드 실패({candidate.name}): {e}")
         return {}
 
     def _persist_states(self) -> None:
@@ -317,6 +326,9 @@ class ExitManager:
             f"TS={trailing_stop_pct or self.config.trailing_stop_pct}%, "
             f"stage={initial_stage.value})"
         )
+
+        # 등록 즉시 파일 저장 (날짜 경계 넘어도 내일 봇 재시작 시 정확히 복원)
+        self._persist_states()
 
     def update_price(self, symbol: str, current_price: Decimal) -> Optional[Tuple[str, int, str]]:
         """
