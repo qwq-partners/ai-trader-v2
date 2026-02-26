@@ -147,7 +147,7 @@ class SEPATrendStrategy(BaseStrategy):
                         break
                 mark = "✅" if score >= self.config.min_score else "  "
                 logger.info(
-                    f"  {mark} {sym} {name}: {score:.1f}pt  LCI={lci:.2f if lci is not None else 'None'}"
+                    f"  {mark} {sym} {name}: {score:.1f}pt  LCI={f'{lci:.2f}' if lci is not None else 'None'}"
                 )
 
         return signals
