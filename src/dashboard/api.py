@@ -40,6 +40,7 @@ def setup_api_routes(app: web.Application, data_collector):
     app.router.add_get("/api/daily-review", handler.get_daily_review)
     app.router.add_get("/api/daily-review/dates", handler.get_daily_review_dates)
     app.router.add_post("/api/evolution/apply", handler.apply_evolution_parameter)
+    app.router.add_post("/api/signals/execute", handler.execute_pending_signals)
     app.router.add_get("/api/trade-events", handler.get_trade_events)
     app.router.add_get("/api/daily-settlement", handler.get_daily_settlement)
     app.router.add_get("/api/app/latest", handler.get_latest_app)
@@ -254,6 +255,27 @@ class APIHandler:
                 {"success": False, "message": str(e)},
                 status=500,
             )
+
+    async def execute_pending_signals(self, request: web.Request) -> web.Response:
+        """
+        대기 시그널 즉시 실행 (수동 트리거)
+
+        POST /api/signals/execute
+        """
+        try:
+            bot = self.dc.bot
+            batch_analyzer = getattr(bot, "batch_analyzer", None)
+            if batch_analyzer is None:
+                return web.json_response(
+                    {"success": False, "message": "batch_analyzer 미초기화"},
+                    status=503,
+                )
+            logger.info("[대시보드] 대기 시그널 수동 실행 트리거")
+            asyncio.create_task(batch_analyzer.execute_pending_signals())
+            return web.json_response({"success": True, "message": "시그널 실행 시작 (비동기)"})
+        except Exception as e:
+            logger.error(f"[대시보드] 시그널 실행 오류: {e}")
+            return web.json_response({"success": False, "message": str(e)}, status=500)
 
     async def get_trade_events(self, request: web.Request) -> web.Response:
         """거래 이벤트 로그 조회"""
