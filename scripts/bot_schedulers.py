@@ -1152,6 +1152,164 @@ class SchedulerMixin:
                     except Exception as e:
                         logger.error(f"[스크리닝] 자동진입 오류: {e}", exc_info=True)
 
+                # ── 장중 품질 진입 (intraday_buy Option C) ───────────────────
+                _ib_cfg = self.config.get("intraday_buy", {})
+                _ib_enabled = _ib_cfg.get("enabled", False)
+                _ib_start   = _ib_cfg.get("trading_start_time", "10:00")
+                _ib_end     = _ib_cfg.get("trading_end_time", "14:30")
+                _ib_min_score    = float(_ib_cfg.get("min_score", 90))
+                _ib_max_change   = float(_ib_cfg.get("max_change_pct", 3.0))
+                _ib_min_cash_ratio = float(_ib_cfg.get("min_cash_ratio", 0.20))
+                _ib_max_entries  = int(_ib_cfg.get("max_daily_entries", 3))
+
+                if (screened
+                        and _ib_enabled
+                        and current_session == MarketSession.REGULAR
+                        and self.engine and self.broker
+                        and _ib_start <= datetime.now().strftime("%H:%M") <= _ib_end):
+                    try:
+                        _ib_now = datetime.now()
+                        _ib_total = float(self.engine.portfolio.total_equity)
+                        _ib_cash  = float(self.engine.get_available_cash())
+                        _ib_cash_ratio = _ib_cash / _ib_total if _ib_total > 0 else 0
+
+                        if _ib_cash_ratio < _ib_min_cash_ratio:
+                            logger.debug(
+                                f"[장중품질] 현금 부족: {_ib_cash_ratio:.1%} "
+                                f"< {_ib_min_cash_ratio:.1%} → 스킵"
+                            )
+                        else:
+                            _ib_held    = set(self.engine.portfolio.positions.keys())
+                            _ib_rm      = self.engine.risk_manager
+                            _ib_stopped = set(_ib_rm._stop_loss_today) if _ib_rm and hasattr(_ib_rm, '_stop_loss_today') else set()
+                            _ib_exclude = _ib_held | _ib_stopped
+
+                            # 오늘 장중품질 진입 카운터 초기화
+                            if not hasattr(self, '_ib_daily_count'):
+                                self._ib_daily_count = {}
+                            _ib_today_key = _ib_now.date().isoformat()
+                            _ib_today_cnt = self._ib_daily_count.get(_ib_today_key, 0)
+
+                            # 후보 필터: 점수 ≥ 90 · 등락 0~3% · 미보유 · 쿨다운 없음
+                            _ib_candidates = [
+                                s for s in screened
+                                if s.score >= _ib_min_score
+                                and 0.0 <= s.change_pct <= _ib_max_change
+                                and s.symbol not in _ib_exclude
+                                and s.symbol not in self._screening_signal_cooldown
+                            ]
+
+                            logger.info(
+                                f"[장중품질] 후보 {len(_ib_candidates)}개 | "
+                                f"현금={_ib_cash_ratio:.1%} ({_ib_cash:,.0f}) | "
+                                f"오늘진입={_ib_today_cnt}/{_ib_max_entries}"
+                            )
+
+                            for _ib_stock in _ib_candidates[:5]:
+                                if _ib_today_cnt >= _ib_max_entries:
+                                    break
+
+                                # RSI 과열 체크 (reasons 파싱)
+                                _ib_rsi_m = re.search(r"RSI[:\s]*([\d.]+)", " ".join(_ib_stock.reasons))
+                                if _ib_rsi_m and float(_ib_rsi_m.group(1)) > 75:
+                                    logger.info(f"[장중품질] {_ib_stock.symbol} 탈락: RSI 과열 ({_ib_rsi_m.group(1)})")
+                                    continue
+
+                                # 수급 확인 (외국인 or 기관)
+                                if not (_ib_stock.has_foreign_buying or _ib_stock.has_inst_buying):
+                                    logger.info(f"[장중품질] {_ib_stock.symbol} 탈락: 수급 미확인")
+                                    continue
+
+                                # 실시간 가격 및 등락률 재확인
+                                try:
+                                    _ib_quote = await self.broker.get_quote(_ib_stock.symbol)
+                                except Exception as _qe:
+                                    logger.debug(f"[장중품질] {_ib_stock.symbol} 호가 조회 실패: {_qe}")
+                                    continue
+                                if not _ib_quote or _ib_quote.get("price", 0) <= 0:
+                                    continue
+
+                                _ib_rt_price  = _ib_quote["price"]
+                                _ib_rt_change = _ib_quote.get("change_pct", 0)
+
+                                if not (0.0 <= _ib_rt_change <= _ib_max_change):
+                                    logger.info(
+                                        f"[장중품질] {_ib_stock.symbol} 탈락: "
+                                        f"실시간 등락 {_ib_rt_change:+.1f}% ≠ 0~{_ib_max_change}%"
+                                    )
+                                    continue
+
+                                # 뉴스/공시 검증
+                                if self._stock_validator:
+                                    try:
+                                        _ib_val = await self._stock_validator.validate(
+                                            symbol=_ib_stock.symbol,
+                                            stock_name=_ib_stock.name,
+                                        )
+                                        if not _ib_val.approved:
+                                            logger.info(
+                                                f"[장중품질] {_ib_stock.symbol} 탈락: {_ib_val.block_reason}"
+                                            )
+                                            continue
+                                    except Exception:
+                                        pass
+
+                                # ATR 기반 손절/목표가
+                                _ib_atr = 4.0
+                                for _r in _ib_stock.reasons:
+                                    if "ATR:" in _r:
+                                        try:
+                                            _ib_atr = float(_r.split("ATR:")[1].replace("%)", "").strip())
+                                        except Exception:
+                                            pass
+                                _ib_stop   = _ib_rt_price * (1 - min(_ib_atr, 6.0) / 100)
+                                _ib_target = _ib_rt_price * (1 + min(_ib_atr * 1.5, 9.0) / 100)
+
+                                _ib_signal = Signal(
+                                    symbol=_ib_stock.symbol,
+                                    side=OrderSide.BUY,
+                                    strength=SignalStrength.STRONG,
+                                    strategy=StrategyType.SEPA_TREND,
+                                    price=Decimal(str(_ib_rt_price)),
+                                    target_price=Decimal(str(_ib_target)),
+                                    stop_price=Decimal(str(_ib_stop)),
+                                    score=_ib_stock.score,
+                                    confidence=min(1.0, _ib_stock.score / 100.0),
+                                    reason=(
+                                        f"장중품질진입: {_ib_stock.name} "
+                                        f"점수={_ib_stock.score:.0f} 등락={_ib_rt_change:+.1f}%"
+                                    ),
+                                    metadata={
+                                        "source": "intraday_quality",
+                                        "name": _ib_stock.name,
+                                        "screening_score": _ib_stock.score,
+                                        "rt_change_pct": _ib_rt_change,
+                                        "atr_pct": _ib_atr,
+                                    },
+                                )
+
+                                # 종목명 캐시
+                                _nc = getattr(self.engine, '_stock_name_cache', None)
+                                if _nc is not None and _ib_stock.name:
+                                    _nc[_ib_stock.symbol] = _ib_stock.name
+
+                                await self.engine.on_signal(_ib_signal)
+
+                                # 쿨다운 등록 (30분) + 카운터 갱신
+                                self._screening_signal_cooldown[_ib_stock.symbol] = _ib_now
+                                _ib_today_cnt += 1
+                                self._ib_daily_count[_ib_today_key] = _ib_today_cnt
+
+                                logger.info(
+                                    f"[장중품질] ✅ 신호 발행: {_ib_stock.symbol} {_ib_stock.name} "
+                                    f"점수={_ib_stock.score:.0f} 등락={_ib_rt_change:+.1f}% "
+                                    f"가격={_ib_rt_price:,} ({_ib_today_cnt}/{_ib_max_entries})"
+                                )
+                                await asyncio.sleep(0.3)
+
+                    except Exception as _ib_e:
+                        logger.warning(f"[장중품질] 오류: {_ib_e}", exc_info=True)
+
                 # 다음 스캔까지 대기
                 await asyncio.sleep(self._screening_interval)
 

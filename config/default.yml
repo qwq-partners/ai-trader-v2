@@ -263,6 +263,17 @@ screener:
   min_market_cap: 1000
 
 
+# 장중 품질 진입 (Option C: 고점수 + 미과열 자동 매수)
+intraday_buy:
+  enabled: true
+  min_score: 90              # 최소 점수 (고품질 필터)
+  max_change_pct: 3.0        # 당일 등락 상한 (%) — 이미 급등한 종목 추격 방지
+  min_cash_ratio: 0.20       # 총자산 대비 최소 현금 비율
+  max_daily_entries: 3       # 하루 최대 진입 횟수
+  trading_start_time: "10:00"  # 장초반 갭 안정화 후 시작
+  trading_end_time: "14:30"    # 마감 전 포지션 오픈 회피
+
+
 # 테마 탐지기
 theme_detector:
   scan_interval_minutes: 10       # 테마 스캔 10분 (15→10: 테마 초기 포착)
