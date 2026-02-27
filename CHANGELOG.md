@@ -2,6 +2,26 @@
 
 ---
 
+## [2026-02-27] daily CB 매수 차단 버그 수정
+
+### commit `ea93cd2`
+
+**증상**: 전일 고점 포지션들이 장 시작 조정 시 신규 매수 신호 전부 차단
+- SEPA 5종목: `전략예산소진: sepa_trend(50%)` — 기존 포지션이 이미 50% 한도 초과
+- strategic_swing 3종목(삼성전자·두산에너빌리티·한화오션 점수 93): `일일 손실 한도 도달 (-2.1%)`
+
+**원인 1**: `evolved_overrides.yml`에 evolution_scheduler가 설정한 `daily_max_loss_pct: 2.0`이 남아있어 default.yml 5.0%가 아닌 2.0%로 작동
+
+**원인 2**: `effective_daily_pnl = 실현 + (현재미실현 - 장시작미실현)` 계산에 미실현 변화 포함 → 전일 수익 포지션이 장 시작에 조정받기만 해도 -2.1%로 CB 발동
+
+**수정**:
+- `evolved_overrides.yml`: `daily_max_loss_pct: 2.0` 제거 → default.yml 5.0% 적용
+- `engine.py` `can_open_position`: `effective_daily_pnl` → `daily_pnl` (실현 손익만)
+- `risk/manager.py` `_is_daily_loss_limit_hit`: `effective_daily_pnl` → `daily_pnl` (실현 손익만)
+- 모니터링/알림(`on_fill`)은 기존대로 effective_daily_pnl 유지
+
+---
+
 ## [2026-02-25] exit_manager P2 수정 (ExitConfig 기본값 + TRAILING 영속화)
 
 ### commit `6ee1c69`
