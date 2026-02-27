@@ -1295,7 +1295,8 @@ class SchedulerMixin:
                                 if _nc is not None and _ib_stock.name:
                                     _nc[_ib_stock.symbol] = _ib_stock.name
 
-                                await self.engine.on_signal(_ib_signal)
+                                _ib_event = SignalEvent.from_signal(_ib_signal, source="intraday_quality")
+                                await self.engine.emit(_ib_event)
 
                                 # 쿨다운 등록 (30분) + 카운터 갱신
                                 self._screening_signal_cooldown[_ib_stock.symbol] = _ib_now
