@@ -55,6 +55,7 @@ class ScreenedStock:
     screened_at: datetime = field(default_factory=datetime.now)
     has_foreign_buying: bool = False  # 외국인 순매수
     has_inst_buying: bool = False     # 기관 순매수
+    rsi: Optional[float] = None      # RSI-14 (장중품질 과열 필터용)
 
     def __hash__(self):
         return hash(self.symbol)
@@ -100,7 +101,7 @@ class StockScreener:
         # 캐시
         self._cache: Dict[str, List[ScreenedStock]] = {}
         self._cache_time: Dict[str, datetime] = {}
-        self._cache_ttl = 1800  # 30분 (프리장 중 캐시 유지)
+        self._cache_ttl = 300   # 5분 (스크리너 주기와 동기화 — 수급 데이터 실시간성 확보)
 
         # 종목코드→이름 역매핑 (O(1) 조회용)
         # stock_master가 있으면 DB 캐시 활용, 없으면 KNOWN_STOCKS 폴백
@@ -714,6 +715,7 @@ class StockScreener:
                     _rsi_14 = TechnicalIndicators._rsi(closes, 14)
                     if _rsi_14 is not None:
                         reasons.append(f"RSI:{_rsi_14:.1f}")
+                        all_stocks[symbol].rsi = _rsi_14  # 전용 필드에도 저장 (regex 파싱 불필요)
                         if _rsi_14 > 75:
                             bonus -= 10
                         elif _rsi_14 > 70:

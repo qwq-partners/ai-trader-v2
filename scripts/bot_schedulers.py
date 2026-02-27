@@ -1209,11 +1209,13 @@ class SchedulerMixin:
                                 if _ib_today_cnt >= _ib_max_entries:
                                     break
 
-                                # RSI 과열 체크 (reasons 파싱)
-                                _ib_rsi_m = re.search(r"RSI[:\s]*([\d.]+)", " ".join(_ib_stock.reasons))
-                                if _ib_rsi_m and float(_ib_rsi_m.group(1)) > 75:
-                                    logger.info(f"[장중품질] {_ib_stock.symbol} 탈락: RSI 과열 ({_ib_rsi_m.group(1)})")
+                                # RSI 과열 체크 (ScreenedStock.rsi 전용 필드 사용 — reasons 파싱 불필요)
+                                _ib_rsi = _ib_stock.rsi
+                                if _ib_rsi is not None and _ib_rsi > 75:
+                                    logger.info(f"[장중품질] {_ib_stock.symbol} 탈락: RSI 과열 ({_ib_rsi:.1f})")
                                     continue
+                                if _ib_rsi is None:
+                                    logger.debug(f"[장중품질] {_ib_stock.symbol} RSI 데이터 없음 → 과열 체크 스킵")
 
                                 # 수급 확인 (외국인 or 기관)
                                 if not (_ib_stock.has_foreign_buying or _ib_stock.has_inst_buying):
