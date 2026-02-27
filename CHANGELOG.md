@@ -2,7 +2,12 @@
 
 ---
 
-## [2026-02-28] 주간 리밸런싱 + 대시보드 모바일 반응형 전체 완성
+## [2026-02-28] ExitStage 룩백 확장 + 주간 리밸런싱 + 대시보드 모바일 반응형 전체 완성
+
+### commit `4147852` (ExitStage 폴백 룩백 확장)
+- `_load_persisted_states()` range(0,3) → range(0,7)
+- 주말 2일 + 대체공휴일 1일 + 여유 = 연휴 최대 5일까지 커버
+- 3/2 대체공휴일 후 3/3 재시작 시 2/27 exit_stages 파일 미발견 방지
 
 ### commit `80087a4` (주간 리밸런싱)
 - `evolved_overrides.yml` strategy_allocation 자동 조정 (토요일 00:01 실행)
