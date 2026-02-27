@@ -2,6 +2,18 @@
 
 ---
 
+## [2026-02-27] 장중품질 진입 — 수급 캐시 5분 단축 + RSI 전용 필드
+
+### commit `3d5939e`
+
+- `_cache_ttl`: 1800(30분) → 300(5분) — 외국인/기관 수급 데이터 최대 30분 지연 제거
+- `ScreenedStock`에 `rsi: Optional[float]` 전용 필드 추가
+- `_apply_momentum_filter`: RSI 계산 후 `.rsi` 필드에도 저장 (reasons 문자열 파싱 불필요)
+- `bot_schedulers.py` 장중품질: `re.search(reasons)` → `_ib_stock.rsi` 직접 참조
+- RSI None 시 debug 로그 (조용히 통과하던 것 가시화)
+
+---
+
 ## [2026-02-27] daily CB 매수 차단 버그 수정
 
 ### commit `ea93cd2`
