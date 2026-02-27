@@ -1153,7 +1153,7 @@ class SchedulerMixin:
                         logger.error(f"[스크리닝] 자동진입 오류: {e}", exc_info=True)
 
                 # ── 장중 품질 진입 (intraday_buy Option C) ───────────────────
-                _ib_cfg = self.config.get("intraday_buy", {})
+                _ib_cfg = self.config.get("intraday_buy") or {}
                 _ib_enabled = _ib_cfg.get("enabled", False)
                 _ib_start   = _ib_cfg.get("trading_start_time", "10:00")
                 _ib_end     = _ib_cfg.get("trading_end_time", "14:30")
