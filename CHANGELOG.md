@@ -2,6 +2,22 @@
 
 ---
 
+## [2026-02-28] 주간 리밸런싱 + 대시보드 모바일 반응형 전체 완성
+
+### commit `80087a4` (주간 리밸런싱)
+- `evolved_overrides.yml` strategy_allocation 자동 조정 (토요일 00:01 실행)
+  - sepa_trend: 50% → 65%, rsi2_reversal: 40% → 25%
+  - momentum_breakout/gap_and_go/theme_chasing: 각 5% (enabled=false, 실거래 없음)
+
+### commit `61144db` (대시보드 모바일 반응형)
+- **성과(performance)**: 헤더 탭 flex-wrap + 전략 테이블 `승/패` 모바일 숨김
+- **자산(equity)**: 일자별 테이블 `현금/포지션/거래` 3컬럼 모바일 숨김
+- **테마(themes)**: 종목 테이블 `거래량비/선정사유` 모바일 숨김
+- **복기(evolution)**: 전략 성과 `승/패` + 파라미터 이력 `시간/→/사유` 모바일 숨김
+- JS 캐시 버스팅: performance.js v3, equity.js v2
+
+---
+
 ## [2026-02-27] 장중품질 진입 — 수급 캐시 5분 단축 + RSI 전용 필드
 
 ### commit `3d5939e`
