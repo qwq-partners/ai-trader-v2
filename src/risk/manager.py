@@ -225,10 +225,10 @@ class RiskManager:
         if symbol in self._stop_loss_today:
             return False, "당일 손절 종목 재진입 금지"
 
-        # 2. 일일 손실 한도 체크 (차등 리스크 관리)
+        # 2. 일일 손실 한도 체크 (차등 리스크 관리, 실현 손익 기준)
         if self._is_daily_loss_limit_hit(portfolio, strategy_type):
             equity = portfolio.total_equity
-            effective_pnl = getattr(portfolio, 'effective_daily_pnl', portfolio.daily_pnl)
+            effective_pnl = portfolio.daily_pnl  # 실현 손익만
             daily_pnl_pct = float(effective_pnl / equity * 100) if equity > 0 else 0.0
             hard_stop_pct = max(self.config.daily_max_loss_pct * 2.5, 5.0)
             if daily_pnl_pct <= -hard_stop_pct:
@@ -261,8 +261,8 @@ class RiskManager:
         """
         일일 손실 한도 도달 여부 (차등 리스크 관리)
 
-        변경: 실현 손익만이 아닌 미실현 손익도 포함하여 체크
-        (기존: portfolio.daily_pnl, 변경: effective_daily_pnl)
+        매수 차단 기준: 실현 손익만 사용
+        (미실현 변화로 인한 오탐 방지 — 전일 고점 종목이 조정받을 때 신규 매수 차단 방지)
 
         Args:
             portfolio: 포트폴리오
@@ -275,8 +275,8 @@ class RiskManager:
         if equity <= 0:
             return False
 
-        # 변경: 미실현 손익 포함 (실현+미실현 합산으로 손실 한도 정확히 체크)
-        effective_pnl = getattr(portfolio, 'effective_daily_pnl', portfolio.daily_pnl)
+        # 실현 손익만 기준 (미실현 변화 제외)
+        effective_pnl = portfolio.daily_pnl
         daily_pnl_pct = float(effective_pnl / equity * 100)
 
         # 1단계: 손실한도 ~ hard_stop → 방어적 전략만 허용

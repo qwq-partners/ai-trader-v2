@@ -1,5 +1,5 @@
 risk_config:
-  daily_max_loss_pct: 2.0
+  # daily_max_loss_pct: evolution_scheduler 설정 제거 → default.yml 5.0% 적용
   daily_max_trades: 30
   default_stop_loss_pct: 4.0
   base_position_pct: 10.0
