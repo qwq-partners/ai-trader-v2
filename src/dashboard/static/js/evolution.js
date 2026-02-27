@@ -318,8 +318,8 @@ function renderStrategyPerformance(stratPerf) {
         return '<tr style="border-bottom: 1px solid var(--border-subtle);">' +
             '<td style="padding:10px 12px 10px 0;"><span class="badge badge-purple" style="font-size:0.65rem;">' + escapeHtml(strategy) + '</span></td>' +
             '<td style="padding:10px 12px 10px 0;text-align:right;" class="mono">' + perf.trades + '</td>' +
-            '<td style="padding:10px 12px 10px 0;text-align:right;color:var(--accent-green);" class="mono">' + perf.wins + '</td>' +
-            '<td style="padding:10px 12px 10px 0;text-align:right;color:var(--accent-red);" class="mono">' + perf.losses + '</td>' +
+            '<td style="padding:10px 12px 10px 0;text-align:right;color:var(--accent-green);" class="mono col-hide-mobile">' + perf.wins + '</td>' +
+            '<td style="padding:10px 12px 10px 0;text-align:right;color:var(--accent-red);" class="mono col-hide-mobile">' + perf.losses + '</td>' +
             '<td style="padding:10px 12px 10px 0;text-align:right;color:' + wrColor + ';" class="mono">' + perf.win_rate.toFixed(1) + '%</td>' +
             '<td style="padding:10px 12px 10px 0;text-align:right;color:' + pnlColor + ';" class="mono">' + (perf.total_pnl >= 0 ? '+' : '') + Number(perf.total_pnl).toLocaleString('ko-KR') + '원</td>' +
             '<td style="padding:10px 0;text-align:right;color:' + pnlColor + ';" class="mono">' + (perf.avg_pnl_pct >= 0 ? '+' : '') + perf.avg_pnl_pct.toFixed(2) + '%</td>' +
@@ -440,13 +440,13 @@ function renderChangeHistory(history) {
     tbody.innerHTML = sorted.map(ch => {
         const ts = ch.timestamp ? formatDateTime(new Date(ch.timestamp)) : '--';
         return '<tr style="border-bottom:1px solid var(--border-subtle);">' +
-            '<td style="padding:10px 12px 10px 0;font-size:0.75rem;color:var(--text-muted);" class="mono">' + ts + '</td>' +
+            '<td style="padding:10px 12px 10px 0;font-size:0.75rem;color:var(--text-muted);" class="mono col-hide-mobile">' + ts + '</td>' +
             '<td style="padding:10px 12px 10px 0;"><span class="badge badge-purple" style="font-size:0.65rem;">' + escapeHtml(ch.strategy || '') + '</span></td>' +
             '<td style="padding:10px 12px 10px 0;font-size:0.82rem;" class="mono">' + escapeHtml(ch.parameter || '') + '</td>' +
             '<td style="padding:10px 12px 10px 0;text-align:right;" class="mono">' + formatValue(ch.as_is) + '</td>' +
-            '<td style="padding:10px 8px;text-align:center;" class="arrow-to">&rarr;</td>' +
+            '<td style="padding:10px 8px;text-align:center;" class="arrow-to col-hide-mobile">&rarr;</td>' +
             '<td style="padding:10px 12px 10px 0;text-align:right;color:var(--accent-cyan);" class="mono">' + formatValue(ch.to_be) + '</td>' +
-            '<td style="padding:10px 12px 10px 0;font-size:0.8rem;color:var(--text-secondary);max-width:200px;">' + escapeHtml(ch.reason || '') + '</td>' +
+            '<td style="padding:10px 12px 10px 0;font-size:0.8rem;color:var(--text-secondary);max-width:200px;" class="col-hide-mobile">' + escapeHtml(ch.reason || '') + '</td>' +
             '<td style="padding:10px 0;text-align:center;">' + effectBadge(ch.is_effective) + '</td>' +
         '</tr>';
     }).join('');

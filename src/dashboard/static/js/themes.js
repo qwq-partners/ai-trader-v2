@@ -80,9 +80,9 @@ function renderScreening(results) {
             <td class="py-2 pr-3 font-medium text-white">${esc(s.symbol)} ${s.name ? `<span class="text-xs text-gray-500">${esc(s.name)}</span>` : ''}</td>
             <td class="py-2 pr-3 text-right mono">${formatNumber(s.price)}</td>
             <td class="py-2 pr-3 text-right mono ${changeCls}">${formatPct(s.change_pct)}</td>
-            <td class="py-2 pr-3 text-right mono">${s.volume_ratio ? s.volume_ratio.toFixed(1) + 'x' : '--'}</td>
+            <td class="py-2 pr-3 text-right mono col-hide-mobile">${s.volume_ratio ? s.volume_ratio.toFixed(1) + 'x' : '--'}</td>
             <td class="py-2 pr-3 text-right"><span class="badge ${scoreBadge}">${s.score.toFixed(0)}</span></td>
-            <td class="py-2 text-xs text-gray-400 max-w-xs truncate">${reasons || '--'}</td>
+            <td class="py-2 text-xs text-gray-400 max-w-xs truncate col-hide-mobile">${reasons || '--'}</td>
         </tr>`;
     }).join('');
 

@@ -290,7 +290,7 @@ function renderStrategyTable(byStrategy) {
         tdTrades.textContent = s.trades;
 
         const tdWL = document.createElement('td');
-        tdWL.className = 'py-2 pr-4 text-right mono';
+        tdWL.className = 'py-2 pr-4 text-right mono col-hide-mobile';
         const winSpan = document.createElement('span');
         winSpan.className = 'text-profit';
         winSpan.textContent = s.wins;

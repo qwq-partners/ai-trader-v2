@@ -223,9 +223,9 @@ function renderEquityTable(snapshots) {
             <td class="py-2 pr-3 text-right mono" style="font-weight: 500;">${formatNumber(s.total_equity)}<span style="font-size:0.68rem; color:var(--text-muted);">원</span></td>
             <td class="py-2 pr-3 text-right mono ${pnlCls}">${formatPnl(s.daily_pnl)}</td>
             <td class="py-2 pr-3 text-right mono ${pnlCls}" style="font-weight: 500;">${formatPct(s.daily_pnl_pct)}</td>
-            <td class="py-2 pr-3 text-right mono" style="color: var(--text-secondary);">${s.cash > 0 ? formatNumber(s.cash) + '<span style="font-size:0.68rem; color:var(--text-muted);">원</span>' : '--'}</td>
-            <td class="py-2 pr-3 text-right mono" style="color: var(--text-secondary);">${s.position_count}</td>
-            <td class="py-2 pr-3 text-right mono" style="color: var(--text-secondary);">${s.trades_count}</td>
+            <td class="py-2 pr-3 text-right mono col-hide-mobile" style="color: var(--text-secondary);">${s.cash > 0 ? formatNumber(s.cash) + '<span style="font-size:0.68rem; color:var(--text-muted);">원</span>' : '--'}</td>
+            <td class="py-2 pr-3 text-right mono col-hide-mobile" style="color: var(--text-secondary);">${s.position_count}</td>
+            <td class="py-2 pr-3 text-right mono col-hide-mobile" style="color: var(--text-secondary);">${s.trades_count}</td>
             <td class="py-2 text-right mono" style="color: var(--text-secondary);">${s.trades_count > 0 ? s.win_rate.toFixed(0) + '%' : '--'}</td>
         </tr>`;
     }).join('');
