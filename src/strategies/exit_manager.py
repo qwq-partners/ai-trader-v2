@@ -131,13 +131,14 @@ class ExitManager:
     # ------------------------------------------------------------------ #
 
     def _load_persisted_states(self) -> Dict[str, Dict]:
-        """당일 stage 파일 로드. 없으면 최근 3일 파일에서 폴백 (날짜 경계 대응).
+        """당일 stage 파일 로드. 없으면 최근 7일 파일에서 폴백 (날짜 경계 대응).
 
         날짜 경계 문제: 당일 파일이 없으면 (재시작 후 fill 없었던 경우 등)
         전일 파일에서 stage를 복원해 포지션 stage 오추정을 방지.
+        7일 룩백: 주말(2일) + 대체공휴일(1일) + 여유 = 연휴 연속 5일까지 커버.
         """
         _cache_dir = self._stage_file.parent
-        for delta in range(0, 3):
+        for delta in range(0, 7):
             candidate = _cache_dir / f"exit_stages_{(date.today() - timedelta(days=delta)).isoformat()}.json"
             if not candidate.exists():
                 continue
