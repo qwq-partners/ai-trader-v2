@@ -2,6 +2,27 @@
 
 ---
 
+## [2026-03-03] US 모의거래 TEST 배지 + Phase 3 섹터 모멘텀 + LLM 품질 개선 + 코드리뷰 수정
+
+### commit `a0fd9f7` (US 모의거래 TEST 배지 표시)
+
+**목적**: paper 모드 운영 중인 US 봇을 대시보드에서 명확히 구분 (KR 총자산 미포함 명시)
+
+**ai-trader-v2 대시보드**
+- `index.html`: 미국 봇 카드에 `#us-paper-badge`(TEST), `#us-bot-broker`(브로커 텍스트) 추가
+- `index.html`: US 총자산 카드에 `#us-asset-badge`(모의) 배지 추가
+- `dashboard.js`: `renderUSStatus()`에서 `paper_trading` 필드 감지 → 배지 show/hide
+  - 노란색(#f59e0b) TEST 배지 + "모의거래 (Alpaca Paper) — KR 총자산에 미포함" 문구
+- `equity.html`: US 자산 현황 헤더에 `#us-eq-paper-badge`, `#us-eq-paper-note` 추가
+- `equity.js`: `loadUSEquity()`에서 status API 병렬 호출 → 배지 show/hide
+- 캐시 버스팅: dashboard.js v4→v5, equity.js v3→v4
+
+**설계 원칙**
+- KR 총자산(10,462,046원) ↔ US 자산($200,000) 완전 별도 API/계산 (혼합 없음 확인)
+- KIS US 실계좌 전환 시 `broker: "kis"`, `env: "prod"` 반환 → 배지 자동 사라짐
+
+---
+
 ## [2026-03-03] Phase 3 섹터 모멘텀 + LLM 5가지 품질 개선 + 코드리뷰 수정
 
 ### commit `c129460` (Phase 3: 섹터 모멘텀 완성)
