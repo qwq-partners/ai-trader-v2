@@ -131,7 +131,6 @@
                     <a href="/equity" class="nav-pill" data-page="equity">자산</a>
                     <a href="/themes" class="nav-pill" data-page="themes">테마</a>
                     <a href="/evolution" class="nav-pill" data-page="evolution">복기</a>
-                    <a href="/us" class="nav-pill" data-page="us">🇺🇸 미국</a>
                     <a href="/settings" class="nav-pill" data-page="settings">설정</a>
                 </div>
             <div id="status-bar" class="nav-status" style="display: flex; align-items: center; gap: 20px; font-size: 0.78rem; color: var(--text-muted); flex-shrink: 0;">
@@ -142,10 +141,14 @@
         </div>
     </nav>
 
+    <!-- Market Filter Bar -->
+    <div id="market-filter-bar" style="max-width:1280px;margin:16px auto 0;padding:0 24px;"></div>
+
     <main style="max-width: 1280px; margin: 0 auto; padding: 24px;">
+        <div id="kr-performance-section">
         <!-- Header + Period tabs -->
         <div class="animate-in" style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;">
-            <h2 style="font-size: 1.25rem; font-weight: 700; color: #fff; margin: 0;">성과 분석</h2>
+            <h2 style="font-size: 1.25rem; font-weight: 700; color: #fff; margin: 0;">🇰🇷 성과 분석</h2>
             <div style="display: flex; gap: 4px; flex-wrap: wrap;">
                 <button class="tab-btn active" data-days="1">오늘</button>
                 <button class="tab-btn" data-days="7">1주</button>
@@ -251,9 +254,35 @@
                 </table>
             </div>
         </div>
+        </div><!-- /kr-performance-section -->
+
+        <!-- US 성과 섹션 -->
+        <div id="us-performance-section" style="display:none; margin-top:20px;">
+            <div class="card" style="padding:20px;">
+                <h2 style="font-size:0.92rem;font-weight:700;margin-bottom:16px;">🇺🇸 미국 성과 요약</h2>
+                <div style="display:flex;gap:12px;flex-wrap:wrap;">
+                    <div style="flex:1;min-width:140px;">
+                        <div style="font-size:0.72rem;color:var(--text-muted);">총 거래</div>
+                        <div id="us-perf-total" class="mono" style="font-size:1.1rem;font-weight:700;">-</div>
+                    </div>
+                    <div style="flex:1;min-width:140px;">
+                        <div style="font-size:0.72rem;color:var(--text-muted);">승률</div>
+                        <div id="us-perf-winrate" class="mono" style="font-size:1.1rem;font-weight:700;">-</div>
+                    </div>
+                    <div style="flex:1;min-width:140px;">
+                        <div style="font-size:0.72rem;color:var(--text-muted);">총 손익 (USD)</div>
+                        <div id="us-perf-pnl" class="mono" style="font-size:1.1rem;font-weight:700;">-</div>
+                    </div>
+                    <div style="flex:1;min-width:140px;">
+                        <div style="font-size:0.72rem;color:var(--text-muted);">보유 포지션</div>
+                        <div id="us-perf-positions" class="mono" style="font-size:1.1rem;font-weight:700;">-</div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </main>
 
-    <script src="/static/js/common.js"></script>
-    <script src="/static/js/performance.js?v=3"></script>
+    <script src="/static/js/common.js?v=2"></script>
+    <script src="/static/js/performance.js?v=4"></script>
 </body>
 </html>

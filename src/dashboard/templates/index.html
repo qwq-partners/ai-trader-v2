@@ -343,7 +343,6 @@
                     <a href="/equity" class="nav-pill" data-page="equity">자산</a>
                     <a href="/themes" class="nav-pill" data-page="themes">테마</a>
                     <a href="/evolution" class="nav-pill" data-page="evolution">복기</a>
-                    <a href="/us" class="nav-pill" data-page="us">🇺🇸 미국</a>
                     <a href="/settings" class="nav-pill" data-page="settings">설정</a>
                 </div>
             <!-- Status bar -->
@@ -354,6 +353,9 @@
             </div>
         </div>
     </nav>
+
+    <!-- Market Filter Bar -->
+    <div id="market-filter-bar" style="max-width:1280px;margin:16px auto 0;padding:0 24px;"></div>
 
     <!-- Main content -->
     <main style="max-width: 1280px; margin: 0 auto; padding: 24px;">
@@ -510,11 +512,53 @@
             </div>
         </div>
 
-        <!-- Positions Table -->
+        <!-- US 봇 상태/포트폴리오 — JS가 market filter에 따라 show/hide -->
+        <div id="us-summary-section" style="display:none; margin-bottom:16px;">
+            <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+                <div class="card" style="flex:1;min-width:180px;padding:14px 18px;">
+                    <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:4px;">🇺🇸 미국 봇</div>
+                    <div id="us-bot-status" style="font-size:0.85rem;font-weight:600;">-</div>
+                    <div id="us-bot-session" style="font-size:0.72rem;color:var(--text-muted);margin-top:2px;">-</div>
+                </div>
+                <div class="card" style="flex:1;min-width:180px;padding:14px 18px;">
+                    <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:4px;">💵 US 총자산</div>
+                    <div id="us-total-value" class="mono" style="font-size:1.1rem;font-weight:700;">-</div>
+                </div>
+                <div class="card" style="flex:1;min-width:180px;padding:14px 18px;">
+                    <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:4px;">💰 US 현금</div>
+                    <div id="us-cash" class="mono" style="font-size:1.1rem;font-weight:700;">-</div>
+                </div>
+                <div class="card" style="flex:1;min-width:180px;padding:14px 18px;">
+                    <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:4px;">📈 US 오늘 손익</div>
+                    <div id="us-daily-pnl" class="mono" style="font-size:1.1rem;font-weight:700;">-</div>
+                </div>
+            </div>
+            <div class="card" style="padding:16px 20px;">
+                <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:10px;font-weight:600;">🇺🇸 미국 보유 포지션</div>
+                <table id="us-positions-table" style="width:100%;text-align:left;border-collapse:collapse;">
+                    <thead>
+                        <tr style="border-bottom:1px solid var(--border-subtle);">
+                            <th style="padding:0 10px 8px 0;font-size:0.75rem;color:var(--text-muted);font-weight:500;">종목</th>
+                            <th style="padding:0 10px 8px 0;font-size:0.75rem;color:var(--text-muted);font-weight:500;">전략</th>
+                            <th style="padding:0 10px 8px 0;font-size:0.75rem;color:var(--text-muted);font-weight:500;">수량</th>
+                            <th style="padding:0 10px 8px 0;font-size:0.75rem;color:var(--text-muted);font-weight:500;">평균단가</th>
+                            <th style="padding:0 10px 8px 0;font-size:0.75rem;color:var(--text-muted);font-weight:500;">수익률</th>
+                            <th style="padding:0 10px 8px 0;font-size:0.75rem;color:var(--text-muted);font-weight:500;">평가금액</th>
+                        </tr>
+                    </thead>
+                    <tbody id="us-positions-body">
+                        <tr><td colspan="6" style="padding:20px 0;text-align:center;color:var(--text-muted);font-size:0.82rem;">보유 종목 없음</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- KR Positions Table -->
+        <div id="kr-positions-section">
         <div class="card animate-in delay-3" style="padding: 24px; margin-bottom: 16px;">
             <div class="card-header">
                 <span class="dot" style="background: var(--accent-cyan); box-shadow: 0 0 8px var(--accent-cyan);"></span>
-                보유 포지션
+                🇰🇷 보유 포지션
             </div>
             <div style="overflow-x: auto;">
                 <table id="positions-table" style="width: 100%; text-align: left; border-collapse: collapse;">
@@ -538,6 +582,8 @@
                 </table>
             </div>
         </div>
+
+        </div><!-- /kr-positions-section -->
 
         <!-- External Accounts -->
         <div id="external-accounts-section" style="display: none; margin-bottom: 16px;">
@@ -580,7 +626,7 @@
         </div>
     </main>
 
-    <script src="/static/js/common.js"></script>
-    <script src="/static/js/dashboard.js"></script>
+    <script src="/static/js/common.js?v=2"></script>
+    <script src="/static/js/dashboard.js?v=4"></script>
 </body>
 </html>

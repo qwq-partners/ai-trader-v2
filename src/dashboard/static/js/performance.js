@@ -334,4 +334,61 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 document.addEventListener('DOMContentLoaded', () => {
     loadStats(1);
     sse.connect();
+
+    // 마켓 필터 바
+    const filterBar = document.getElementById("market-filter-bar");
+    if (filterBar) {
+        MarketFilter.render(filterBar, (filter) => {
+            applyPerfMarketFilter(filter);
+            if (filter !== "kr") loadUSPerformance();
+        });
+    }
+    const initFilter = MarketFilter.get();
+    applyPerfMarketFilter(initFilter);
+    if (initFilter !== "kr") loadUSPerformance();
 });
+
+// ============================================================
+// 마켓 필터 (US 성과)
+// ============================================================
+
+async function loadUSPerformance() {
+    try {
+        const [trades, portfolio] = await Promise.all([
+            fetch("/api/us-proxy/api/us/trades").then(r => r.json()).catch(() => []),
+            fetch("/api/us-proxy/api/us/portfolio").then(r => r.json()).catch(() => {}),
+        ]);
+        const total = trades.length;
+        const wins = trades.filter(t => (t.pnl || 0) > 0).length;
+        const winRate = total > 0 ? (wins / total * 100).toFixed(1) : "-";
+        const totalPnl = trades.reduce((s, t) => s + (t.pnl || 0), 0);
+        const sign = totalPnl >= 0 ? "+" : "";
+        const pnlColor = totalPnl >= 0 ? "var(--accent-green)" : "var(--accent-red)";
+
+        const set = (id, val, color) => {
+            const el = document.getElementById(id);
+            if (el) { el.textContent = val; if (color) el.style.color = color; }
+        };
+        set("us-perf-total", total + "건");
+        set("us-perf-winrate", total > 0 ? winRate + "%" : "-");
+        set("us-perf-pnl", sign + "$" + Math.abs(totalPnl).toFixed(2), pnlColor);
+        set("us-perf-positions", (portfolio.positions_count || 0) + "개");
+    } catch (e) {
+        console.warn("[US성과] 로드 실패:", e);
+    }
+}
+
+function applyPerfMarketFilter(filter) {
+    const krSec = document.getElementById("kr-performance-section");
+    const usSec = document.getElementById("us-performance-section");
+    if (filter === "all") {
+        if (krSec) krSec.style.display = "block";
+        if (usSec) usSec.style.display = "block";
+    } else if (filter === "us") {
+        if (krSec) krSec.style.display = "none";
+        if (usSec) usSec.style.display = "block";
+    } else {
+        if (krSec) krSec.style.display = "block";
+        if (usSec) usSec.style.display = "none";
+    }
+}

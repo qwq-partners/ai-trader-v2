@@ -154,7 +154,6 @@
                     <a href="/equity" class="nav-pill" data-page="equity">자산</a>
                     <a href="/themes" class="nav-pill" data-page="themes">테마</a>
                     <a href="/evolution" class="nav-pill" data-page="evolution">복기</a>
-                    <a href="/us" class="nav-pill" data-page="us">🇺🇸 미국</a>
                     <a href="/settings" class="nav-pill" data-page="settings">설정</a>
                 </div>
             <div id="status-bar" class="nav-status" style="display: flex; align-items: center; gap: 20px; font-size: 0.78rem; color: var(--text-muted); flex-shrink: 0;">
@@ -165,10 +164,14 @@
         </div>
     </nav>
 
+    <!-- Market Filter Bar -->
+    <div id="market-filter-bar" style="max-width:1280px;margin:16px auto 0;padding:0 24px;"></div>
+
     <main style="max-width: 1280px; margin: 0 auto; padding: 24px;">
+        <div id="kr-trades-section">
         <!-- Header + Date picker + Filter tabs -->
         <div class="animate-in" style="display: flex; align-items: center; gap: 16px; margin-bottom: 20px; flex-wrap: wrap;">
-            <h2 style="font-size: 1.25rem; font-weight: 700; color: #fff; margin: 0;">거래 내역</h2>
+            <h2 style="font-size: 1.25rem; font-weight: 700; color: #fff; margin: 0;">🇰🇷 거래 내역</h2>
             <input type="date" id="trade-date">
             <button id="btn-today" class="btn-primary">오늘</button>
             <span id="loading-indicator" style="display:none; font-size:0.8rem; color:var(--text-muted);">로딩...</span>
@@ -277,9 +280,36 @@
                 </table>
             </div>
         </div>
+        </div><!-- /kr-trades-section -->
+
+        <!-- US 거래 내역 섹션 -->
+        <div id="us-trades-section" style="display:none; margin-top:20px;">
+            <div class="card" style="padding:20px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+                    <h2 style="font-size:0.92rem;font-weight:700;color:var(--text-primary);">🇺🇸 미국 거래 내역</h2>
+                    <span id="us-trades-count" style="font-size:0.78rem;color:var(--text-muted);">-</span>
+                </div>
+                <table style="width:100%;text-align:left;border-collapse:collapse;">
+                    <thead>
+                        <tr style="border-bottom:1px solid var(--border-subtle);">
+                            <th style="padding:0 10px 8px 0;font-size:0.75rem;color:var(--text-muted);font-weight:500;">시간</th>
+                            <th style="padding:0 10px 8px 0;font-size:0.75rem;color:var(--text-muted);font-weight:500;">종목</th>
+                            <th style="padding:0 10px 8px 0;font-size:0.75rem;color:var(--text-muted);font-weight:500;">전략</th>
+                            <th style="padding:0 10px 8px 0;font-size:0.75rem;color:var(--text-muted);font-weight:500;">방향</th>
+                            <th style="padding:0 10px 8px 0;font-size:0.75rem;color:var(--text-muted);font-weight:500;">손익</th>
+                            <th style="padding:0 10px 8px 0;font-size:0.75rem;color:var(--text-muted);font-weight:500;">수익률</th>
+                            <th style="padding:0 10px 8px 0;font-size:0.75rem;color:var(--text-muted);font-weight:500;">보유</th>
+                        </tr>
+                    </thead>
+                    <tbody id="us-trades-body">
+                        <tr><td colspan="7" style="padding:20px 0;text-align:center;color:var(--text-muted);font-size:0.82rem;">거래 내역 없음</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </main>
 
-    <script src="/static/js/common.js"></script>
-    <script src="/static/js/trades.js"></script>
+    <script src="/static/js/common.js?v=2"></script>
+    <script src="/static/js/trades.js?v=2"></script>
 </body>
 </html>

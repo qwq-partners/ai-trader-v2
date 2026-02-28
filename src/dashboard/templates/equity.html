@@ -148,7 +148,6 @@
                     <a href="/equity" class="nav-pill active" data-page="equity">자산</a>
                     <a href="/themes" class="nav-pill" data-page="themes">테마</a>
                     <a href="/evolution" class="nav-pill" data-page="evolution">복기</a>
-                    <a href="/us" class="nav-pill" data-page="us">🇺🇸 미국</a>
                     <a href="/settings" class="nav-pill" data-page="settings">설정</a>
                 </div>
             <div id="status-bar" class="nav-status" style="display: flex; align-items: center; gap: 20px; font-size: 0.78rem; color: var(--text-muted); flex-shrink: 0;">
@@ -159,11 +158,15 @@
         </div>
     </nav>
 
+    <!-- Market Filter Bar -->
+    <div id="market-filter-bar" style="max-width:1280px;margin:16px auto 0;padding:0 24px;"></div>
+
     <main style="max-width: 1280px; margin: 0 auto; padding: 24px;">
+        <div id="kr-equity-section">
         <!-- Header + Date Range -->
         <div class="animate-in" style="display: flex; align-items: center; gap: 24px; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
             <div style="display: flex; align-items: center; gap: 16px;">
-                <h2 style="font-size: 1.25rem; font-weight: 700; color: #fff; margin: 0;">자산 히스토리</h2>
+                <h2 style="font-size: 1.25rem; font-weight: 700; color: #fff; margin: 0;">🇰🇷 자산 히스토리</h2>
                 <span id="equity-summary" style="font-size: 0.78rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace;">--</span>
             </div>
             <!-- Date range filter -->
@@ -233,9 +236,62 @@
                 </table>
             </div>
         </div>
+        </div><!-- /kr-equity-section -->
+
+        <!-- US Equity Section -->
+        <div id="us-equity-section" style="display:none;">
+            <div class="animate-in" style="margin-bottom: 20px;">
+                <h2 style="font-size: 1.25rem; font-weight: 700; color: #fff; margin: 0;">🇺🇸 US 자산 현황</h2>
+            </div>
+            <div id="us-equity-cards" class="perf-grid animate-in delay-1" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px;">
+                <div class="card card-inner" style="padding: 16px;">
+                    <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px;">총 자산</div>
+                    <div id="us-eq-total" class="mono" style="font-size: 1.1rem; font-weight: 600; color: var(--text-primary);">--</div>
+                </div>
+                <div class="card card-inner" style="padding: 16px;">
+                    <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px;">현금</div>
+                    <div id="us-eq-cash" class="mono" style="font-size: 1.1rem; font-weight: 600; color: var(--text-primary);">--</div>
+                </div>
+                <div class="card card-inner" style="padding: 16px;">
+                    <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px;">포지션 평가액</div>
+                    <div id="us-eq-positions" class="mono" style="font-size: 1.1rem; font-weight: 600; color: var(--text-primary);">--</div>
+                </div>
+                <div class="card card-inner" style="padding: 16px;">
+                    <div style="font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px;">일일 손익</div>
+                    <div id="us-eq-daily-pnl" class="mono" style="font-size: 1.1rem; font-weight: 600; color: var(--text-primary);">--</div>
+                </div>
+            </div>
+
+            <!-- US Positions Table -->
+            <div class="card card-inner animate-in delay-2" style="padding: 24px;">
+                <div class="card-header">
+                    <span class="dot" style="background: var(--accent-cyan); box-shadow: 0 0 8px var(--accent-cyan);"></span>
+                    US 보유 포지션
+                    <span id="us-eq-pos-count" style="margin-left: auto; font-size: 0.7rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; background: var(--bg-elevated); padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border-subtle);">0개</span>
+                </div>
+                <div style="overflow-x: auto;">
+                    <table style="width: 100%; text-align: left; border-collapse: collapse;">
+                        <thead>
+                            <tr style="border-bottom: 1px solid var(--border-subtle);">
+                                <th style="padding: 0 10px 10px 0;">종목</th>
+                                <th style="padding: 0 10px 10px 0; text-align: right;">수량</th>
+                                <th style="padding: 0 10px 10px 0; text-align: right;">평균가</th>
+                                <th style="padding: 0 10px 10px 0; text-align: right;">현재가</th>
+                                <th style="padding: 0 10px 10px 0; text-align: right;">평가액</th>
+                                <th style="padding: 0 10px 10px 0; text-align: right;">손익</th>
+                                <th style="padding: 0 0 10px 0; text-align: right;">수익률</th>
+                            </tr>
+                        </thead>
+                        <tbody id="us-eq-positions-body">
+                            <tr><td colspan="7" style="padding: 40px 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">데이터 없음</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div><!-- /us-equity-section -->
     </main>
 
-    <script src="/static/js/common.js"></script>
-    <script src="/static/js/equity.js?v=2"></script>
+    <script src="/static/js/common.js?v=2"></script>
+    <script src="/static/js/equity.js?v=3"></script>
 </body>
 </html>

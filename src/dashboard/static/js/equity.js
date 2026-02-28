@@ -318,8 +318,85 @@ function insertPositionDetailRow(afterRow, positions) {
 // 초기화
 // ============================================================
 
+// ============================================================
+// US 자산
+// ============================================================
+
+async function loadUSEquity() {
+    try {
+        const [portfolio, positions] = await Promise.all([
+            fetch('/api/us-proxy/api/us/portfolio').then(r => r.ok ? r.json() : null),
+            fetch('/api/us-proxy/api/us/positions').then(r => r.ok ? r.json() : null),
+        ]);
+        renderUSEquity(portfolio, positions);
+    } catch (e) {
+        console.error('[자산] US 데이터 로드 실패:', e);
+    }
+}
+
+function renderUSEquity(portfolio, positions) {
+    // 요약 카드
+    if (portfolio) {
+        const fmt = v => '$' + Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        document.getElementById('us-eq-total').textContent = fmt(portfolio.total_value);
+        document.getElementById('us-eq-cash').textContent = fmt(portfolio.cash);
+        const posVal = (portfolio.total_value || 0) - (portfolio.cash || 0);
+        document.getElementById('us-eq-positions').textContent = fmt(posVal);
+        const pnlEl = document.getElementById('us-eq-daily-pnl');
+        const dailyPnl = portfolio.daily_pnl || 0;
+        pnlEl.textContent = (dailyPnl >= 0 ? '+' : '') + fmt(dailyPnl);
+        pnlEl.className = 'mono ' + (dailyPnl >= 0 ? 'text-profit' : 'text-loss');
+    }
+
+    // 포지션 테이블
+    const tbody = document.getElementById('us-eq-positions-body');
+    const countEl = document.getElementById('us-eq-pos-count');
+
+    if (!positions || positions.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="padding:40px 0;text-align:center;color:var(--text-muted);font-size:0.85rem;">보유 포지션 없음</td></tr>';
+        countEl.textContent = '0개';
+        return;
+    }
+
+    countEl.textContent = positions.length + '개';
+    const rows = positions.map(p => {
+        const pnl = (p.unrealized_pnl || 0);
+        const pnlPct = (p.unrealized_pnl_pct || 0);
+        const cls = pnl >= 0 ? 'text-profit' : 'text-loss';
+        const fmtUsd = v => '$' + Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return `<tr style="border-bottom: 1px solid var(--border-subtle);">
+            <td class="py-2 pr-3" style="font-weight:500;">${esc(p.symbol)}</td>
+            <td class="py-2 pr-3 text-right mono">${p.quantity}</td>
+            <td class="py-2 pr-3 text-right mono" style="color:var(--text-secondary);">${fmtUsd(p.avg_price)}</td>
+            <td class="py-2 pr-3 text-right mono">${fmtUsd(p.current_price)}</td>
+            <td class="py-2 pr-3 text-right mono">${fmtUsd(p.market_value)}</td>
+            <td class="py-2 pr-3 text-right mono ${cls}">${(pnl >= 0 ? '+' : '') + fmtUsd(pnl)}</td>
+            <td class="py-2 text-right mono ${cls}" style="font-weight:600;">${(pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2)}%</td>
+        </tr>`;
+    }).join('');
+    tbody.innerHTML = rows;
+}
+
+function applyEquityMarketFilter(filter) {
+    const krSec = document.getElementById('kr-equity-section');
+    const usSec = document.getElementById('us-equity-section');
+    if (!krSec || !usSec) return;
+    if (filter === 'all') { krSec.style.display = ''; usSec.style.display = ''; }
+    else if (filter === 'kr') { krSec.style.display = ''; usSec.style.display = 'none'; }
+    else { krSec.style.display = 'none'; usSec.style.display = ''; }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
     sse.connect();
+
+    // Market Filter
+    const mfBar = document.getElementById('market-filter-bar');
+    if (mfBar && typeof MarketFilter !== 'undefined') {
+        MarketFilter.render(mfBar, (val) => applyEquityMarketFilter(val));
+        applyEquityMarketFilter(MarketFilter.get());
+        loadUSEquity();
+        setInterval(loadUSEquity, 30000);
+    }
 
     const dateFromInput = document.getElementById('date-from');
     const dateToInput = document.getElementById('date-to');

@@ -753,4 +753,116 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 30000);
 
     addLogEntry(formatTime(new Date().toISOString()), '시스템', '대시보드 연결됨');
+
+    // 마켓 필터 바 렌더링
+    const filterBar = document.getElementById("market-filter-bar");
+    if (filterBar) {
+        MarketFilter.render(filterBar, (filter) => {
+            applyMarketFilter(filter);
+            if (filter !== "kr") loadUSData();
+        });
+    }
+
+    // 초기 필터 적용
+    const initFilter = MarketFilter.get();
+    applyMarketFilter(initFilter);
+    if (initFilter !== "kr") {
+        loadUSData();
+        setInterval(loadUSData, 30000);
+    }
+
+    document.addEventListener("market_filter_change", (e) => {
+        applyMarketFilter(e.detail.filter);
+    });
 });
+
+// ============================================================
+// 마켓 필터 통합 (US 데이터)
+// ============================================================
+
+async function loadUSData() {
+    try {
+        const [status, portfolio, positions] = await Promise.all([
+            fetch("/api/us-proxy/api/us/status").then(r => r.json()).catch(() => ({ offline: true })),
+            fetch("/api/us-proxy/api/us/portfolio").then(r => r.json()).catch(() => ({ offline: true })),
+            fetch("/api/us-proxy/api/us/positions").then(r => r.json()).catch(() => []),
+        ]);
+        renderUSStatus(status);
+        renderUSPortfolio(portfolio);
+        renderUSPositions(positions);
+    } catch (e) {
+        console.warn("[US] 데이터 로드 실패:", e);
+    }
+}
+
+function renderUSStatus(s) {
+    const statusEl = document.getElementById("us-bot-status");
+    const sessionEl = document.getElementById("us-bot-session");
+    if (!statusEl) return;
+    if (s.offline || s.error) {
+        statusEl.innerHTML = '<span style="color:var(--accent-red);">● 오프라인</span>';
+        if (sessionEl) sessionEl.textContent = "API 연결 불가";
+        return;
+    }
+    const running = s.running;
+    statusEl.innerHTML = running
+        ? '<span style="color:var(--accent-green);">● Running</span>'
+        : '<span style="color:var(--text-muted);">● Stopped</span>';
+    const sessionMap = { regular: "정규장", pre_market: "프리마켓", after_hours: "애프터마켓", closed: "장 마감" };
+    if (sessionEl) sessionEl.textContent = sessionMap[s.session] || s.session || "-";
+}
+
+function renderUSPortfolio(p) {
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    if (p.offline || p.error) {
+        set("us-total-value", "-"); set("us-cash", "-"); set("us-daily-pnl", "-");
+        return;
+    }
+    set("us-total-value", "$" + (p.total_value || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+    set("us-cash", "$" + (p.cash || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+    const pnl = p.daily_pnl || 0;
+    const pnlEl = document.getElementById("us-daily-pnl");
+    if (pnlEl) {
+        const sign = pnl >= 0 ? "+" : "";
+        pnlEl.textContent = sign + "$" + Math.abs(pnl).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        pnlEl.style.color = pnl >= 0 ? "var(--accent-green)" : "var(--accent-red)";
+    }
+}
+
+function renderUSPositions(positions) {
+    const tbody = document.getElementById("us-positions-body");
+    if (!tbody) return;
+    if (!positions || positions.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="padding:20px 0;text-align:center;color:var(--text-muted);font-size:0.82rem;">보유 종목 없음</td></tr>';
+        return;
+    }
+    tbody.innerHTML = positions.map(p => {
+        const pnlPct = p.pnl_pct || 0;
+        const pnlColor = pnlPct >= 0 ? "var(--accent-green)" : "var(--accent-red)";
+        const sign = pnlPct >= 0 ? "+" : "";
+        return '<tr style="border-bottom:1px solid var(--border-subtle);">' +
+            '<td style="padding:8px 10px 8px 0;"><span class="mono" style="font-weight:600;">' + esc(p.symbol) + '</span>' + (p.name ? '<br><span style="font-size:0.72rem;color:var(--text-muted);">' + esc(p.name) + '</span>' : '') + '</td>' +
+            '<td style="padding:8px 10px 8px 0;font-size:0.78rem;color:var(--text-secondary);">' + esc(p.strategy || "-") + '</td>' +
+            '<td style="padding:8px 10px 8px 0;" class="mono">' + p.quantity + '</td>' +
+            '<td style="padding:8px 10px 8px 0;" class="mono">$' + (p.avg_price||0).toFixed(2) + '</td>' +
+            '<td style="padding:8px 10px 8px 0;color:' + pnlColor + ';" class="mono">' + sign + pnlPct.toFixed(2) + '%</td>' +
+            '<td style="padding:8px 10px 8px 0;" class="mono">$' + (p.market_value||0).toLocaleString("en-US",{minimumFractionDigits:2}) + '</td>' +
+        '</tr>';
+    }).join("");
+}
+
+function applyMarketFilter(filter) {
+    const usSec = document.getElementById("us-summary-section");
+    const krSec = document.getElementById("kr-positions-section");
+    if (!usSec) return;
+    if (filter === "all") {
+        usSec.style.display = "block";
+        if (krSec) krSec.style.display = "block";
+    } else if (filter === "us") {
+        usSec.style.display = "block";
+        if (krSec) krSec.style.display = "none";
+    } else {
+        usSec.style.display = "none";
+        if (krSec) krSec.style.display = "block";
+    }
+}

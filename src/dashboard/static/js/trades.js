@@ -560,4 +560,84 @@ document.addEventListener('DOMContentLoaded', () => {
     dateInput.value = todayStr();
     loadTradeData(todayStr());
     sse.connect();
+
+    // 마켓 필터 바 렌더링
+    const filterBar = document.getElementById("market-filter-bar");
+    if (filterBar) {
+        MarketFilter.render(filterBar, (filter) => {
+            applyTradesMarketFilter(filter);
+            if (filter !== "kr") {
+                const dateVal = document.getElementById("trade-date")?.value || "";
+                loadUSTrades(dateVal);
+            }
+        });
+    }
+    const initFilter = MarketFilter.get();
+    applyTradesMarketFilter(initFilter);
+    if (initFilter !== "kr") {
+        const dateVal = document.getElementById("trade-date")?.value || "";
+        loadUSTrades(dateVal);
+    }
 });
+
+// ============================================================
+// 마켓 필터 (US 거래)
+// ============================================================
+
+async function loadUSTrades(dateStr) {
+    try {
+        const trades = await fetch("/api/us-proxy/api/us/trades?date=" + (dateStr || ""))
+            .then(r => r.json()).catch(() => []);
+        renderUSTrades(trades);
+    } catch (e) {
+        console.warn("[US거래] 로드 실패:", e);
+    }
+}
+
+function renderUSTrades(trades) {
+    const tbody = document.getElementById("us-trades-body");
+    const countEl = document.getElementById("us-trades-count");
+    if (!tbody) return;
+    if (!trades || trades.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="padding:20px 0;text-align:center;color:var(--text-muted);font-size:0.82rem;">거래 내역 없음</td></tr>';
+        if (countEl) countEl.textContent = "0건";
+        return;
+    }
+    if (countEl) countEl.textContent = trades.length + "건";
+    tbody.innerHTML = trades.map(t => {
+        const pnl = t.pnl || 0;
+        const pnlPct = t.pnl_pct || 0;
+        const pnlColor = pnl >= 0 ? "var(--accent-green)" : "var(--accent-red)";
+        const sideColor = t.side === "buy" ? "var(--accent-green)" : "var(--accent-red)";
+        const sideLabel = t.side === "buy" ? "매수" : "매도";
+        const timeStr = t.timestamp ? t.timestamp.substring(0, 16).replace("T", " ") : "-";
+        const sign = pnl >= 0 ? "+" : "";
+        const holdingH = t.holding_minutes > 60
+            ? (t.holding_minutes/60).toFixed(1) + "h"
+            : Math.round(t.holding_minutes || 0) + "m";
+        return '<tr style="border-bottom:1px solid var(--border-subtle);">' +
+            '<td style="padding:8px 10px 8px 0;font-size:0.78rem;color:var(--text-muted);">' + esc(timeStr) + '</td>' +
+            '<td style="padding:8px 10px 8px 0;font-weight:600;" class="mono">' + esc(t.symbol) + '</td>' +
+            '<td style="padding:8px 10px 8px 0;font-size:0.78rem;color:var(--text-secondary);">' + esc(t.strategy || "-") + '</td>' +
+            '<td style="padding:8px 10px 8px 0;"><span style="color:' + sideColor + ';font-size:0.78rem;font-weight:600;">' + sideLabel + '</span></td>' +
+            '<td style="padding:8px 10px 8px 0;color:' + pnlColor + ';" class="mono">' + sign + '$' + Math.abs(pnl).toFixed(2) + '</td>' +
+            '<td style="padding:8px 10px 8px 0;color:' + pnlColor + ';" class="mono">' + (pnl >= 0 ? "+" : "") + pnlPct.toFixed(2) + '%</td>' +
+            '<td style="padding:8px 10px 8px 0;font-size:0.78rem;color:var(--text-muted);">' + holdingH + '</td>' +
+        '</tr>';
+    }).join("");
+}
+
+function applyTradesMarketFilter(filter) {
+    const krSec = document.getElementById("kr-trades-section");
+    const usSec = document.getElementById("us-trades-section");
+    if (filter === "all") {
+        if (krSec) krSec.style.display = "block";
+        if (usSec) usSec.style.display = "block";
+    } else if (filter === "us") {
+        if (krSec) krSec.style.display = "none";
+        if (usSec) usSec.style.display = "block";
+    } else {
+        if (krSec) krSec.style.display = "block";
+        if (usSec) usSec.style.display = "none";
+    }
+}

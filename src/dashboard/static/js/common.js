@@ -163,6 +163,44 @@ function sessionLabel(session) {
 }
 
 // ============================================================
+// 마켓 필터 유틸리티 (KR / US / ALL)
+// ============================================================
+const MarketFilter = {
+    STORAGE_KEY: "market_filter",
+    DEFAULT: "all",
+
+    get() {
+        return localStorage.getItem(this.STORAGE_KEY) || this.DEFAULT;
+    },
+
+    set(val) {
+        localStorage.setItem(this.STORAGE_KEY, val);
+        document.dispatchEvent(new CustomEvent("market_filter_change", { detail: { filter: val } }));
+    },
+
+    /** 필터 바 HTML 생성 및 containerEl에 삽입 후 이벤트 바인딩 */
+    render(containerEl, onChange) {
+        const current = this.get();
+        containerEl.innerHTML = `
+            <div class="mf-bar" style="display:flex;gap:6px;align-items:center;">
+                <span style="font-size:0.75rem;color:var(--text-muted);margin-right:4px;">마켓</span>
+                <button class="mf-btn ${current==="all"?"mf-active":""}" data-val="all">🌐 통합</button>
+                <button class="mf-btn ${current==="kr"?"mf-active":""}" data-val="kr">🇰🇷 국내</button>
+                <button class="mf-btn ${current==="us"?"mf-active":""}" data-val="us">🇺🇸 미국</button>
+            </div>`;
+        containerEl.querySelectorAll(".mf-btn").forEach(btn => {
+            btn.addEventListener("click", () => {
+                const val = btn.dataset.val;
+                MarketFilter.set(val);
+                containerEl.querySelectorAll(".mf-btn").forEach(b => b.classList.remove("mf-active"));
+                btn.classList.add("mf-active");
+                if (onChange) onChange(val);
+            });
+        });
+    },
+};
+
+// ============================================================
 // 네비게이션 활성화
 // ============================================================
 document.addEventListener('DOMContentLoaded', () => {

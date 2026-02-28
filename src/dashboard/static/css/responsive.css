@@ -148,3 +148,28 @@ table th {
     grid-template-columns: repeat(2, 1fr) !important;
   }
 }
+
+/* ===========================
+   마켓 필터 버튼
+   =========================== */
+.mf-btn {
+    padding: 5px 14px;
+    border-radius: 20px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    border: 1px solid var(--border-accent);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+.mf-btn:hover {
+    background: rgba(99,102,241,0.08);
+    color: var(--text-primary);
+}
+.mf-btn.mf-active {
+    background: rgba(99,102,241,0.18);
+    border-color: var(--accent-blue);
+    color: #fff;
+}
