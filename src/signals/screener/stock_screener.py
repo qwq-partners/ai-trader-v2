@@ -780,7 +780,44 @@ class StockScreener:
                     sector_map[sector] = []
                 sector_map[sector].append(ticker)
 
-            # 섹터별 카운트 확인
+            # ── Phase A: 섹터 상대강도 보정 (arXiv:2602.23330 Sector Agent 개념) ─────
+            # 핵심: 같은 섹터 내에서 평균 이상인 종목 → 보너스, 이하인 종목 → 패널티
+            # 섹터 평균 대비 상대강도를 점수에 반영해 섹터 최강 종목 선별 정밀도 향상
+            sector_relative_applied = 0
+            for sector, symbols_in_sector in sector_map.items():
+                if len(symbols_in_sector) < 2:
+                    continue  # 단일 종목 섹터는 비교 의미 없음
+
+                sector_scores_list = [
+                    all_stocks[s].score for s in symbols_in_sector if s in all_stocks
+                ]
+                if not sector_scores_list:
+                    continue
+
+                sector_avg = sum(sector_scores_list) / len(sector_scores_list)
+
+                for symbol in symbols_in_sector:
+                    if symbol not in all_stocks:
+                        continue
+                    stock = all_stocks[symbol]
+                    relative = stock.score - sector_avg
+
+                    # 최대 ±8pt 보정 (과도한 왜곡 방지)
+                    if relative > 5:
+                        bonus = min(relative * 0.3, 8.0)
+                        stock.score += bonus
+                        stock.reasons.append(f"섹터상대강도+{bonus:.1f}({sector})")
+                        sector_relative_applied += 1
+                    elif relative < -5:
+                        penalty = max(relative * 0.3, -8.0)
+                        stock.score += penalty  # 음수 → 감점
+                        stock.reasons.append(f"섹터하위종목{penalty:.1f}({sector})")
+                        sector_relative_applied += 1
+
+            if sector_relative_applied:
+                logger.info(f"[Screener] 섹터 상대강도 보정 {sector_relative_applied}개 적용")
+
+            # ── Phase B: 섹터 쏠림 방지 (기존 로직 유지) ────────────────────────────
             sector_counts = {sector: len(syms) for sector, syms in sector_map.items()}
             total_stocks = len(all_stocks)
             max_per_sector = max(3, int(total_stocks * 0.3))  # 섹터당 최대 30%
@@ -790,8 +827,7 @@ class StockScreener:
                 if len(symbols_in_sector) <= max_per_sector:
                     continue
 
-                # 과도한 섹터는 하위 종목 감점
-                # 점수 순 정렬
+                # 점수 순 정렬 (Phase A 보정 후 점수 기준)
                 sorted_symbols = sorted(
                     symbols_in_sector,
                     key=lambda s: all_stocks[s].score if s in all_stocks else 0,

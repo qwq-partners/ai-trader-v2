@@ -1256,6 +1256,26 @@ class SchedulerMixin:
                                     except Exception:
                                         pass
 
+                                # ── LLM 2차 검증 (arXiv:2602.23330 fine-grained verification) ─
+                                # 설정: intraday_buy.llm_verify_enabled: true 시 활성
+                                # 점수 95+ 후보에 대해 Gemini Flash로 3개 체크리스트 검증
+                                # LLM 실패 시 fall-through (신호 차단 안 함)
+                                _ib_llm_verify = _ib_cfg.get("llm_verify_enabled", False)
+                                if _ib_llm_verify and _ib_stock.score >= 95:
+                                    try:
+                                        _ib_llm_ok = await self._llm_verify_intraday(
+                                            stock=_ib_stock,
+                                            rt_price=_ib_rt_price,
+                                            rt_change=_ib_rt_change,
+                                        )
+                                        if not _ib_llm_ok:
+                                            logger.info(
+                                                f"[장중품질] {_ib_stock.symbol} LLM 2차검증 탈락"
+                                            )
+                                            continue
+                                    except Exception as _llm_e:
+                                        logger.debug(f"[장중품질] LLM 검증 오류 → 스킵: {_llm_e}")
+
                                 # ATR 기반 손절/목표가
                                 _ib_atr = 4.0
                                 for _r in _ib_stock.reasons:
@@ -1318,6 +1338,73 @@ class SchedulerMixin:
 
         except asyncio.CancelledError:
             pass
+
+    async def _llm_verify_intraday(
+        self,
+        stock,
+        rt_price: float,
+        rt_change: float,
+        timeout_sec: float = 5.0,
+    ) -> bool:
+        """장중품질 LLM 2차 검증 (arXiv:2602.23330 fine-grained verification)
+
+        Gemini Flash를 사용해 진입 후보의 모멘텀 품질을 3-항목 체크리스트로 검증.
+        응답이 없거나 LLM 오류 발생 시 True 반환 (fall-through, 신호 차단 안 함).
+
+        설정: intraday_buy.llm_verify_enabled: true 로 활성화
+        비용: Gemini Flash (초경량 모델), 호출당 ~0.1¢ 수준
+        """
+        try:
+            from src.utils.llm import get_llm_manager, LLMTask
+
+            llm = get_llm_manager()
+            reasons_text = " | ".join(stock.reasons[:5]) if stock.reasons else "없음"
+
+            prompt = f"""장중 주식 진입 검증 (한국 주식, {datetime.now().strftime('%H:%M')} 기준)
+
+종목: {stock.name} ({stock.symbol})
+현재가: {rt_price:,}원 | 등락: {rt_change:+.1f}% | 스크리닝점수: {stock.score:.0f}점
+선정 근거: {reasons_text}
+
+아래 3가지 항목을 Y/N으로만 판단하세요:
+
+1. 모멘텀 지속성: 등락률이 0~3%이고 급등 후 고점 피크가 아닌 지속 상승 패턴인가?
+2. 수급 신뢰성: 외국인 또는 기관 순매수가 확인되어 단순 개인 급등주가 아닌가?
+3. 진입 타이밍: 오전 10시~오후 2시30분 장중, 과도한 변동성(갭) 없이 안정적인가?
+
+응답 형식 (JSON만):
+{{"q1": "Y", "q2": "Y", "q3": "Y", "pass": true}}"""
+
+            result = await asyncio.wait_for(
+                llm.complete_json(
+                    prompt=prompt,
+                    system="당신은 한국 주식 장중 진입 검증 전문가입니다. 3가지 체크리스트만 평가하고 JSON으로만 응답하세요.",
+                    task=LLMTask.QUICK_ANALYSIS,
+                    max_tokens=100,
+                ),
+                timeout=timeout_sec,
+            )
+
+            if not result or not isinstance(result, dict):
+                logger.debug(f"[LLM검증] {stock.symbol} 응답 없음 → pass")
+                return True
+
+            passed = result.get("pass", True)
+            q1 = result.get("q1", "Y")
+            q2 = result.get("q2", "Y")
+            q3 = result.get("q3", "Y")
+            logger.info(
+                f"[LLM검증] {stock.symbol} {stock.name}: "
+                f"모멘텀={q1} 수급={q2} 타이밍={q3} → {'✅통과' if passed else '❌탈락'}"
+            )
+            return bool(passed)
+
+        except asyncio.TimeoutError:
+            logger.debug(f"[LLM검증] {stock.symbol} 타임아웃 → pass")
+            return True
+        except Exception as e:
+            logger.debug(f"[LLM검증] {stock.symbol} 오류({e}) → pass")
+            return True
 
     async def _run_rest_price_feed(self):
         """REST 폴링 시세 피드 (WebSocket 미사용 시 전략/청산 활성화)

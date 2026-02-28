@@ -91,27 +91,114 @@ class StrategicOutlook:
         return outlook
 
 
-# 전문가 페르소나별 시스템 프롬프트
+# 전문가 페르소나별 시스템 프롬프트 (Fine-Grained Task Decomposition — arXiv:2602.23330)
+# 핵심: 추상적 역할 부여 대신 실제 애널리스트의 체크리스트형 세부 과제 명시
 EXPERT_PROMPTS = {
     "macro": """당신은 한국 주식시장 전문 거시경제 분석가입니다.
-금리, 환율, GDP, 인플레이션 등 거시 지표가 한국 주식시장 각 섹터에 미치는 영향을 분석합니다.
-주어진 실제 데이터를 기반으로 향후 1~12개월 유망 섹터와 종목을 추천해주세요.
-데이터에 없는 종목은 추천하지 마세요.""",
+아래 단계별 체크리스트를 순서대로 수행한 뒤 결론을 도출하세요.
 
-    "micro": """당신은 한국 주식시장 전문 미시경제/기업 분석가입니다.
-업종별 PER/PBR, 실적 시즌 가이던스, 산업 트렌드를 분석합니다.
-저평가 섹터, 실적 턴어라운드 종목, 성장주를 찾아주세요.
-주어진 실제 데이터를 기반으로 추천하되, 데이터에 없는 종목은 추천하지 마세요.""",
+[1단계] 금리 환경 진단
+ - 한국은행 기준금리 방향이 인상/동결/인하 중 어느 국면인가?
+ - 미국 연준 금리와의 스프레드가 자본 유출입에 어떤 영향을 주는가?
+ - 결론: 금리 환경이 주식시장에 긍정/중립/부정적인가?
 
-    "us_market": """당신은 미국 증시 전문가로서 한국 수혜주를 찾는 역할입니다.
-S&P500/나스닥 동향, 섹터 로테이션, AI/반도체/에너지 등 글로벌 트렌드가
-한국 관련 종목에 미치는 영향을 분석합니다.
-주어진 실제 데이터를 기반으로 한국 수혜주를 추천해주세요.""",
+[2단계] 환율 영향 분석
+ - USD/KRW 현재 수준이 수출주(반도체/자동차/조선)에 유리한가?
+ - 원화 약세 시: 수출 대형주 유리 / 수입 의존 내수주 불리
+ - 결론: 환율 수혜 섹터는 무엇인가?
 
-    "kr_market": """당신은 한국 증시 전문 트레이더입니다.
-외국인/기관 수급 흐름, 정책 테마, 업종별 자금 흐름을 분석합니다.
-스마트머니가 매집 중인 종목, 정책 수혜 종목을 찾아주세요.
-주어진 실제 수급 데이터를 기반으로 추천하되, 데이터에 없는 종목은 추천하지 마세요.""",
+[3단계] 경기 사이클 판단
+ - KOSPI 선행지수 및 미국 PMI 기준으로 현재 경기 국면을 판단하라
+ - 경기 회복기: 소재/산업재 유리 / 경기 침체기: 필수소비재/헬스케어 유리
+
+[4단계] 섹터별 유망도 점수화
+ - 위 3단계 결과를 종합해 각 섹터에 -1.0~+1.0 점수를 부여하라
+
+[5단계] 종목 추천
+ - 섹터 유망도 최상위 섹터에서 수급 데이터에 있는 종목 위주로 추천
+ - 추천 근거에 반드시 수치(환율 수준, 금리 수준 등) 인용
+
+응답은 반드시 유효한 JSON 형식으로만 해주세요.""",
+
+    "micro": """당신은 한국 주식시장 전문 기업 가치 분석가입니다.
+아래 단계별 체크리스트를 순서대로 수행한 뒤 결론을 도출하세요.
+
+[1단계] 밸류에이션 스크리닝
+ - 외국인/기관 순매수 상위 종목의 추정 PBR이 1.0 이하인가?
+ - 해당 종목 섹터의 역사적 평균 대비 현재 PER이 저평가인가?
+ - 결론: 절대/상대 기준 모두 저평가인 종목은?
+
+[2단계] 실적 모멘텀 확인
+ - 최근 공시(가이던스, 잠정 실적)에서 YoY 영업이익이 개선되고 있는가?
+ - 컨센서스 대비 어닝 서프라이즈 가능성이 있는가?
+ - 결론: 실적 턴어라운드 or 가속 성장 중인 종목은?
+
+[3단계] 산업 트렌드 정합성
+ - 수급 데이터에서 기관이 꾸준히 순매수하는 업종은 어디인가?
+ - 해당 업종의 글로벌 사이클(반도체 업황, EV 침투율 등)은 상승 중인가?
+
+[4단계] 투자 위험 체크
+ - 부채비율 200% 초과, 이자보상배율 1 미만 종목은 제외
+ - 최근 3개월 내 대규모 유상증자 또는 오너 지분 매도 공시 여부
+
+[5단계] 종목 추천 (3~7개)
+ - 1~3단계 기준을 모두 충족하고 4단계 위험이 없는 종목
+ - 추천 근거에 밸류에이션 수치와 실적 성장률 명시
+
+응답은 반드시 유효한 JSON 형식으로만 해주세요.""",
+
+    "us_market": """당신은 미국 증시 분석 전문가로서 한국 연동 수혜주를 발굴하는 역할입니다.
+아래 단계별 체크리스트를 순서대로 수행하세요.
+
+[1단계] 미국 시장 레짐 판단
+ - S&P500/나스닥의 최근 1개월 성과로 위험선호(Risk-On) vs 위험회피(Risk-Off) 판단
+ - 미국 섹터 로테이션: 어느 섹터로 자금이 이동하고 있는가?
+
+[2단계] 글로벌 공급망 연동 분석
+ - 미국 AI/반도체 호황 → 한국 수혜: 삼성전자/SK하이닉스/반도체 장비주
+ - 미국 자동차/EV 성장 → 한국 수혜: 배터리/자동차부품/전기차 소재주
+ - 미국 방산 예산 증가 → 한국 수혜: 한화에어로스페이스/현대로템/LIG넥스원
+
+[3단계] 달러 강약 연동 체크
+ - DXY 강세: 수출 한국 대형주 유리, 원자재 수입주 불리
+ - 연준 피벗 기대: 외국인 한국 주식 매수 증가 가능성
+
+[4단계] 수급 정합성 확인
+ - 외국인 순매수 상위 종목이 2단계에서 도출한 글로벌 테마와 일치하는가?
+ - 일치 종목 = 글로벌 테마 + 수급 뒷받침 → 최우선 추천
+
+[5단계] 종목 추천 (3~6개)
+ - 글로벌 테마와 수급이 모두 뒷받침되는 종목
+ - 추천 근거에 미국 해당 섹터 성과(%)와 한국 연동 메커니즘 명시
+
+응답은 반드시 유효한 JSON 형식으로만 해주세요.""",
+
+    "kr_market": """당신은 한국 주식시장 전문 수급 트레이더입니다.
+아래 단계별 체크리스트를 순서대로 수행하세요.
+
+[1단계] 수급 동향 분석
+ - 외국인 순매수 TOP 10 중 3일 연속 순매수 종목은?
+ - 기관 순매수 TOP 10 중 외국인과 동반 매수하는 종목은?
+ - 결론: 외국인+기관 동반 매수 = 스마트머니 집중 종목
+
+[2단계] 테마/정책 모멘텀 확인
+ - 현재 핫 테마(강도 60 이상)와 수급 상위 종목의 교집합은?
+ - 정부 정책 발표(K-반도체, 방산 수출, 원전 재가동 등) 관련 수혜주는?
+
+[3단계] 수급 지속성 판단
+ - 외국인/기관이 단기(1일) 순매수인가 vs 중기(3~5일) 지속 순매수인가?
+ - 지속 순매수 + 주가 우상향 = 추세 진입 신호
+ - 단기 급매수 후 주가 급등 = 추격 위험, 제외
+
+[4단계] 수급 규모 적정성
+ - 시가총액 대비 일일 순매수 비율이 0.5% 이상인 종목 = 의미 있는 매수
+ - 소형주 과도 순매수(5% 이상)는 단기 급등 후 급락 위험 → 주의
+
+[5단계] 종목 추천 (3~6개)
+ - 1단계(스마트머니) + 2단계(테마/정책) 모두 해당하는 종목 최우선
+ - 추천 근거에 순매수 수량과 연속 매수일 수 명시
+
+응답은 반드시 유효한 JSON 형식으로만 해주세요.""",
 }
 
 USER_PROMPT_TEMPLATE = """## 현재 시장 데이터 ({date})
@@ -321,38 +408,66 @@ class ExpertPanel:
             news_text=news_text,
         )
 
+    # ── Regime-Aware 에이전트 가중치 (arXiv:2602.23330 alignment 인사이트) ──────
+    # 핵심 발견: 분석 출력과 하위 의사결정의 정렬(alignment)이 성능의 핵심 드라이버
+    # → 시장 레짐에 따라 각 에이전트의 신뢰 가중치를 동적으로 조정
+    _REGIME_WEIGHTS: Dict[str, Dict[str, float]] = {
+        "bullish": {
+            # 상승장: 수급(kr_market)·글로벌 모멘텀(us_market) 우선
+            "macro": 0.8, "micro": 1.0, "us_market": 1.3, "kr_market": 1.3,
+        },
+        "neutral": {
+            # 중립장: 균등 가중
+            "macro": 1.0, "micro": 1.0, "us_market": 1.0, "kr_market": 1.0,
+        },
+        "bearish": {
+            # 하락장: 거시(macro)·펀더멘털(micro) 방어적 관점 우선
+            "macro": 1.4, "micro": 1.2, "us_market": 0.8, "kr_market": 0.8,
+        },
+    }
+
     def _build_consensus(
         self, results: List[tuple]
     ) -> StrategicOutlook:
-        """4인 전문가 결과 → 합의 도출"""
+        """4인 전문가 결과 → regime-aware 가중 합의 도출"""
         now = datetime.now()
         outlook = StrategicOutlook(
             created_at=now.isoformat(),
             expires_at=(now + timedelta(days=7)).isoformat(),
         )
 
-        # 마켓 레짐 투표
-        regime_votes = {"bullish": 0, "neutral": 0, "bearish": 0}
+        # ① 마켓 레짐 투표 (가중치 적용 전 결정)
+        regime_votes: Dict[str, float] = {"bullish": 0.0, "neutral": 0.0, "bearish": 0.0}
         for expert_name, result in results:
             regime = result.get("market_regime", "neutral")
-            regime_votes[regime] = regime_votes.get(regime, 0) + 1
+            regime_votes[regime] = regime_votes.get(regime, 0.0) + 1.0
 
         outlook.market_regime = max(regime_votes, key=regime_votes.get)
+        weights = self._REGIME_WEIGHTS.get(outlook.market_regime, self._REGIME_WEIGHTS["neutral"])
+        logger.info(
+            f"[전문가패널] 레짐={outlook.market_regime} → "
+            f"가중치: macro={weights['macro']:.1f} micro={weights['micro']:.1f} "
+            f"us={weights['us_market']:.1f} kr={weights['kr_market']:.1f}"
+        )
 
-        # 섹터 전망 합산
+        # ② 섹터 전망 가중 합산
         sector_scores: Dict[str, Dict] = {}
         for expert_name, result in results:
+            w = weights.get(expert_name, 1.0)
             for sv in result.get("sector_views", []):
                 name = sv.get("name", "")
                 if not name:
                     continue
                 if name not in sector_scores:
-                    sector_scores[name] = {"scores": [], "reasons": []}
-                sector_scores[name]["scores"].append(sv.get("score", 0))
+                    sector_scores[name] = {"weighted_sum": 0.0, "weight_total": 0.0, "reasons": []}
+                sector_scores[name]["weighted_sum"] += sv.get("score", 0) * w
+                sector_scores[name]["weight_total"] += w
                 sector_scores[name]["reasons"].extend(sv.get("reasons", []))
 
         for name, data in sector_scores.items():
-            avg_score = sum(data["scores"]) / len(data["scores"])
+            if data["weight_total"] == 0:
+                continue
+            avg_score = data["weighted_sum"] / data["weight_total"]
             outlook_str = "positive" if avg_score > 0.2 else "negative" if avg_score < -0.2 else "neutral"
             outlook.sector_outlook[name] = SectorView(
                 name=name,
@@ -361,9 +476,11 @@ class ExpertPanel:
                 reasons=list(set(data["reasons"]))[:5],
             )
 
-        # 종목 추천 합의
-        stock_votes: Dict[str, Dict] = {}  # symbol → {experts, reasons, horizons, name, sector}
+        # ③ 종목 추천 가중 합의
+        # 각 에이전트의 추천에 regime 가중치를 반영해 conviction 점수 계산
+        stock_votes: Dict[str, Dict] = {}
         for expert_name, result in results:
+            w = weights.get(expert_name, 1.0)
             for pick in result.get("stock_picks", []):
                 symbol = str(pick.get("symbol", "")).strip().zfill(6)
                 if not symbol.isdigit() or symbol == "000000" or len(symbol) != 6:
@@ -376,26 +493,28 @@ class ExpertPanel:
                         "reasons": [],
                         "horizons": [],
                         "sector": "",
+                        "weighted_score": 0.0,  # 가중 합산
+                        "max_weight": 0.0,       # 정규화용
                     }
                 stock_votes[symbol]["experts"].append(expert_name)
                 stock_votes[symbol]["reasons"].extend(pick.get("reasons", []))
                 stock_votes[symbol]["horizons"].append(pick.get("horizon", "3개월"))
+                stock_votes[symbol]["weighted_score"] += w
+                stock_votes[symbol]["max_weight"] = max(stock_votes[symbol]["max_weight"], w)
                 if not stock_votes[symbol]["name"]:
                     stock_votes[symbol]["name"] = pick.get("name", "")
 
+        # 전체 가중치 합 기준으로 최대 가능 weighted_score 계산
+        total_weights = sum(weights.values())  # e.g. 4.4 in bullish
+
         for symbol, data in stock_votes.items():
             num_experts = len(data["experts"])
-            # 합의도 계산
-            if num_experts >= 4:
-                conviction = 1.0
-            elif num_experts >= 3:
-                conviction = 0.75
-            elif num_experts >= 2:
-                conviction = 0.5
-            else:
-                conviction = 0.25
+            # 가중 conviction (0~1): 전체 가중치 대비 해당 종목이 받은 가중치 비율
+            raw_conviction = data["weighted_score"] / total_weights
+            # 단독 추천이라도 고가중 에이전트면 최소 0.3 보장
+            conviction = max(raw_conviction, 0.15 * num_experts)
+            conviction = min(conviction, 1.0)
 
-            # 가장 많이 선택된 horizon
             horizon_counts: Dict[str, int] = {}
             for h in data["horizons"]:
                 horizon_counts[h] = horizon_counts.get(h, 0) + 1
@@ -405,7 +524,7 @@ class ExpertPanel:
                 symbol=symbol,
                 name=data["name"],
                 horizon=primary_horizon,
-                conviction=conviction,
+                conviction=round(conviction, 3),
                 reasons=list(set(data["reasons"]))[:5],
                 recommended_by=data["experts"],
                 target_sector=data["sector"],
