@@ -272,6 +272,7 @@ intraday_buy:
   max_daily_entries: 3       # 하루 최대 진입 횟수
   trading_start_time: "10:00"  # 장초반 갭 안정화 후 시작
   trading_end_time: "14:30"    # 마감 전 포지션 오픈 회피
+  llm_verify_enabled: true   # LLM 2차 검증 (점수 95+ 후보, Gemini Flash 3항목 체크)
 
 
 # 테마 탐지기
