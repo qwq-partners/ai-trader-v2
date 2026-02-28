@@ -6,6 +6,7 @@ import os
 import asyncio
 from datetime import date, datetime
 
+import aiohttp as aiohttp_client
 from aiohttp import web
 from loguru import logger
 
@@ -44,6 +45,7 @@ def setup_api_routes(app: web.Application, data_collector):
     app.router.add_get("/api/trade-events", handler.get_trade_events)
     app.router.add_get("/api/daily-settlement", handler.get_daily_settlement)
     app.router.add_get("/api/app/latest", handler.get_latest_app)
+    app.router.add_get("/api/us-proxy/{path:.*}", handler.proxy_us_api)
 
 
 class APIHandler:
@@ -327,6 +329,21 @@ class APIHandler:
             "size_mb": size_mb,
             "modified": datetime.fromtimestamp(latest.stat().st_mtime).isoformat(),
         })
+
+    US_API_BASE = "http://localhost:8081"
+
+    async def proxy_us_api(self, request: web.Request) -> web.Response:
+        """ai-trader-us API(8081) 프록시"""
+        path = request.match_info.get("path", "")
+        url = f"{self.US_API_BASE}/{path}"
+        try:
+            timeout = aiohttp_client.ClientTimeout(total=5)
+            async with aiohttp_client.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as resp:
+                    data = await resp.json()
+                    return web.json_response(data)
+        except Exception as e:
+            return web.json_response({"error": str(e), "offline": True}, status=200)
 
     async def _restart_bot_delayed(self, delay_seconds: int):
         """봇 재시작 (지연 실행)"""
