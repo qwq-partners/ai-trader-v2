@@ -2,6 +2,36 @@
 
 ---
 
+## [2026-03-03] Phase 3 섹터 모멘텀 + LLM 5가지 품질 개선 + 코드리뷰 수정
+
+### commit `c129460` (Phase 3: 섹터 모멘텀 완성)
+
+**SectorMomentumProvider** (`src/data/providers/sector_momentum.py` — 신규)
+- KODEX 섹터 ETF 11개 매핑: 반도체/IT/자동차/2차전지/바이오/건설/조선/철강/은행/화학/방산
+- Stock → 섹터 매핑 3계층: 인메모리 캐시 → pykrx WICS(7일 캐시) → 키워드 폴백
+- ETF 20일 수익률 → 0~10pt 변환 (30분 캐시, KIS get_daily_prices)
+- 데이터 없음 = 3pt 중립 (페널티 없음)
+
+**batch_analyzer.py 통합**
+- `__init__`: SectorMomentumProvider 초기화 (broker 공유)
+- `_scan_and_build()`: sepa_candidates에 sector_momentum_score 비동기 병렬 주입
+
+**sepa_trend.py 변경 (5번 항목: 섹터 모멘텀 10점)**
+- 수정 전: change_20d(개별 종목 20일 수익률) 항상 사용
+- 수정 후: sector_momentum_score(ETF 기반) 우선, 없으면 change_20d 폴백
+
+### commit `edf1dfa` (코드리뷰 P1/P2 수정)
+- P1: expert_panel.py max_weight dead code 제거
+- P1: conviction 최소 보장 주석 정정 (1인=0.15, 2인=0.30, 3인=0.45, 4인=0.60)
+- P1: LLM 타임아웃 5초 → 8초
+- P2: llm_verify_enabled 루프 외부로 이동
+- P2: LLM 검증 프롬프트 실효성 개선 (중복 체크 → 수급품질/추세건전성/리스크부재)
+
+### commit `d5ccbe2` (LLM 2차 검증 활성화)
+- `config/default.yml`: `intraday_buy.llm_verify_enabled: true`
+
+---
+
 ## [2026-03-03] 논문 arXiv:2602.23330 인사이트 적용 — LLM 4가지 품질 개선
 
 ### commit `2a8c222`
