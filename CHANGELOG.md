@@ -2,6 +2,44 @@
 
 ---
 
+## [2026-03-03] 논문 arXiv:2602.23330 인사이트 적용 — LLM 4가지 품질 개선
+
+### commit `2a8c222`
+
+**1. 전문가 패널 프롬프트 세밀화** (`src/signals/strategic/expert_panel.py`)
+- EXPERT_PROMPTS 4개 에이전트 전면 재설계: 추상적 역할 → 5단계 체크리스트형
+  - macro: 금리진단 → 환율분석 → 경기사이클 → 섹터점수화 → 종목추천
+  - micro: 밸류에이션 → 실적모멘텀 → 산업트렌드 → 위험체크 → 종목추천
+  - us_market: 레짐판단 → 글로벌공급망 → 달러연동 → 수급정합성 → 종목추천
+  - kr_market: 수급동향 → 테마/정책 → 수급지속성 → 규모적정성 → 종목추천
+
+**2. Regime-Aware 가중 합의** (`_build_consensus()`)
+- `_REGIME_WEIGHTS` 추가: bullish/neutral/bearish별 에이전트 가중치
+  - bullish: kr_market/us_market 1.3, macro 0.8 (수급·모멘텀 우선)
+  - bearish: macro 1.4, micro 1.2, kr/us 0.8 (방어적 관점 우선)
+- 섹터 전망 가중 평균 + 종목 conviction 정규화 (weighted_score/total_weights)
+
+**3. 섹터 상대강도 보정** (`src/signals/screener/stock_screener.py`)
+- `_apply_sector_diversity()` Phase A 추가
+  - 섹터 내 평균 대비 +5pt 이상: 최대 +8pt 보너스 (섹터 상대강도 가산)
+  - 섹터 내 평균 대비 -5pt 이하: 최대 -8pt 패널티 (섹터 하위 감점)
+  - Phase B(기존 섹터쏠림 방지) 보정 후 점수 기준으로 동작
+
+**4. LLM 2차 검증 — 장중품질 전용** (`scripts/bot_schedulers.py`)
+- `_llm_verify_intraday()` 메서드 추가
+  - 설정: `intraday_buy.llm_verify_enabled: true` 시 활성 (기본 false)
+  - 점수 95+ 후보에 대해 Gemini Flash 3항목 체크리스트 검증
+  - 항목: 모멘텀지속성 / 수급신뢰성 / 진입타이밍
+  - 타임아웃 5초, LLM 실패 시 fall-through (신호 차단 안 함)
+
+**대시보드 Phase 2B 완료 확인** (commit `2f9aedc`, 이전 세션 완료)
+- KR+US 통합 마켓 필터 뷰: 🌐통합 / 🇰🇷국내 / 🇺🇸미국 필터
+- 적용 탭: 실시간(index), 거래(trades), 성과(performance), 자산(equity)
+- `common.js` MarketFilter 유틸 + localStorage 저장 + CustomEvent 동기화
+- ai-trader-us `/api/us/trades` 엔드포인트 추가, 대시보드 `/api/us-proxy/` 프록시
+
+---
+
 ## [2026-02-28] ExitStage 룩백 확장 + 주간 리밸런싱 + 대시보드 모바일 반응형 전체 완성
 
 ### commit `4147852` (ExitStage 폴백 룩백 확장)
