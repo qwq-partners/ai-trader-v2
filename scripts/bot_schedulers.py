@@ -1205,6 +1205,9 @@ class SchedulerMixin:
                                 f"오늘진입={_ib_today_cnt}/{_ib_max_entries}"
                             )
 
+                            # llm_verify_enabled 루프 외부에서 1회만 읽기 (P2 #4)
+                            _ib_llm_verify_on = _ib_cfg.get("llm_verify_enabled", False)
+
                             for _ib_stock in _ib_candidates[:5]:
                                 if _ib_today_cnt >= _ib_max_entries:
                                     break
@@ -1260,8 +1263,7 @@ class SchedulerMixin:
                                 # 설정: intraday_buy.llm_verify_enabled: true 시 활성
                                 # 점수 95+ 후보에 대해 Gemini Flash로 3개 체크리스트 검증
                                 # LLM 실패 시 fall-through (신호 차단 안 함)
-                                _ib_llm_verify = _ib_cfg.get("llm_verify_enabled", False)
-                                if _ib_llm_verify and _ib_stock.score >= 95:
+                                if _ib_llm_verify_on and _ib_stock.score >= 95:
                                     try:
                                         _ib_llm_ok = await self._llm_verify_intraday(
                                             stock=_ib_stock,
@@ -1344,7 +1346,7 @@ class SchedulerMixin:
         stock,
         rt_price: float,
         rt_change: float,
-        timeout_sec: float = 5.0,
+        timeout_sec: float = 8.0,  # Gemini Flash 실제 응답 평균 3~5초 → 8초 여유
     ) -> bool:
         """장중품질 LLM 2차 검증 (arXiv:2602.23330 fine-grained verification)
 
@@ -1353,6 +1355,12 @@ class SchedulerMixin:
 
         설정: intraday_buy.llm_verify_enabled: true 로 활성화
         비용: Gemini Flash (초경량 모델), 호출당 ~0.1¢ 수준
+
+        [프롬프트 설계 원칙] 사전 필터(등락 0~3%, 장중 시간)와 중복되는 항목은 제외.
+        LLM 고유 판단 영역에 집중:
+          Q1: 선정 근거의 질 — 의미 있는 수급/모멘텀 신호인가? (단순 거래량 급등과 구별)
+          Q2: 추세 지속 가능성 — 단기 급등 후 꺾임 패턴이 아닌가?
+          Q3: 진입 위험 — 공시·뉴스 없이 급등하는 불명확 상승인가?
         """
         try:
             from src.utils.llm import get_llm_manager, LLMTask
@@ -1366,11 +1374,14 @@ class SchedulerMixin:
 현재가: {rt_price:,}원 | 등락: {rt_change:+.1f}% | 스크리닝점수: {stock.score:.0f}점
 선정 근거: {reasons_text}
 
-아래 3가지 항목을 Y/N으로만 판단하세요:
+아래 3가지 항목을 Y/N으로만 판단하세요 (선정 근거 텍스트 기반):
 
-1. 모멘텀 지속성: 등락률이 0~3%이고 급등 후 고점 피크가 아닌 지속 상승 패턴인가?
-2. 수급 신뢰성: 외국인 또는 기관 순매수가 확인되어 단순 개인 급등주가 아닌가?
-3. 진입 타이밍: 오전 10시~오후 2시30분 장중, 과도한 변동성(갭) 없이 안정적인가?
+1. 수급 품질: 선정 근거에 "외국인매수" 또는 "기관매수" 또는 "수급" 관련 내용이 있고,
+   단순 "거래량 N배" 급등만이 아닌 스마트머니 유입 근거가 있는가?
+2. 추세 건전성: 선정 근거가 지속 매집 패턴(섹터상대강도, 모멘텀지속, 신고가)을 나타내며,
+   단기 급등 후 꺾임(고점소진, 저항) 징후가 없는가?
+3. 리스크 부재: 선정 근거에 "섹터하위종목", "섹터쏠림감점", "과열" 같은 부정적 태그가
+   없고, 진입 위험을 높이는 요소가 보이지 않는가?
 
 응답 형식 (JSON만):
 {{"q1": "Y", "q2": "Y", "q3": "Y", "pass": true}}"""
@@ -1378,7 +1389,7 @@ class SchedulerMixin:
             result = await asyncio.wait_for(
                 llm.complete_json(
                     prompt=prompt,
-                    system="당신은 한국 주식 장중 진입 검증 전문가입니다. 3가지 체크리스트만 평가하고 JSON으로만 응답하세요.",
+                    system="당신은 한국 주식 장중 진입 검증 전문가입니다. 선정 근거 텍스트만 보고 3가지 체크리스트를 평가해 JSON으로만 응답하세요.",
                     task=LLMTask.QUICK_ANALYSIS,
                     max_tokens=100,
                 ),

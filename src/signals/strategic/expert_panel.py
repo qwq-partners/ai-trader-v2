@@ -493,25 +493,24 @@ class ExpertPanel:
                         "reasons": [],
                         "horizons": [],
                         "sector": "",
-                        "weighted_score": 0.0,  # 가중 합산
-                        "max_weight": 0.0,       # 정규화용
+                        "weighted_score": 0.0,  # 가중 합산 (regime 가중치 반영)
                     }
                 stock_votes[symbol]["experts"].append(expert_name)
                 stock_votes[symbol]["reasons"].extend(pick.get("reasons", []))
                 stock_votes[symbol]["horizons"].append(pick.get("horizon", "3개월"))
                 stock_votes[symbol]["weighted_score"] += w
-                stock_votes[symbol]["max_weight"] = max(stock_votes[symbol]["max_weight"], w)
                 if not stock_votes[symbol]["name"]:
                     stock_votes[symbol]["name"] = pick.get("name", "")
 
-        # 전체 가중치 합 기준으로 최대 가능 weighted_score 계산
-        total_weights = sum(weights.values())  # e.g. 4.4 in bullish
+        # 전체 가중치 합 = regime별로 다름 (bullish: 4.4, neutral: 4.0, bearish: 4.2)
+        total_weights = sum(weights.values())
 
         for symbol, data in stock_votes.items():
             num_experts = len(data["experts"])
             # 가중 conviction (0~1): 전체 가중치 대비 해당 종목이 받은 가중치 비율
             raw_conviction = data["weighted_score"] / total_weights
-            # 단독 추천이라도 고가중 에이전트면 최소 0.3 보장
+            # 최소 보장: 1인 추천=0.15, 2인=0.30, 3인=0.45, 4인=0.60
+            # (raw가 이미 충분히 높으면 raw 그대로 사용)
             conviction = max(raw_conviction, 0.15 * num_experts)
             conviction = min(conviction, 1.0)
 
