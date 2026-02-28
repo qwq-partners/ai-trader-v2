@@ -19,6 +19,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Callable
 import aiohttp
 from loguru import logger
@@ -423,6 +424,10 @@ class LLMManager:
         },
     }
 
+    # LLM 응답 로그 경로
+    _LLM_LOG_DIR = Path.home() / ".cache" / "ai_trader" / "llm_responses"
+    _LLM_LOG_RETENTION_DAYS = 7
+
     def __init__(self, config: Optional[LLMConfig] = None):
         self.config = config or LLMConfig.from_env()
 
@@ -432,6 +437,9 @@ class LLMManager:
         # 사용량 추적
         self.daily_usage = LLMUsage()
         self._usage_reset_date = datetime.now().date()
+
+        # LLM 로그 상태
+        self._llm_log_date: Optional[str] = None
 
         # 통계
         self.stats = {
@@ -539,12 +547,73 @@ class LLMManager:
         response = await self.complete(prompt, task, system, **kwargs)
 
         if not response.success:
+            self._log_llm_response(
+                task=task.value, model=response.model or "",
+                raw=response.error or "", parsed=None, success=False,
+            )
             return {"error": response.error}
 
         try:
-            return _extract_json(response.content)
+            parsed = _extract_json(response.content)
+            self._log_llm_response(
+                task=task.value, model=response.model or "",
+                raw=response.content or "", parsed=parsed, success=True,
+            )
+            return parsed
         except (json.JSONDecodeError, ValueError):
+            self._log_llm_response(
+                task=task.value, model=response.model or "",
+                raw=response.content or "", parsed=None, success=False,
+            )
             return {"error": "Invalid JSON", "raw": response.content}
+
+    def _log_llm_response(
+        self, task: str, model: str, raw: str,
+        parsed: Optional[Dict], success: bool,
+    ) -> None:
+        """LLM 응답을 JSONL 파일에 기록 (감사 추적용)."""
+        try:
+            today = datetime.now().strftime("%Y%m%d")
+
+            # 날짜 변경 시 오래된 로그 정리 (1일 1회)
+            if self._llm_log_date != today:
+                self._llm_log_date = today
+                self._cleanup_old_logs()
+
+            self._LLM_LOG_DIR.mkdir(parents=True, exist_ok=True)
+            log_path = self._LLM_LOG_DIR / f"{today}.jsonl"
+
+            # raw 응답 5KB 제한
+            truncated_raw = raw[:5120] if raw else ""
+
+            entry = {
+                "ts": datetime.now().isoformat(),
+                "task": task,
+                "model": model,
+                "raw": truncated_raw,
+                "parsed": parsed,
+                "success": success,
+            }
+
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+
+        except Exception as e:
+            logger.debug(f"[LLM] 응답 로그 기록 실패: {e}")
+
+    def _cleanup_old_logs(self) -> None:
+        """7일 이상 된 LLM 응답 로그 삭제."""
+        try:
+            if not self._LLM_LOG_DIR.exists():
+                return
+            cutoff = datetime.now() - timedelta(days=self._LLM_LOG_RETENTION_DAYS)
+            cutoff_str = cutoff.strftime("%Y%m%d")
+            for f in self._LLM_LOG_DIR.glob("*.jsonl"):
+                if f.stem < cutoff_str:
+                    f.unlink()
+                    logger.debug(f"[LLM] 오래된 로그 삭제: {f.name}")
+        except Exception as e:
+            logger.debug(f"[LLM] 로그 정리 실패: {e}")
 
     def get_usage_summary(self) -> Dict[str, Any]:
         """사용량 요약"""

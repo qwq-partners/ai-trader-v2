@@ -768,6 +768,11 @@ class TradingBot(SchedulerMixin):
                     self.exit_manager._max_holding_days = batch_cfg.get("max_holding_days", 10)
                 logger.info("배치 분석기 초기화 완료 (스윙 모멘텀 모드)")
 
+                # sector_momentum → screener 연동 (WICS 섹터 분산용)
+                if hasattr(self.batch_analyzer, '_sector_momentum'):
+                    self.screener.set_sector_momentum(self.batch_analyzer._sector_momentum)
+                    logger.info("섹터 모멘텀 → 스크리너 연동 완료 (pykrx WICS)")
+
             # 헬스 모니터 초기화
             from src.monitoring.health_monitor import HealthMonitor
             self.health_monitor = HealthMonitor(self)

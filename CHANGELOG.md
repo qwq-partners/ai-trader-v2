@@ -2,6 +2,76 @@
 
 ---
 
+## [2026-02-28] 대시보드 마켓 필터 통합 — 포트폴리오/리스크 카드 필터 반영
+
+**수정 파일**: `src/dashboard/static/js/dashboard.js`, `src/dashboard/templates/index.html`
+
+- **포트폴리오 카드**: 마켓 필터(통합/국내/미국)에 따라 데이터 동적 전환
+  - "국내": KR SSE 데이터만 표시 (기존 동작)
+  - "미국": US API 데이터로 USD 포맷 표시
+  - "통합": KR + US 라인별 분리 표시 (통화 다르므로 합산 불가, 플래그+값 병렬)
+- **리스크 카드**: 마켓 필터 반영
+  - "국내": KR 리스크 데이터 (기존 동작)
+  - "미국": 리스크 API 없으므로 최소 표시 (포지션 수만), 게이지 비활성
+  - "통합": KR 리스크 기본 + 포지션 수에 US 병기 (`KR X + US Y`)
+- **캐시 아키텍처**: `cachedKRPortfolio`, `cachedUSPortfolio`, `cachedKRRisk` 캐시 변수 — 필터 전환 시 재요청 없이 즉시 반영
+- **카드 제목 플래그**: 필터에 따라 포트폴리오 카드 헤더에 국기/지구본 아이콘 동적 표시
+- **XSS 안전**: innerHTML 제거 → DOM API (`createElement`, `textContent`, `append`) 전환
+- HTML 캐시 버스팅: `dashboard.js?v=6`
+
+---
+
+## [2026-02-28] v2 엔진 개선 3건 + US 봇 개선 4건
+
+### Phase 1: AI Trader v2 개선
+
+**Step 1: corp_cls → pykrx WICS 섹터 매핑 (HIGH)**
+- `sector_momentum.py`: `get_sector_map_batch()` 공용 메서드 추가 — 복수 종목 일괄 섹터 매핑 (3계층 폴백)
+- `stock_screener.py`: `_apply_sector_diversity()` — DB `corp_cls`(시장분류 Y/N) 대신 pykrx WICS 실제 섹터 사용
+  - `set_sector_momentum()` setter 추가, 생성자에 `_sector_momentum` 필드 추가
+  - Phase A(섹터 상대강도 ±8pt) + Phase B(섹터 쏠림 30%) 로직은 유지, 데이터 소스만 교체
+- `run_trader.py`: 배치 분석기 초기화 직후 `screener.set_sector_momentum()` 호출 (초기화 순서 보장)
+- **이전 문제**: `corp_cls`가 Y(KOSPI)/N(KOSDAQ) 시장분류여서 "섹터: 2개"로만 분류됨 → WICS 기반 11+개 실제 섹터로 교체
+
+**Step 2: LLM raw 응답 JSONL 저장 (HIGH)**
+- `llm.py`: `_log_llm_response()` 메서드 추가 — `~/.cache/ai_trader/llm_responses/YYYYMMDD.jsonl`
+  - 형식: `{ts, task, model, raw(5KB 제한), parsed, success}`
+  - 동기 file append (마이크로초 단위)
+- `_cleanup_old_logs()`: 날짜 변경 시 1회 호출, 7일 이상 된 로그 자동 삭제
+- `complete_json()`: 성공/실패 양쪽에서 로깅 호출, 반환값 인터페이스 변경 없음
+- `Path` import 추가
+
+**Step 3: 섹터 모멘텀 연속 함수 (LOW)**
+- `sector_momentum.py`: `_momentum_to_score()` — 이산 계단 함수 → piecewise linear interpolation
+  - 앵커 포인트: (-5%, 0pt), (0%, 2pt), (5%, 4pt), (10%, 7pt), (15%, 10pt)
+  - 경계값 동일, 중간값만 부드러워짐 (예: 7.5% → 기존 4pt → 변경 5.5pt)
+
+### Phase 2: AI Trader US 개선
+
+**Step 4: lxml 설치** — 이미 설치됨 (6.0.2)
+
+**Step 5: 텔레그램 알림 추가**
+- `src/utils/telegram.py` (신규): TelegramNotifier 클래스 + 모듈 레벨 편의 함수
+  - aiohttp 기반, 4096자 분할, 재시도 2회
+- `.env`: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID 추가 (KR 봇과 동일 토큰)
+- `live_engine.py`: 매수/매도 체결 알림, 일일 손실 경고 (-2% 도달 시)
+- `run_live.py`: 봇 시작/종료 알림
+
+**Step 6: 헬스 모니터링**
+- `src/monitoring/health_monitor.py` (신규): 3개 체크 (장중에만 실행)
+  1. 하트비트 스톨 (10분 미응답)
+  2. 일일 손실 근접 (한도의 80%)
+  3. 브로커 연결 (get_balance 응답)
+  - 알림 쿨다운 5분 (같은 체크 반복 방지)
+- `live_engine.py`: `_heartbeat_loop()`에서 `health_monitor.check_all()` 호출
+
+**Step 7: 일일 리포트**
+- `src/analytics/daily_report.py` (신규): 장 마감 후 텍스트 리포트 + 텔레그램 전송
+  - 포트폴리오 요약, 오늘 거래 내역 (승/패, 실현 PnL), 보유 포지션 상세
+- `live_engine.py`: `_eod_close_loop()`에서 16:10 ET 이후 1일 1회 리포트 발송
+
+---
+
 ## [2026-03-03] US 모의거래 TEST 배지 + Phase 3 섹터 모멘텀 + LLM 품질 개선 + 코드리뷰 수정
 
 ### commit `a0fd9f7` (US 모의거래 TEST 배지 표시)

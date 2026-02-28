@@ -97,6 +97,7 @@ class StockScreener:
         self._kis_market_data = kis_market_data
         self._stock_master = stock_master  # StockMaster 인스턴스 (종목 DB)
         self._broker = broker  # KISBroker 인스턴스 (일봉 조회용)
+        self._sector_momentum = None  # SectorMomentumProvider (섹터 분산용)
 
         # 캐시
         self._cache: Dict[str, List[ScreenedStock]] = {}
@@ -126,6 +127,10 @@ class StockScreener:
     def set_broker(self, broker):
         """broker 인스턴스 설정 (런타임에서 주입, 모멘텀/변동성 필터용)"""
         self._broker = broker
+
+    def set_sector_momentum(self, provider):
+        """SectorMomentumProvider 인스턴스 설정 (섹터 분산/상대강도용)"""
+        self._sector_momentum = provider
 
     def _refresh_code_to_name(self):
         """종목코드→이름 매핑 갱신 (stock_master DB 우선, KNOWN_STOCKS 폴백)"""
@@ -740,42 +745,34 @@ class StockScreener:
 
     async def _apply_sector_diversity(self, all_stocks: Dict[str, "ScreenedStock"]):
         """
-        섹터/업종 분산 점수 조정
+        섹터/업종 분산 점수 조정 (pykrx WICS 섹터 기반)
 
         특정 섹터에 쏠리지 않도록:
         1. 섹터별 종목 수 카운트
         2. 과도하게 많은 섹터는 하위 종목 감점
         3. 다양한 섹터 분산 유도
         """
-        if not self._stock_master or not hasattr(self._stock_master, 'pool') or not self._stock_master.pool:
-            logger.debug("[Screener] 섹터 분산 스킵: stock_master 없음")
-            return
-
         try:
             symbols = list(all_stocks.keys())
             if not symbols:
                 return
 
-            # DB에서 섹터 정보 일괄 조회
-            async with self._stock_master.pool.acquire() as conn:
-                query = """
-                    SELECT ticker, corp_cls
-                    FROM kr_stock_master
-                    WHERE ticker = ANY($1::text[])
-                """
-                rows = await conn.fetch(query, symbols)
+            # pykrx WICS 섹터 매핑 (3계층 폴백: 캐시→pykrx→키워드)
+            if self._sector_momentum:
+                symbol_sector = await self._sector_momentum.get_sector_map_batch(symbols)
+            else:
+                logger.warning("[Screener] 섹터 분산 스킵: sector_momentum_provider 미설정")
+                return
+
+            if not symbol_sector:
+                logger.debug("[Screener] 섹터 매핑 결과 없음 — 분산 스킵")
+                return
 
             # 섹터별 종목 매핑
             sector_map: Dict[str, List[str]] = {}
-            symbol_sector: Dict[str, str] = {}
-
-            for row in rows:
-                ticker = row["ticker"]
-                sector = row["corp_cls"] or "기타"
-                if not sector or sector == "":
-                    sector = "기타"
-
-                symbol_sector[ticker] = sector
+            for ticker, sector in symbol_sector.items():
+                if ticker not in all_stocks:
+                    continue
                 if sector not in sector_map:
                     sector_map[sector] = []
                 sector_map[sector].append(ticker)

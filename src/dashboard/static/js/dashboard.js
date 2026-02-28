@@ -11,80 +11,23 @@ let positionSortKey = 'unrealized_pnl_pct';
 let positionSortDir = 'desc';
 let lastPositions = [];
 
+// 마켓별 데이터 캐시 (필터 전환 시 즉시 반영용)
+let cachedKRPortfolio = null;
+let cachedUSPortfolio = null;
+let cachedKRRisk = null;
+
 // ============================================================
 // SSE 이벤트 핸들러
 // ============================================================
 
 sse.on('portfolio', (data) => {
-    // 총자산
-    document.getElementById('p-equity').textContent = formatCurrency(data.total_equity);
-
-    // 현금
-    document.getElementById('p-cash').textContent = formatCurrency(data.cash);
-    const cashPct = data.cash_ratio != null ? (data.cash_ratio * 100).toFixed(0) : '--';
-    document.getElementById('p-cash-pct').textContent = `(${cashPct}%)`;
-
-    // 주식 평가
-    document.getElementById('p-stock').textContent = formatCurrency(data.total_position_value);
-
-    // 일일 손익 (실현 + 미실현)
-    const dailyPnl = document.getElementById('p-daily-pnl');
-    dailyPnl.innerHTML = formatPnl(data.daily_pnl) + ` <span style="font-size:0.72rem; color:var(--text-muted);">(${formatPct(data.daily_pnl_pct)})</span>`;
-    dailyPnl.className = 'mono font-semibold ' + pnlClass(data.daily_pnl);
-
-    // 실현/미실현 분리 표시
-    const breakdownEl = document.getElementById('p-pnl-breakdown');
-    if (breakdownEl && (data.realized_daily_pnl || data.unrealized_pnl)) {
-        const unrealizedNet = data.unrealized_pnl_net ?? data.unrealized_pnl;
-        const netLabel = data.unrealized_pnl_net != null ? '미실현(순)' : '미실현';
-        const netTitle = data.unrealized_pnl_net != null
-            ? `title="수수료 포함: ${formatPnl(unrealizedNet)} / 평가: ${formatPnl(data.unrealized_pnl)}"`
-            : '';
-        breakdownEl.innerHTML =
-            `<span style="color:var(--text-muted);">실현</span> <span class="mono ${pnlClass(data.realized_daily_pnl)}">${formatPnl(data.realized_daily_pnl)}</span>` +
-            ` <span style="color:var(--text-muted); margin:0 6px;">|</span> ` +
-            `<span style="color:var(--text-muted);" ${netTitle}>${netLabel}</span> <span class="mono ${pnlClass(unrealizedNet)}" ${netTitle}>${formatPnl(unrealizedNet)}</span>`;
-    }
-
-    // 파이 차트 업데이트
-    updatePieChart(data.cash, data.total_position_value);
+    cachedKRPortfolio = data;
+    updatePortfolioCard();
 });
 
 sse.on('risk', (data) => {
-    // 거래 가능
-    const canTrade = document.getElementById('r-can-trade');
-    if (data.can_trade) {
-        canTrade.textContent = 'Yes';
-        canTrade.className = 'badge badge-green';
-    } else {
-        canTrade.textContent = 'No';
-        canTrade.className = 'badge badge-red';
-    }
-
-    // 일일 손실
-    document.getElementById('r-daily-loss').textContent = formatPct(data.daily_loss_pct);
-    document.getElementById('r-daily-loss-limit').textContent = `-${data.daily_loss_limit_pct}%`;
-    const lossPct = Math.min(Math.abs(data.daily_loss_pct) / data.daily_loss_limit_pct * 100, 100);
-    const lossGauge = document.getElementById('r-loss-gauge');
-    lossGauge.style.width = lossPct + '%';
-    lossGauge.className = 'gauge-fill ' + (lossPct > 70 ? 'bg-red-500' : lossPct > 40 ? 'bg-yellow-500' : 'bg-green-500');
-
-    // 거래 횟수
-    document.getElementById('r-trades').textContent = data.daily_trades;
-    document.getElementById('r-max-trades').textContent = data.daily_max_trades;
-    const tradesPct = Math.min(data.daily_trades / data.daily_max_trades * 100, 100);
-    document.getElementById('r-trades-gauge').style.width = tradesPct + '%';
-
-    // 포지션 수
-    document.getElementById('r-positions').textContent = data.position_count;
-    document.getElementById('r-max-positions').textContent = data.max_positions;
-    const posPct = Math.min(data.position_count / data.max_positions * 100, 100);
-    document.getElementById('r-positions-gauge').style.width = posPct + '%';
-
-    // 연속 손실
-    const consec = document.getElementById('r-consecutive');
-    consec.textContent = data.consecutive_losses;
-    consec.className = 'mono' + (data.consecutive_losses >= 3 ? ' text-loss' : '');
+    cachedKRRisk = data;
+    updateRiskCard();
 });
 
 sse.on('status', (data) => {
@@ -790,6 +733,8 @@ async function loadUSData() {
         renderUSStatus(status);
         renderUSPortfolio(portfolio);
         renderUSPositions(positions);
+        cachedUSPortfolio = portfolio;
+        updatePortfolioCard();
     } catch (e) {
         console.warn("[US] 데이터 로드 실패:", e);
     }
@@ -870,18 +815,326 @@ function renderUSPositions(positions) {
     }).join("");
 }
 
+// ============================================================
+// 마켓 필터 기반 포트폴리오/리스크 카드 업데이트
+// ============================================================
+
+function formatUSD(n) {
+    if (n === null || n === undefined || isNaN(n)) return '$--';
+    return (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatUSDSigned(n) {
+    if (n === null || n === undefined || isNaN(n)) return '$--';
+    const sign = n > 0 ? '+' : '';
+    return sign + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function updatePortfolioCard() {
+    const filter = MarketFilter.get();
+    const kr = cachedKRPortfolio;
+    const us = cachedUSPortfolio;
+
+    const equityEl = document.getElementById('p-equity');
+    const cashEl = document.getElementById('p-cash');
+    const cashPctEl = document.getElementById('p-cash-pct');
+    const stockEl = document.getElementById('p-stock');
+    const dailyPnlEl = document.getElementById('p-daily-pnl');
+    const breakdownEl = document.getElementById('p-pnl-breakdown');
+
+    if (filter === 'kr' || filter === 'all') {
+        // KR 데이터 렌더
+        if (kr) {
+            const krEquity = formatCurrency(kr.total_equity);
+            const krCash = formatCurrency(kr.cash);
+            const krCashPct = kr.cash_ratio != null ? (kr.cash_ratio * 100).toFixed(0) : '--';
+            const krStock = formatCurrency(kr.total_position_value);
+
+            if (filter === 'kr') {
+                equityEl.textContent = krEquity;
+                cashEl.textContent = krCash;
+                cashPctEl.textContent = '(' + krCashPct + '%)';
+                stockEl.textContent = krStock;
+
+                dailyPnlEl.textContent = '';
+                const pnlText = document.createTextNode(formatPnl(kr.daily_pnl) + ' ');
+                const pnlSpan = document.createElement('span');
+                pnlSpan.style.cssText = 'font-size:0.72rem; color:var(--text-muted);';
+                pnlSpan.textContent = '(' + formatPct(kr.daily_pnl_pct) + ')';
+                dailyPnlEl.appendChild(pnlText);
+                dailyPnlEl.appendChild(pnlSpan);
+                dailyPnlEl.className = 'mono font-semibold ' + pnlClass(kr.daily_pnl);
+
+                _renderKRBreakdown(kr, breakdownEl);
+                updatePieChart(kr.cash, kr.total_position_value);
+            } else {
+                // "all" 모드 — KR + US 분리 표시 (DOM API 사용)
+                const usVal = (us && !us.offline && !us.error) ? us : null;
+                const usEquityStr = usVal ? formatUSD(usVal.total_value || 0) : '$--';
+                const usCashStr = usVal ? formatUSD(usVal.cash || 0) : '$--';
+                const usStockStr = usVal ? formatUSD((usVal.total_value || 0) - (usVal.cash || 0)) : '$--';
+                const usPnlVal = usVal ? (usVal.daily_pnl || 0) : 0;
+                const usPnlStr = usVal ? formatUSDSigned(usPnlVal) : '$--';
+                const usPnlPct = usVal && usVal.total_value ? (usPnlVal / usVal.total_value * 100) : 0;
+
+                // 총자산: KR / US
+                equityEl.textContent = '';
+                _appendFlagValue(equityEl, '\u{1F1F0}\u{1F1F7}', krEquity, '0.85em');
+                _appendSep(equityEl, '0.55em');
+                _appendFlagValue(equityEl, '\u{1F1FA}\u{1F1F8}', usEquityStr, '0.85em');
+
+                // 현금
+                cashEl.textContent = '';
+                _appendFlagValue(cashEl, '\u{1F1F0}\u{1F1F7}', krCash);
+                _appendSep(cashEl);
+                _appendFlagValue(cashEl, '\u{1F1FA}\u{1F1F8}', usCashStr);
+                cashPctEl.textContent = '(' + krCashPct + '%)';
+
+                // 주식평가
+                stockEl.textContent = '';
+                _appendFlagValue(stockEl, '\u{1F1F0}\u{1F1F7}', krStock);
+                _appendSep(stockEl);
+                _appendFlagValue(stockEl, '\u{1F1FA}\u{1F1F8}', usStockStr);
+
+                // 일일 손익
+                dailyPnlEl.textContent = '';
+                const krPnlSpan = document.createElement('span');
+                krPnlSpan.className = pnlClass(kr.daily_pnl);
+                krPnlSpan.textContent = '\u{1F1F0}\u{1F1F7} ' + formatPnl(kr.daily_pnl);
+                const krPctSpan = document.createElement('span');
+                krPctSpan.style.cssText = 'font-size:0.72rem; color:var(--text-muted);';
+                krPctSpan.textContent = ' (' + formatPct(kr.daily_pnl_pct) + ')';
+                dailyPnlEl.appendChild(krPnlSpan);
+                dailyPnlEl.appendChild(krPctSpan);
+                _appendSep(dailyPnlEl);
+                const usPnlSpan = document.createElement('span');
+                usPnlSpan.className = pnlClass(usPnlVal);
+                usPnlSpan.textContent = '\u{1F1FA}\u{1F1F8} ' + usPnlStr;
+                const usPctSpan = document.createElement('span');
+                usPctSpan.style.cssText = 'font-size:0.72rem; color:var(--text-muted);';
+                usPctSpan.textContent = ' (' + (usVal ? formatPct(usPnlPct) : '--') + ')';
+                dailyPnlEl.appendChild(usPnlSpan);
+                dailyPnlEl.appendChild(usPctSpan);
+                dailyPnlEl.className = 'mono font-semibold';
+
+                _renderKRBreakdown(kr, breakdownEl);
+                updatePieChart(kr.cash, kr.total_position_value);
+            }
+        }
+    } else if (filter === 'us') {
+        // US 전용 모드
+        const usVal = (us && !us.offline && !us.error) ? us : null;
+        if (usVal) {
+            equityEl.textContent = formatUSD(usVal.total_value || 0);
+            cashEl.textContent = formatUSD(usVal.cash || 0);
+            const usCashPct = usVal.total_value ? ((usVal.cash || 0) / usVal.total_value * 100).toFixed(0) : '--';
+            cashPctEl.textContent = '(' + usCashPct + '%)';
+            stockEl.textContent = formatUSD((usVal.total_value || 0) - (usVal.cash || 0));
+
+            const pnl = usVal.daily_pnl || 0;
+            const pnlPct = usVal.total_value ? (pnl / usVal.total_value * 100) : 0;
+            dailyPnlEl.textContent = '';
+            const pnlText = document.createTextNode(formatUSDSigned(pnl) + ' ');
+            const pctSpan = document.createElement('span');
+            pctSpan.style.cssText = 'font-size:0.72rem; color:var(--text-muted);';
+            pctSpan.textContent = '(' + formatPct(pnlPct) + ')';
+            dailyPnlEl.appendChild(pnlText);
+            dailyPnlEl.appendChild(pctSpan);
+            dailyPnlEl.className = 'mono font-semibold ' + pnlClass(pnl);
+
+            if (breakdownEl) breakdownEl.textContent = '';
+            updatePieChart(usVal.cash || 0, (usVal.total_value || 0) - (usVal.cash || 0));
+        } else {
+            equityEl.textContent = '$--';
+            cashEl.textContent = '$--';
+            cashPctEl.textContent = '';
+            stockEl.textContent = '$--';
+            dailyPnlEl.textContent = '$--';
+            dailyPnlEl.className = 'mono font-semibold';
+            if (breakdownEl) breakdownEl.textContent = '';
+        }
+    }
+
+    _updateCardFilterLabel();
+}
+
+/** KR 실현/미실현 분리 표시 (DOM API) */
+function _renderKRBreakdown(data, el) {
+    if (!el) return;
+    if (data.realized_daily_pnl || data.unrealized_pnl) {
+        el.textContent = '';
+        const unrealizedNet = data.unrealized_pnl_net ?? data.unrealized_pnl;
+        const netLabel = data.unrealized_pnl_net != null ? '\uBBF8\uC2E4\uD604(\uC21C)' : '\uBBF8\uC2E4\uD604';
+        const netTitle = data.unrealized_pnl_net != null
+            ? '\uC218\uC218\uB8CC \uD3EC\uD568: ' + formatPnl(unrealizedNet) + ' / \uD3C9\uAC00: ' + formatPnl(data.unrealized_pnl)
+            : '';
+
+        const realLabel = document.createElement('span');
+        realLabel.style.color = 'var(--text-muted)';
+        realLabel.textContent = '\uC2E4\uD604 ';
+        const realVal = document.createElement('span');
+        realVal.className = 'mono ' + pnlClass(data.realized_daily_pnl);
+        realVal.textContent = formatPnl(data.realized_daily_pnl);
+
+        const sep = document.createElement('span');
+        sep.style.cssText = 'color:var(--text-muted); margin:0 6px;';
+        sep.textContent = '|';
+
+        const unLabel = document.createElement('span');
+        unLabel.style.color = 'var(--text-muted)';
+        if (netTitle) unLabel.title = netTitle;
+        unLabel.textContent = netLabel + ' ';
+        const unVal = document.createElement('span');
+        unVal.className = 'mono ' + pnlClass(unrealizedNet);
+        if (netTitle) unVal.title = netTitle;
+        unVal.textContent = formatPnl(unrealizedNet);
+
+        el.append(realLabel, realVal, sep, unLabel, unVal);
+    } else {
+        el.textContent = '';
+    }
+}
+
+/** 플래그+값 DOM 요소 추가 */
+function _appendFlagValue(parent, flag, value, flagSize) {
+    const flagSpan = document.createElement('span');
+    if (flagSize) flagSpan.style.fontSize = flagSize;
+    flagSpan.textContent = flag + ' ';
+    const valSpan = document.createElement('span');
+    valSpan.textContent = value;
+    parent.appendChild(flagSpan);
+    parent.appendChild(valSpan);
+}
+
+/** 구분자(/) DOM 요소 추가 */
+function _appendSep(parent, fontSize) {
+    const sep = document.createElement('span');
+    sep.style.cssText = 'color:var(--text-muted); margin:0 4px;' + (fontSize ? ' font-size:' + fontSize + ';' : '');
+    sep.textContent = '/';
+    parent.appendChild(sep);
+}
+
+/** 카드 제목에 필터 플래그 표시 */
+function _updateCardFilterLabel() {
+    const filter = MarketFilter.get();
+    const headerEl = document.querySelector('.card.card-inner.animate-in.delay-1 .card-header');
+    if (!headerEl) return;
+    const flagMap = { kr: ' \u{1F1F0}\u{1F1F7}', us: ' \u{1F1FA}\u{1F1F8}', all: ' \u{1F310}' };
+    const flag = flagMap[filter] || '';
+    headerEl.childNodes.forEach(node => {
+        if (node.nodeType === 3 && node.textContent.trim().startsWith('\uD3EC\uD2B8\uD3F4\uB9AC\uC624')) {
+            node.textContent = '\n                    \uD3EC\uD2B8\uD3F4\uB9AC\uC624 \uC694\uC57D' + flag + '\n                ';
+        }
+    });
+}
+
+function updateRiskCard() {
+    const filter = MarketFilter.get();
+    const kr = cachedKRRisk;
+    const us = cachedUSPortfolio;
+
+    const canTrade = document.getElementById('r-can-trade');
+    const dailyLoss = document.getElementById('r-daily-loss');
+    const dailyLossLimit = document.getElementById('r-daily-loss-limit');
+    const lossGauge = document.getElementById('r-loss-gauge');
+    const trades = document.getElementById('r-trades');
+    const maxTrades = document.getElementById('r-max-trades');
+    const tradesGauge = document.getElementById('r-trades-gauge');
+    const positions = document.getElementById('r-positions');
+    const maxPositions = document.getElementById('r-max-positions');
+    const positionsGauge = document.getElementById('r-positions-gauge');
+    const consec = document.getElementById('r-consecutive');
+
+    if (filter === 'kr' || filter === 'all') {
+        if (!kr) return;
+
+        // 거래 가능
+        if (kr.can_trade) {
+            canTrade.textContent = 'Yes';
+            canTrade.className = 'badge badge-green';
+        } else {
+            canTrade.textContent = 'No';
+            canTrade.className = 'badge badge-red';
+        }
+
+        // 일일 손실
+        dailyLoss.textContent = formatPct(kr.daily_loss_pct);
+        dailyLossLimit.textContent = '-' + kr.daily_loss_limit_pct + '%';
+        const lossPct = Math.min(Math.abs(kr.daily_loss_pct) / kr.daily_loss_limit_pct * 100, 100);
+        lossGauge.style.width = lossPct + '%';
+        lossGauge.className = 'gauge-fill ' + (lossPct > 70 ? 'bg-red-500' : lossPct > 40 ? 'bg-yellow-500' : 'bg-green-500');
+
+        // 거래 횟수
+        trades.textContent = kr.daily_trades;
+        maxTrades.textContent = kr.daily_max_trades;
+        const tradesPct = Math.min(kr.daily_trades / kr.daily_max_trades * 100, 100);
+        tradesGauge.style.width = tradesPct + '%';
+
+        // 포지션 수 — "all" 모드에서 US 포지션 병기
+        const usVal = (us && !us.offline && !us.error) ? us : null;
+        if (filter === 'all' && usVal && usVal.positions_count != null) {
+            positions.textContent = kr.position_count + ' + ' + usVal.positions_count;
+        } else {
+            positions.textContent = kr.position_count;
+        }
+        maxPositions.textContent = kr.max_positions;
+        const posPct = Math.min(kr.position_count / kr.max_positions * 100, 100);
+        positionsGauge.style.width = posPct + '%';
+
+        // 연속 손실
+        consec.textContent = kr.consecutive_losses;
+        consec.className = 'mono' + (kr.consecutive_losses >= 3 ? ' text-loss' : '');
+
+        _setRiskGaugesVisible(true);
+    } else if (filter === 'us') {
+        // US 모드 — 리스크 API 없으므로 최소 표시
+        canTrade.textContent = '-';
+        canTrade.className = 'badge badge-blue';
+
+        dailyLoss.textContent = '-';
+        dailyLossLimit.textContent = '-';
+        lossGauge.style.width = '0%';
+
+        const usVal = (us && !us.offline && !us.error) ? us : null;
+        trades.textContent = '-';
+        maxTrades.textContent = '-';
+        tradesGauge.style.width = '0%';
+
+        positions.textContent = usVal && usVal.positions_count != null ? usVal.positions_count : '-';
+        maxPositions.textContent = '-';
+        positionsGauge.style.width = '0%';
+
+        consec.textContent = '-';
+        consec.className = 'mono';
+
+        _setRiskGaugesVisible(false);
+    }
+}
+
+function _setRiskGaugesVisible(visible) {
+    const gauges = document.querySelectorAll('.card.card-inner.animate-in.delay-2 .gauge-bg');
+    gauges.forEach(function(g) { g.style.opacity = visible ? '1' : '0.3'; });
+}
+
 function applyMarketFilter(filter) {
     const usSec = document.getElementById("us-summary-section");
     const krSec = document.getElementById("kr-positions-section");
+    const extSec = document.getElementById("external-accounts-section");
     if (!usSec) return;
     if (filter === "all") {
         usSec.style.display = "block";
         if (krSec) krSec.style.display = "block";
+        if (extSec) extSec.style.removeProperty("display");
     } else if (filter === "us") {
         usSec.style.display = "block";
         if (krSec) krSec.style.display = "none";
+        if (extSec) extSec.style.display = "none";
     } else {
         usSec.style.display = "none";
         if (krSec) krSec.style.display = "block";
+        if (extSec) extSec.style.removeProperty("display");
     }
+    // 포트폴리오/리스크 카드 갱신
+    updatePortfolioCard();
+    updateRiskCard();
 }

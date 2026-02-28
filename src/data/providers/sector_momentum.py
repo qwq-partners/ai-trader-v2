@@ -150,6 +150,51 @@ class SectorMomentumProvider:
         await self._refresh_etf_momentum()
         return dict(self._etf_momentum)
 
+    async def get_sector_map_batch(self, symbols: List[str]) -> Dict[str, str]:
+        """
+        복수 종목의 섹터 매핑 일괄 반환 (ticker → sector_name).
+
+        3계층 폴백 활용: 인메모리 캐시 → pykrx WICS(7일 캐시) → 키워드 폴백.
+        stock_screener 등 외부에서 섹터 다양성 체크에 사용.
+        """
+        result: Dict[str, str] = {}
+        missing: List[str] = []
+
+        # 1. 인메모리 캐시에서 즉시 반환
+        for s in symbols:
+            if s in self._sector_map:
+                result[s] = self._sector_map[s]
+            else:
+                missing.append(s)
+
+        if not missing:
+            return result
+
+        # 2. 파일 캐시 확인
+        cached = _load_json_cache(_SECTOR_MAP_CACHE, _SECTOR_MAP_TTL)
+        still_missing: List[str] = []
+        for s in missing:
+            if cached and s in cached:
+                result[s] = cached[s]
+                self._sector_map[s] = cached[s]
+            else:
+                still_missing.append(s)
+
+        if not still_missing:
+            return result
+
+        # 3. pykrx WICS 조회 (전체 시장 매핑)
+        pykrx_map = await self._fetch_pykrx_sector_map()
+        if pykrx_map:
+            self._sector_map.update(pykrx_map)
+            _save_json_cache(_SECTOR_MAP_CACHE, {**(cached or {}), **pykrx_map})
+            for s in still_missing:
+                if s in pykrx_map:
+                    result[s] = pykrx_map[s]
+
+        logger.debug(f"[SectorMomentum] 배치 섹터 매핑: 요청 {len(symbols)}개 → 매핑 {len(result)}개")
+        return result
+
     # ── 내부 구현 ─────────────────────────────────────────────────────────────
 
     async def _get_sector(self, symbol: str, name: str = "") -> Optional[str]:
@@ -328,17 +373,31 @@ class SectorMomentumProvider:
 
     @staticmethod
     def _momentum_to_score(momentum: Optional[float]) -> float:
-        """20일 수익률 → SEPA 점수 (0~10pt)."""
+        """
+        20일 수익률 → SEPA 점수 (0~10pt).
+
+        Piecewise linear interpolation — 앵커 포인트 간 선형 보간.
+        앵커: (-5%, 0pt), (0%, 2pt), (5%, 4pt), (10%, 7pt), (15%, 10pt)
+        경계값은 기존 이산 함수와 동일, 중간값만 부드러워짐.
+        """
         if momentum is None:
             return 3.0  # 데이터 없음 → 중립
 
-        if momentum >= 15:
-            return 10.0
-        elif momentum >= 10:
-            return 7.0
-        elif momentum >= 5:
-            return 4.0
-        elif momentum >= 0:
-            return 2.0
-        else:
-            return 0.0
+        # 앵커 포인트 (momentum_pct, score)
+        anchors = [(-5.0, 0.0), (0.0, 2.0), (5.0, 4.0), (10.0, 7.0), (15.0, 10.0)]
+
+        # 범위 밖 클램프
+        if momentum <= anchors[0][0]:
+            return anchors[0][1]
+        if momentum >= anchors[-1][0]:
+            return anchors[-1][1]
+
+        # 구간 찾아 선형 보간
+        for i in range(len(anchors) - 1):
+            x0, y0 = anchors[i]
+            x1, y1 = anchors[i + 1]
+            if x0 <= momentum <= x1:
+                t = (momentum - x0) / (x1 - x0)
+                return y0 + t * (y1 - y0)
+
+        return 3.0  # fallback (도달 불가)
