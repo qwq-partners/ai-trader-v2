@@ -267,20 +267,28 @@ class SEPATrendStrategy(BaseStrategy):
         elif vol_ratio > 1.0:
             score += 4
 
-        # 5. 단기 가격 모멘텀 (10점) — change_20d 기반 (섹터 데이터 미제공으로 대체)
-        # 스크리너에서 sector_momentum 미계산 → change_20d(20일 수익률)로 대체
-        change_20d = ind.get("change_20d", 0) or 0
-        try:
-            change_20d = float(change_20d)
-        except (TypeError, ValueError):
-            change_20d = 0.0
-        if change_20d > 20:
-            score += 10
-        elif change_20d > 10:
-            score += 7
-        elif change_20d > 5:
-            score += 4
-        elif change_20d > 0:
-            score += 2
+        # 5. 섹터 모멘텀 (10점) — Phase 3
+        # 우선순위: sector_momentum_score(KODEX ETF 기반) > change_20d(개별 종목 20일 수익률)
+        # sector_momentum_score: batch_analyzer._scan_and_build()에서 주입 (0~10pt)
+        # change_20d 폴백: technical.py에서 계산된 개별 종목 20일 수익률 기반 변환
+        sm_score = ind.get("sector_momentum_score")
+        if sm_score is not None:
+            # ETF 기반 섹터 모멘텀 (SectorMomentumProvider.get_sepa_score 결과)
+            score += max(0.0, min(10.0, float(sm_score)))
+        else:
+            # 폴백: 개별 종목 change_20d → 섹터 모멘텀 대리 지표
+            change_20d = ind.get("change_20d", 0) or 0
+            try:
+                change_20d = float(change_20d)
+            except (TypeError, ValueError):
+                change_20d = 0.0
+            if change_20d > 20:
+                score += 10
+            elif change_20d > 10:
+                score += 7
+            elif change_20d > 5:
+                score += 4
+            elif change_20d > 0:
+                score += 2
 
         return min(score, 100)

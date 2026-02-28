@@ -77,12 +77,16 @@ class BatchAnalyzer:
         from ..strategies.rsi2_reversal import RSI2ReversalStrategy
         from ..strategies.sepa_trend import SEPATrendStrategy
         from ..strategies.base import StrategyConfig
+        from ..data.providers.sector_momentum import SectorMomentumProvider
 
         self._engine = engine
         self._broker = broker
         self._kis_market_data = kis_market_data
         self._exit_manager = exit_manager
         self._config = config or {}
+
+        # 섹터 모멘텀 프로바이더 (Phase 3)
+        self._sector_momentum = SectorMomentumProvider(broker=broker)
 
         # 스크리너
         self._screener = SwingScreener(broker, kis_market_data, stock_master)
@@ -154,6 +158,27 @@ class BatchAnalyzer:
         # 전략별 시그널 생성
         rsi2_candidates = [c for c in candidates if c.strategy == "rsi2_reversal"]
         sepa_candidates = [c for c in candidates if c.strategy == "sepa_trend"]
+
+        # ── Phase 3: SEPA 후보에 섹터 모멘텀 점수 주입 ────────────────────────
+        # KIS API로 섹터 ETF 20일 수익률 계산 → candidate.indicators["sector_momentum_score"]
+        # 실패 시 무시 (sepa_trend.py에서 change_20d 폴백 사용)
+        if sepa_candidates and self._sector_momentum:
+            try:
+                sm_tasks = [
+                    self._sector_momentum.get_sepa_score(c.symbol, getattr(c, "name", ""))
+                    for c in sepa_candidates
+                ]
+                sm_results = await asyncio.gather(*sm_tasks, return_exceptions=True)
+                injected = 0
+                for candidate, result in zip(sepa_candidates, sm_results):
+                    if isinstance(result, Exception) or result is None:
+                        continue
+                    candidate.indicators["sector_momentum_score"] = float(result)
+                    injected += 1
+                if injected:
+                    logger.info(f"[배치분석] 섹터 모멘텀 점수 주입: {injected}/{len(sepa_candidates)}개")
+            except Exception as _sm_e:
+                logger.debug(f"[배치분석] 섹터 모멘텀 주입 실패 (폴백 사용): {_sm_e}")
 
         rsi2_signals = await self._rsi2.generate_batch_signals(rsi2_candidates)
         sepa_signals = await self._sepa.generate_batch_signals(sepa_candidates)
