@@ -516,12 +516,19 @@
         <div id="us-summary-section" style="display:none; margin-bottom:16px;">
             <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
                 <div class="card" style="flex:1;min-width:180px;padding:14px 18px;">
-                    <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:4px;">🇺🇸 미국 봇</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:4px;display:flex;align-items:center;gap:6px;">
+                        🇺🇸 미국 봇
+                        <span id="us-paper-badge" style="display:none;background:#f59e0b;color:#000;font-size:0.62rem;font-weight:700;padding:1px 5px;border-radius:3px;letter-spacing:0.03em;">TEST</span>
+                    </div>
                     <div id="us-bot-status" style="font-size:0.85rem;font-weight:600;">-</div>
                     <div id="us-bot-session" style="font-size:0.72rem;color:var(--text-muted);margin-top:2px;">-</div>
+                    <div id="us-bot-broker" style="font-size:0.68rem;color:#f59e0b;margin-top:3px;display:none;">-</div>
                 </div>
                 <div class="card" style="flex:1;min-width:180px;padding:14px 18px;">
-                    <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:4px;">💵 US 총자산</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:4px;">
+                        💵 US 총자산
+                        <span id="us-asset-badge" style="display:none;background:#f59e0b;color:#000;font-size:0.62rem;font-weight:700;padding:1px 5px;border-radius:3px;margin-left:4px;">모의</span>
+                    </div>
                     <div id="us-total-value" class="mono" style="font-size:1.1rem;font-weight:700;">-</div>
                 </div>
                 <div class="card" style="flex:1;min-width:180px;padding:14px 18px;">
@@ -627,6 +634,6 @@
     </main>
 
     <script src="/static/js/common.js?v=2"></script>
-    <script src="/static/js/dashboard.js?v=4"></script>
+    <script src="/static/js/dashboard.js?v=5"></script>
 </body>
 </html>

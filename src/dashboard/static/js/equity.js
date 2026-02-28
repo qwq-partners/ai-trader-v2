@@ -324,10 +324,17 @@ function insertPositionDetailRow(afterRow, positions) {
 
 async function loadUSEquity() {
     try {
-        const [portfolio, positions] = await Promise.all([
+        const [portfolio, positions, status] = await Promise.all([
             fetch('/api/us-proxy/api/us/portfolio').then(r => r.ok ? r.json() : null),
             fetch('/api/us-proxy/api/us/positions').then(r => r.ok ? r.json() : null),
+            fetch('/api/us-proxy/api/us/status').then(r => r.ok ? r.json() : null).catch(() => null),
         ]);
+        // 모의거래 배지 표시
+        const isPaper = status && (status.paper_trading === true || status.broker === 'alpaca_paper' || status.env === 'dev');
+        const badge = document.getElementById('us-eq-paper-badge');
+        const note = document.getElementById('us-eq-paper-note');
+        if (badge) badge.style.display = isPaper ? 'inline-block' : 'none';
+        if (note) note.style.display = isPaper ? 'inline-block' : 'none';
         renderUSEquity(portfolio, positions);
     } catch (e) {
         console.error('[자산] US 데이터 로드 실패:', e);

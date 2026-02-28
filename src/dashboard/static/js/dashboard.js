@@ -798,18 +798,37 @@ async function loadUSData() {
 function renderUSStatus(s) {
     const statusEl = document.getElementById("us-bot-status");
     const sessionEl = document.getElementById("us-bot-session");
+    const paperBadge = document.getElementById("us-paper-badge");
+    const assetBadge = document.getElementById("us-asset-badge");
+    const brokerEl = document.getElementById("us-bot-broker");
     if (!statusEl) return;
+
     if (s.offline || s.error) {
         statusEl.innerHTML = '<span style="color:var(--accent-red);">● 오프라인</span>';
         if (sessionEl) sessionEl.textContent = "API 연결 불가";
         return;
     }
+
     const running = s.running;
     statusEl.innerHTML = running
         ? '<span style="color:var(--accent-green);">● Running</span>'
         : '<span style="color:var(--text-muted);">● Stopped</span>';
     const sessionMap = { regular: "정규장", pre_market: "프리마켓", after_hours: "애프터마켓", closed: "장 마감" };
     if (sessionEl) sessionEl.textContent = sessionMap[s.session] || s.session || "-";
+
+    // 모의(paper) 거래 여부 표시
+    const isPaper = s.paper_trading === true || s.broker === "alpaca_paper" || s.env === "dev";
+    if (paperBadge) paperBadge.style.display = isPaper ? "inline-block" : "none";
+    if (assetBadge) assetBadge.style.display = isPaper ? "inline-block" : "none";
+    if (brokerEl) {
+        if (isPaper) {
+            const brokerName = s.broker === "alpaca_paper" ? "Alpaca Paper" : (s.broker || "모의");
+            brokerEl.textContent = `모의거래 (${brokerName}) — KR 총자산에 미포함`;
+            brokerEl.style.display = "block";
+        } else {
+            brokerEl.style.display = "none";
+        }
+    }
 }
 
 function renderUSPortfolio(p) {
