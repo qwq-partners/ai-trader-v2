@@ -209,6 +209,9 @@ USER_PROMPT_TEMPLATE = """## 현재 시장 데이터 ({date})
 ### 환율
 {exchange_text}
 
+### 금리
+{interest_rates_text}
+
 ### 외국인 순매수 상위
 {foreign_text}
 
@@ -371,6 +374,23 @@ class ExpertPanel:
         else:
             exchange_text = "데이터 없음"
 
+        # 금리
+        interest_rates = data.get("interest_rates")
+        if interest_rates:
+            parts = []
+            kr = interest_rates.get("KR_3Y")
+            us = interest_rates.get("US_10Y")
+            if kr:
+                parts.append(f"한국 국채3년: {kr['current']:.2f}% (1개월 {kr['change_1m_pct']:+.3f}%p)")
+            if us:
+                parts.append(f"미국 국채10년: {us['current']:.2f}% (1개월 {us['change_1m_pct']:+.3f}%p)")
+            spread = interest_rates.get("spread_kr_us")
+            if spread is not None:
+                parts.append(f"한미 스프레드: {spread:+.2f}%p")
+            interest_rates_text = "\n".join(f"- {p}" for p in parts)
+        else:
+            interest_rates_text = "데이터 없음"
+
         # 외국인 순매수
         foreign = data.get("top_foreign_buys") or []
         foreign_lines = [
@@ -402,6 +422,7 @@ class ExpertPanel:
             date=datetime.now().strftime("%Y-%m-%d"),
             indices_text=indices_text,
             exchange_text=exchange_text,
+            interest_rates_text=interest_rates_text,
             foreign_text=foreign_text,
             inst_text=inst_text,
             themes_text=themes_text,

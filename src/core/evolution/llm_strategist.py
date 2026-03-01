@@ -191,10 +191,19 @@ class LLMStrategist:
                 key_insights=["분석할 거래 데이터가 없습니다."],
             )
 
-        # 2. LLM 프롬프트 구성
-        prompt = self._build_analysis_prompt(review, include_parameter_suggestions)
+        # 2. 매크로 컨텍스트 수집 (환율/금리)
+        market_context = None
+        try:
+            from ...signals.strategic.data_collector import StrategicDataCollector
+            collector = StrategicDataCollector()  # FDR만 사용하므로 의존성 주입 불필요
+            market_context = await collector.collect_macro_context()
+        except Exception as e:
+            logger.debug(f"[LLM 전략가] 매크로 컨텍스트 수집 실패: {e}")
 
-        # 3. LLM 호출
+        # 3. LLM 프롬프트 구성
+        prompt = self._build_analysis_prompt(review, include_parameter_suggestions, market_context)
+
+        # 4. LLM 호출
         try:
             llm_response = await self.llm.complete(
                 prompt,
@@ -205,7 +214,7 @@ class LLMStrategist:
             if not llm_response.success or not llm_response.content:
                 raise ValueError(llm_response.error or "LLM 응답 없음")
 
-            # 4. 응답 파싱
+            # 5. 응답 파싱
             advice = self._parse_llm_response(llm_response.content, days)
 
             logger.info(
@@ -225,7 +234,8 @@ class LLMStrategist:
     def _build_analysis_prompt(
         self,
         review: ReviewResult,
-        include_params: bool
+        include_params: bool,
+        market_context: Optional[Dict] = None,
     ) -> str:
         """LLM 분석 프롬프트 구성"""
         # 분석 기간의 일수와 일평균 수익률 계산
@@ -284,6 +294,28 @@ class LLMStrategist:
                 f"- 피해야 할 시간: {review.worst_entry_hours}",
                 "",
             ])
+
+        # 시장 매크로 컨텍스트
+        if market_context:
+            prompt_parts.extend(["## 시장 매크로 컨텍스트", ""])
+            exchange = market_context.get("exchange_rate")
+            if exchange:
+                prompt_parts.append(
+                    f"- USD/KRW: {exchange.get('current', '?')}원 "
+                    f"(1개월 {exchange.get('change_1m_pct', 0):+.1f}%)"
+                )
+            rates = market_context.get("interest_rates")
+            if rates:
+                kr = rates.get("KR_3Y")
+                us = rates.get("US_10Y")
+                if kr:
+                    prompt_parts.append(f"- 한국 국채3년: {kr['current']:.2f}%")
+                if us:
+                    prompt_parts.append(f"- 미국 국채10년: {us['current']:.2f}%")
+                spread = rates.get("spread_kr_us")
+                if spread is not None:
+                    prompt_parts.append(f"- 한미 스프레드: {spread:+.2f}%p")
+            prompt_parts.append("")
 
         # 분석 요청
         prompt_parts.extend([

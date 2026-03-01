@@ -2,6 +2,64 @@
 
 ---
 
+## [2026-03-01] 환율/금리 모니터링 추가 + 데이터 품질 개선
+
+**수정 파일**:
+- `src/signals/strategic/data_collector.py` — `_collect_interest_rates()` 신규 메서드, `collect_macro_context()` 공개 메서드, 외국인/기관 symbol 중복 제거, 영업일 공휴일 고려, ZeroDivision 가드
+- `src/signals/strategic/expert_panel.py` — USER_PROMPT_TEMPLATE 금리 섹션 추가, `_build_user_prompt()` 금리 포맷팅
+- `src/core/evolution/llm_strategist.py` — `_build_analysis_prompt()` 매크로 컨텍스트 파라미터, `analyze_and_advise()` 환율/금리 자동 수집
+- `src/signals/screener/stock_screener.py` — `screen_foreign_buying()`, `screen_institutional_buying()` KOSPI/KOSDAQ 중복 제거
+
+### 변경 내용
+- **금리 데이터 수집**: FDR로 한국 국채3년/미국 국채10년 조회, 한미 스프레드 자동 계산
+- **전문가 패널 프롬프트**: 금리 섹션 추가 (현재 금리, 1개월 변동, 한미 스프레드)
+- **LLM 전략가 매크로 컨텍스트**: 거래 복기 프롬프트에 환율/금리 데이터 자동 포함
+- **외국인/기관 중복 제거**: KOSPI+KOSDAQ 병합 시 동일 symbol 제거 (스크리너 4곳, 전략적 데이터 수집기 2곳)
+- **영업일 계산**: `_last_business_day()` 공휴일 고려 (`is_kr_market_holiday()` 사용)
+- **코드 리뷰 P1 수정**: ZeroDivisionError 가드, private→public 메서드 리팩토링
+
+---
+
+## [2026-03-01] US 테이블을 KR 테이블과 동일 컬럼 형태로 통일
+
+**수정 파일**:
+- `ai-trader-us/src/api/server.py` — positions API에 `entry_time` 필드 추가
+- `src/dashboard/templates/index.html` — US 포지션 테이블 헤더 10컬럼 (KR 동일) + 모바일 CSS nth-child 규칙 제거
+- `src/dashboard/static/js/dashboard.js` — `renderUSPositions()` KR 스타일 10컬럼 렌더링 (현재가/평균가/수량/평가금액/손익/손익률/보유시간/청산단계)
+- `src/dashboard/templates/trades.html` — US 거래 테이블 헤더 10컬럼 (KR 동일: 시간/종목/유형/가격/수량/손익/수익률/전략/상태/사유)
+- `src/dashboard/static/js/trades.js` — `renderUSTrades()` KR 스타일 10컬럼 렌더링 (DOM API 사용, XSS safe)
+- `src/dashboard/templates/equity.html` — US 자산 헤더 모의거래 배지(`us-eq-paper-badge`, `us-eq-paper-note`) 삭제
+- `src/dashboard/static/js/equity.js` — 모의거래 배지 코드 삭제, 불필요한 status API 호출 제거
+
+### 변경 내용
+- **실시간 탭**: US 포지션 테이블 6컬럼 → 10컬럼 (KR과 동일: 종목/전략/현재가/평균가/수량/평가금액/손익/손익률/보유/청산단계)
+- **거래 탭**: US 거래 테이블 7컬럼 → 10컬럼 (KR과 동일: 시간/종목/유형/가격/수량/손익/수익률/전략/상태/사유)
+- **자산 탭**: 모의거래 배지 완전 삭제 (KIS 실계좌 전환 완료)
+- US API에 `entry_time` 필드 추가하여 보유시간 계산 지원
+- `exitStageLabel()` 재사용으로 US 청산단계 배지 표시
+- 모바일 반응형: `.col-avg-price`, `.col-quantity`, `.col-market-value`, `.col-holding` 클래스 기반 숨김 (KR과 동일)
+
+---
+
+## [2026-03-01] 실시간 탭 마켓 카드 통일 + 파이차트→포지션 요약 교체
+
+**수정 파일**: `src/dashboard/templates/index.html`, `src/dashboard/static/js/dashboard.js`
+
+### 변경 내용
+- KR/US 마켓 카드 파이차트(도넛) 제거 → **보유 포지션 간단 요약** 교체 (종목명 + 수익률, 최대 5개)
+- US 카드 운영현황(봇상태/세션/브로커/연결상태/모의여부/자본금) 삭제 → **리스크현황**으로 교체 (KR과 동일 구조)
+- US 카드 `TEST` paper-badge 삭제, 상태 dot 추가 (KR과 동일)
+- US PnL breakdown placeholder 추가
+- `applyMarketFilter()`에 `us-signals-section` 필터 추가
+- `loadUSData()`에 `/api/us/risk` fetch 추가
+- `renderUSRisk()` 신규 함수: US 리스크 데이터 렌더링
+- `updateKRPositionsSummary()`, `updateUSPositionsSummary()` 신규 함수
+- `renderUSStatus()` 축소: 상태 dot만 업데이트
+- `renderUSPortfolio()` 정리: `us-capital`, `us-positions-count` 참조 제거
+- Plotly 파이차트 코드 제거 (`pieChartInitialized`, `usPieChartInitialized` 변수 포함)
+
+---
+
 ## [2026-03-01] KR/US 카드 통일 포맷 — commit `9aacf1d`
 
 **수정 파일**: `src/dashboard/templates/index.html`, `src/dashboard/static/js/dashboard.js`

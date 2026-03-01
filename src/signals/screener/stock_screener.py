@@ -287,6 +287,15 @@ class StockScreener:
             raw_kospi = await kmd.fetch_foreign_institution(market="0001", investor="2")
             raw_kosdaq = await kmd.fetch_foreign_institution(market="0002", investor="2")
             raw = raw_kospi + raw_kosdaq
+            # KOSPI/KOSDAQ 동일 종목 중복 제거 (KOSPI 우선)
+            seen_inst = set()
+            deduped_inst = []
+            for item in raw:
+                sym = item.get("symbol", "")
+                if sym and sym not in seen_inst:
+                    seen_inst.add(sym)
+                    deduped_inst.append(item)
+            raw = deduped_inst
 
             for item in raw:
                 symbol = item.get("symbol", "")
@@ -514,6 +523,15 @@ class StockScreener:
             raw_kospi = await kmd.fetch_foreign_institution(market="0001", investor="1")
             raw_kosdaq = await kmd.fetch_foreign_institution(market="0002", investor="1")
             raw = raw_kospi + raw_kosdaq
+            # KOSPI/KOSDAQ 동일 종목 중복 제거 (KOSPI 우선)
+            seen_fgn = set()
+            deduped_fgn = []
+            for item in raw:
+                sym = item.get("symbol", "")
+                if sym and sym not in seen_fgn:
+                    seen_fgn.add(sym)
+                    deduped_fgn.append(item)
+            raw = deduped_fgn
 
             for item in raw:
                 symbol = item.get("symbol", "")

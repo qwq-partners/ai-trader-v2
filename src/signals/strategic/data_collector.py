@@ -21,13 +21,23 @@ class StrategicDataCollector:
 
     @staticmethod
     def _last_business_day() -> str:
-        """가장 최근 영업일 (주말 제외)"""
-        d = datetime.now() - timedelta(days=1)
-        for _ in range(7):
-            if d.weekday() < 5:
-                return d.strftime("%Y%m%d")
-            d -= timedelta(days=1)
-        return d.strftime("%Y%m%d")
+        """가장 최근 영업일 (주말 + 공휴일 제외)"""
+        try:
+            from ...core.engine import is_kr_market_holiday
+            d = (datetime.now() - timedelta(days=1)).date()
+            for _ in range(10):
+                if d.weekday() < 5 and not is_kr_market_holiday(d):
+                    return d.strftime("%Y%m%d")
+                d -= timedelta(days=1)
+            return d.strftime("%Y%m%d")
+        except ImportError:
+            # fallback: 주말만 제외
+            d = datetime.now() - timedelta(days=1)
+            for _ in range(7):
+                if d.weekday() < 5:
+                    return d.strftime("%Y%m%d")
+                d -= timedelta(days=1)
+            return d.strftime("%Y%m%d")
 
     async def collect_all(self) -> Dict[str, Any]:
         """전문가 패널용 전체 데이터 수집"""
@@ -37,6 +47,7 @@ class StrategicDataCollector:
             ("market_indices", self._collect_market_indices()),
             ("sector_flows", self._collect_sector_flows()),
             ("exchange_rate", self._collect_exchange_rate()),
+            ("interest_rates", self._collect_interest_rates()),
             ("top_foreign_buys", self._collect_top_foreign_buys()),
             ("top_inst_buys", self._collect_top_inst_buys()),
             ("sector_valuations", self._collect_sector_valuations()),
@@ -59,6 +70,14 @@ class StrategicDataCollector:
         collected = sum(1 for v in results.values() if v is not None)
         logger.info(f"[전략적분석] 데이터 수집 완료: {collected}/{len(tasks)}항목")
         return results
+
+    async def collect_macro_context(self) -> Optional[Dict[str, Any]]:
+        """환율/금리 매크로 컨텍스트만 수집 (LLM 전략가용)"""
+        exchange = await self._collect_exchange_rate()
+        rates = await self._collect_interest_rates()
+        if exchange or rates:
+            return {"exchange_rate": exchange, "interest_rates": rates}
+        return None
 
     async def _collect_market_indices(self) -> Optional[Dict[str, Any]]:
         """KOSPI/KOSDAQ/S&P500/나스닥 30일 추이"""
@@ -136,12 +155,48 @@ class StrategicDataCollector:
                 closes = [float(row["Close"]) for _, row in recent.iterrows()]
                 return {
                     "current": round(closes[-1], 1),
-                    "change_1m_pct": round((closes[-1] / closes[0] - 1) * 100, 2),
+                    "change_1m_pct": round((closes[-1] / closes[0] - 1) * 100, 2) if closes[0] != 0 else 0,
                     "recent_5d": [round(c, 1) for c in closes[-5:]],
                 }
             return None
         except Exception as e:
             logger.debug(f"[전략적분석] 환율 수집 실패: {e}")
+            return None
+
+    async def _collect_interest_rates(self) -> Optional[Dict[str, Any]]:
+        """한국/미국 금리 데이터 수집 (FinanceDataReader)"""
+        try:
+            loop = asyncio.get_running_loop()
+            import FinanceDataReader as fdr
+
+            start = (datetime.now() - timedelta(days=45)).strftime("%Y-%m-%d")
+            rates = {}
+
+            # 한국 국채 3년물 (기준금리 프록시) / 미국 국채 10년물 (연준 금리 프록시)
+            for name, code in [("KR_3Y", "KR3YT=RR"), ("US_10Y", "US10YT=RR")]:
+                try:
+                    df = await loop.run_in_executor(
+                        None, lambda c=code: fdr.DataReader(c, start)
+                    )
+                    if df is not None and len(df) >= 3:
+                        closes = [float(row["Close"]) for _, row in df.tail(20).iterrows()]
+                        rates[name] = {
+                            "current": round(closes[-1], 3),
+                            "change_1m_pct": round(closes[-1] - closes[0], 3),  # 금리는 %p 변화
+                        }
+                except Exception as e:
+                    logger.debug(f"[전략적분석] {name} 금리 조회 실패: {e}")
+
+            if rates:
+                # 한미 스프레드 계산
+                kr = rates.get("KR_3Y", {}).get("current")
+                us = rates.get("US_10Y", {}).get("current")
+                if kr is not None and us is not None:
+                    rates["spread_kr_us"] = round(kr - us, 3)
+
+            return rates if rates else None
+        except Exception as e:
+            logger.debug(f"[전략적분석] 금리 수집 실패: {e}")
             return None
 
     async def _collect_top_foreign_buys(self) -> Optional[List[Dict[str, Any]]]:
@@ -159,7 +214,13 @@ class StrategicDataCollector:
                 if isinstance(res, list):
                     combined.extend(res)
 
-            # 순매수 금액 순 정렬
+            # symbol 기준 중복 제거 (순매수 많은 쪽 유지)
+            seen = {}
+            for item in combined:
+                sym = item.get("symbol", "")
+                if sym not in seen or item.get("net_buy_qty", 0) > seen[sym].get("net_buy_qty", 0):
+                    seen[sym] = item
+            combined = list(seen.values())
             combined.sort(key=lambda x: x.get("net_buy_qty", 0), reverse=True)
             return [
                 {
@@ -188,6 +249,13 @@ class StrategicDataCollector:
                 if isinstance(res, list):
                     combined.extend(res)
 
+            # symbol 기준 중복 제거 (순매수 많은 쪽 유지)
+            seen = {}
+            for item in combined:
+                sym = item.get("symbol", "")
+                if sym not in seen or item.get("net_buy_qty", 0) > seen[sym].get("net_buy_qty", 0):
+                    seen[sym] = item
+            combined = list(seen.values())
             combined.sort(key=lambda x: x.get("net_buy_qty", 0), reverse=True)
             return [
                 {
