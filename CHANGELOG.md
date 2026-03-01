@@ -2,6 +2,41 @@
 
 ---
 
+## [2026-03-01] 신호 정밀도 5단계 개선 — commit `7af8978` (KR) / `3921277` (US)
+
+### Step 1: SupplyScoreProvider — KR 5일 누적 수급 스코어
+- 새 파일: `src/data/providers/supply_score_provider.py`
+- pykrx 시장 전종목(KOSPI+KOSDAQ) 5영업일 수급 수집 + 정규화(0~100점)
+- 점수 구성: 외국인 연속(30pt) + 기관 연속(25pt) + 동시매집(15pt) + 규모(15pt) + 가속(15pt)
+- `swing_screener.py`: Layer 2b — SupplyTrendDetector 미수록 종목 자동 보완(max +15pt)
+- SwingScreener 싱글턴: `__init__`에 `_supply5d` 인스턴스 변수 (재생성 방지)
+- `bot_schedulers.py`: 15:40 장 마감 후 일 1회 자동 갱신
+
+### Step 2: US Finviz 장중 모멘텀 최종 게이트
+- `live_engine.py` `_process_signal()` 매수 직전 Finviz 장중 확인
+- `perf_1h ≤-2% AND perf_30m ≤-1%`: 하락 지속 → 진입 보류
+- `momentum_score < 40`: 방향성 부재 → 진입 보류
+- Finviz 조회 실패 시 fall-through (차단 아님)
+
+### Step 3: KR ATR 1.5x 손절 동적화
+- 기존: `stop = price × (1 - ATR%)` → 개선: `stop_pct = clamp(ATR × 1.5, 2%, 8%)`
+- 1:2 리스크:리워드: `target_pct = clamp(stop_pct × 2, 4%, 15%)`
+- 배치 시그널 + 장중품질 진입 양쪽 적용
+
+### Step 4: KR 갭다운 체크
+- `batch_analyzer.execute_pending_signals()`: 09:01 배치 시그널 실행 직전 갭다운 필터
+- `current_price < entry_price × (1 - 2%)` 시 당일 진입 보류
+- `config: batch.gap_down_skip_pct`로 임계값 조절 가능
+
+### Step 5: LLM 프롬프트 시장 레짐 동적화
+- `_llm_verify_intraday()`: ExpertPanel 캐시에서 시장 레짐(bullish/neutral/bearish) 로드
+- **Bullish**: Q1(수급) 필수 + Q2/Q3 중 1개 → pass (완화)
+- **Neutral**: Q1(수급) 필수 + Q2/Q3 중 1개 → pass (현행)
+- **Bearish**: Q1+Q2+Q3 모두 Y → pass (강화), 프롬프트도 하방 방어성 중심으로 재구성
+- 레짐 로드 실패 시 neutral 폴백
+
+---
+
 ## [2026-03-01] 테마 탭 개선 — commits `1ea8365`, `6c0a34e`
 
 - 뉴스 건수 불일치 수정: `news_count`(LLM 추정값) → `newsItems.length`(실제 표시 수) (KR/US 모두)
