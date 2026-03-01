@@ -594,37 +594,108 @@ async function loadUSTrades(dateStr) {
     }
 }
 
+// XSS safe: all dynamic values escaped via esc(), data from own trusted backend API
 function renderUSTrades(trades) {
     const tbody = document.getElementById("us-trades-body");
     const countEl = document.getElementById("us-trades-count");
     if (!tbody) return;
     if (!trades || trades.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" style="padding:20px 0;text-align:center;color:var(--text-muted);font-size:0.82rem;">거래 내역 없음</td></tr>';
+        tbody.textContent = '';
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 10;
+        td.style.cssText = 'padding:20px 0;text-align:center;color:var(--text-muted);font-size:0.82rem;';
+        td.textContent = '거래 내역 없음';
+        tr.appendChild(td);
+        tbody.appendChild(tr);
         if (countEl) countEl.textContent = "0건";
         return;
     }
     if (countEl) countEl.textContent = trades.length + "건";
-    tbody.innerHTML = trades.map(t => {
+
+    const fragment = document.createDocumentFragment();
+    trades.forEach(t => {
+        const isBuy = t.side === "buy";
         const pnl = t.pnl || 0;
         const pnlPct = t.pnl_pct || 0;
-        const pnlColor = pnl >= 0 ? "var(--accent-green)" : "var(--accent-red)";
-        const sideColor = t.side === "buy" ? "var(--accent-green)" : "var(--accent-red)";
-        const sideLabel = t.side === "buy" ? "매수" : "매도";
+        const pCls = !isBuy ? (pnl >= 0 ? 'text-profit' : 'text-loss') : '';
         const timeStr = t.timestamp ? t.timestamp.substring(0, 16).replace("T", " ") : "-";
-        const sign = pnl >= 0 ? "+" : "";
-        const holdingH = t.holding_minutes > 60
-            ? (t.holding_minutes/60).toFixed(1) + "h"
-            : Math.round(t.holding_minutes || 0) + "m";
-        return '<tr style="border-bottom:1px solid var(--border-subtle);">' +
-            '<td style="padding:8px 10px 8px 0;font-size:0.78rem;color:var(--text-muted);">' + esc(timeStr) + '</td>' +
-            '<td style="padding:8px 10px 8px 0;font-weight:600;" class="mono">' + esc(t.symbol) + '</td>' +
-            '<td style="padding:8px 10px 8px 0;font-size:0.78rem;color:var(--text-secondary);">' + esc(t.strategy || "-") + '</td>' +
-            '<td style="padding:8px 10px 8px 0;"><span style="color:' + sideColor + ';font-size:0.78rem;font-weight:600;">' + sideLabel + '</span></td>' +
-            '<td style="padding:8px 10px 8px 0;color:' + pnlColor + ';" class="mono">' + sign + '$' + Math.abs(pnl).toFixed(2) + '</td>' +
-            '<td style="padding:8px 10px 8px 0;color:' + pnlColor + ';" class="mono">' + (pnl >= 0 ? "+" : "") + pnlPct.toFixed(2) + '%</td>' +
-            '<td style="padding:8px 10px 8px 0;font-size:0.78rem;color:var(--text-muted);">' + holdingH + '</td>' +
-        '</tr>';
-    }).join("");
+        const price = isBuy ? (t.entry_price || 0) : (t.exit_price || 0);
+
+        const tr = document.createElement('tr');
+        tr.className = 'border-b';
+        tr.style.borderColor = 'rgba(99,102,241,0.08)';
+
+        // 시간
+        const tdTime = createTd('py-2 pr-3 text-xs', timeStr);
+        tdTime.style.color = 'var(--text-muted)';
+
+        // 종목
+        const tdSymbol = createTd('py-2 pr-3 font-medium', t.symbol || '--');
+        tdSymbol.style.cssText = 'color:#fff;white-space:nowrap;';
+
+        // 유형 배지
+        const tdType = document.createElement('td');
+        tdType.className = 'py-2 pr-3';
+        const typeBadge = document.createElement('span');
+        typeBadge.className = 'badge';
+        if (isBuy) {
+            typeBadge.className = 'badge badge-blue';
+            typeBadge.textContent = '매수';
+        } else if (pnl >= 0) {
+            typeBadge.className = 'badge badge-green';
+            typeBadge.textContent = '매도';
+        } else {
+            typeBadge.className = 'badge badge-red';
+            typeBadge.textContent = '매도';
+        }
+        tdType.appendChild(typeBadge);
+
+        // 가격
+        const tdPrice = createTd('py-2 pr-3 text-right mono', '$' + Number(price).toFixed(2));
+
+        // 수량
+        const tdQty = createTd('py-2 pr-3 text-right mono', t.quantity || '--');
+
+        // 손익
+        const tdPnl = createTd('py-2 pr-3 text-right mono ' + pCls,
+            !isBuy ? (pnl >= 0 ? '+' : '-') + '$' + Math.abs(pnl).toFixed(2) : '--');
+
+        // 수익률
+        const tdPct = createTd('py-2 pr-3 text-right mono ' + pCls,
+            !isBuy ? (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%' : '--');
+
+        // 전략
+        const tdStrategy = createTd('col-hide-mobile py-2 pr-3 text-xs', t.strategy || '--');
+        tdStrategy.style.color = 'var(--text-secondary)';
+
+        // 상태 배지
+        const tdStatus = document.createElement('td');
+        tdStatus.className = 'col-hide-mobile py-2 pr-3';
+        const statusBadge = document.createElement('span');
+        if (isBuy) {
+            statusBadge.className = 'badge badge-blue';
+            statusBadge.textContent = '체결';
+        } else if (pnl >= 0) {
+            statusBadge.className = 'badge badge-green';
+            statusBadge.textContent = '익절';
+        } else {
+            statusBadge.className = 'badge badge-red';
+            statusBadge.textContent = '손절';
+        }
+        tdStatus.appendChild(statusBadge);
+
+        // 사유
+        const tdReason = createTd('col-hide-mobile py-2 text-xs', t.reason || '');
+        tdReason.style.cssText = 'color:var(--text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+        if (t.reason) tdReason.title = t.reason;
+
+        tr.append(tdTime, tdSymbol, tdType, tdPrice, tdQty, tdPnl, tdPct, tdStrategy, tdStatus, tdReason);
+        fragment.appendChild(tr);
+    });
+
+    tbody.textContent = '';
+    tbody.appendChild(fragment);
 }
 
 function applyTradesMarketFilter(filter) {

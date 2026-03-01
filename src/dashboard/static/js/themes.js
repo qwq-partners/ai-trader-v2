@@ -44,9 +44,13 @@ async function loadScreening() {
 function renderThemes(themes) {
     const grid = document.getElementById('themes-grid');
     if (!themes || themes.length === 0) {
+        // Static trusted content, no user input — safe
         grid.innerHTML = '<div class="card p-6 text-center text-gray-500 col-span-full">감지된 테마 없음</div>';
         return;
     }
+
+    // 점수 높은 순 정렬
+    themes = [...themes].sort((a, b) => (b.score || 0) - (a.score || 0));
 
     const cards = themes.map(theme => {
         const scoreColor = theme.score >= 80 ? '#34d399' : theme.score >= 60 ? '#fbbf24' : '#6366f1';
@@ -172,6 +176,9 @@ function renderUSThemes(themes) {
         grid.appendChild(msg);
         return;
     }
+
+    // 점수 높은 순 정렬
+    themes = [...themes].sort((a, b) => (b.score || 0) - (a.score || 0));
 
     const cards = themes.map(theme => {
         const scoreColor = theme.score >= 80 ? '#34d399' : theme.score >= 60 ? '#fbbf24' : '#a78bfa';

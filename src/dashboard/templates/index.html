@@ -259,8 +259,6 @@
             .mc-equity-val { font-size:1.35rem; }
             /* hide less critical columns */
             .col-avg-price, .col-quantity, .col-market-value, .col-holding { display:none; }
-            #us-positions-table th:nth-child(3), #us-positions-table td:nth-child(3),
-            #us-positions-table th:nth-child(4), #us-positions-table td:nth-child(4) { display:none; }
         }
 
         /* Market filter buttons (from responsive.css) */
@@ -351,8 +349,11 @@
                     <div id="p-pnl-breakdown" style="text-align:right;font-size:.7rem;padding-bottom:2px;"></div>
                 </div>
 
-                <!-- 4. Donut chart -->
-                <div id="pie-chart" class="mc-chart"></div>
+                <!-- 4. 보유 포지션 요약 -->
+                <div id="kr-positions-summary" class="mc-body" style="padding:8px 16px 10px;">
+                    <div style="font-size:.68rem;color:var(--text-muted);font-weight:600;margin-bottom:6px;">보유 포지션</div>
+                    <div id="kr-pos-summary-list" style="font-size:.78rem;color:var(--text-secondary);">포지션 없음</div>
+                </div>
 
                 <hr class="mc-sep">
 
@@ -384,7 +385,7 @@
                 <div class="mc-head">
                     <span class="mc-flag">🇺🇸</span>
                     <span class="mc-title mc-title-us">미국 시장</span>
-                    <span id="us-paper-badge" style="display:none;background:var(--us);color:#000;font-size:.62rem;font-weight:700;padding:2px 7px;border-radius:4px;letter-spacing:.03em;margin-left:2px;">TEST</span>
+                    <span class="dot dot-b" id="us-status-dot" style="margin-left:2px;"></span>
                     <span class="mc-ccy mc-ccy-us">USD</span>
                 </div>
 
@@ -416,26 +417,28 @@
                         <span class="mr-lbl">오늘 손익</span>
                         <span id="us-daily-pnl" class="mono" style="font-weight:600;font-size:.9rem;">--</span>
                     </div>
-                    <!-- placeholder for alignment with KR breakdown -->
-                    <div style="height:16px;"></div>
+                    <div id="us-pnl-breakdown" style="text-align:right;font-size:.7rem;padding-bottom:2px;"></div>
                 </div>
 
-                <!-- 4. Donut chart (same position as KR) -->
-                <div id="us-pie-chart" class="mc-chart"></div>
+                <!-- 4. 보유 포지션 요약 -->
+                <div id="us-positions-summary" class="mc-body" style="padding:8px 16px 10px;">
+                    <div style="font-size:.68rem;color:var(--text-muted);font-weight:600;margin-bottom:6px;">보유 포지션</div>
+                    <div id="us-pos-summary-list" style="font-size:.78rem;color:var(--text-secondary);">포지션 없음</div>
+                </div>
 
                 <hr class="mc-sep">
 
-                <!-- 5. Operations section — 4 rows + divider + 3 micro (identical structure to KR) -->
-                <div class="mc-sub">운영 현황</div>
+                <!-- 5. Risk section — 4 rows + divider + 3 micro (KR과 동일 구조) -->
+                <div class="mc-sub">리스크 현황</div>
                 <div class="mc-body ops-body">
-                    <div class="mr"><span class="mr-lbl">봇 상태</span><span id="us-bot-status" style="font-size:.85rem;font-weight:600;">-</span></div>
-                    <div class="mr"><span class="mr-lbl">세션</span><span id="us-bot-session" class="mr-val">-</span></div>
-                    <div class="mr"><span class="mr-lbl">브로커</span><span id="us-bot-broker" class="mr-val">-</span></div>
-                    <div class="mr"><span class="mr-lbl">포지션</span><span id="us-positions-count" class="mr-val mono">0</span></div>
+                    <div class="mr"><span class="mr-lbl">거래 가능</span><span id="us-can-trade" class="badge badge-green">Yes</span></div>
+                    <div class="mr"><span class="mr-lbl">일일 손실</span><span class="mr-val mono"><span id="us-daily-loss">0%</span> <span class="muted-sep">/</span> <span id="us-daily-loss-limit" class="val-muted">-3%</span></span></div>
+                    <div class="mr"><span class="mr-lbl">거래 횟수</span><span class="mr-val mono"><span id="us-trades">0</span></span></div>
+                    <div class="mr"><span class="mr-lbl">포지션</span><span class="mr-val mono"><span id="us-r-positions">0</span> <span class="muted-sep">/</span> <span id="us-r-max-positions" class="val-muted">4</span></span></div>
                     <hr class="ops-sep">
-                    <div class="sm"><span class="sm-l">연결 상태</span><span id="us-conn-status" class="sm-v">-</span></div>
-                    <div class="sm"><span class="sm-l">모의/실계좌</span><span id="us-asset-badge" class="sm-v">-</span></div>
-                    <div class="sm"><span class="sm-l">보유 자본금</span><span id="us-capital" class="sm-v mono">-</span></div>
+                    <div class="sm"><span class="sm-l">연속 손실</span><span id="us-consecutive" class="sm-v">0</span></div>
+                    <div class="sm"><span class="sm-l">신호 생성</span><span id="us-signals-count" class="sm-v">0</span></div>
+                    <div class="sm"><span class="sm-l">WS 구독</span><span id="us-ws-sub" class="sm-v">0</span></div>
                 </div>
 
             </div><!-- /us-market-card -->
@@ -519,14 +522,18 @@
                             <tr>
                                 <th>종목</th>
                                 <th>전략</th>
-                                <th style="text-align:right;">수량</th>
-                                <th style="text-align:right;">평균단가</th>
-                                <th style="text-align:right;">수익률</th>
-                                <th style="text-align:right;">평가금액</th>
+                                <th style="text-align:right;">현재가</th>
+                                <th class="col-avg-price" style="text-align:right;">평균가</th>
+                                <th class="col-quantity" style="text-align:right;">수량</th>
+                                <th class="col-market-value" style="text-align:right;">평가금액</th>
+                                <th style="text-align:right;">손익</th>
+                                <th style="text-align:right;">손익률</th>
+                                <th class="col-holding">보유</th>
+                                <th>청산단계</th>
                             </tr>
                         </thead>
                         <tbody id="us-positions-body">
-                            <tr><td colspan="6" style="padding:28px 0;text-align:center;color:var(--text-muted);font-size:.82rem;">보유 종목 없음</td></tr>
+                            <tr><td colspan="10" style="padding:28px 0;text-align:center;color:var(--text-muted);font-size:.82rem;">보유 종목 없음</td></tr>
                         </tbody>
                     </table>
                 </div>
