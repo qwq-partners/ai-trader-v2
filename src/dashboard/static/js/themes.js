@@ -1,5 +1,5 @@
 /**
- * AI Trader v2 - 테마/스크리닝 페이지 v2
+ * AI Trader v2 - 테마/스크리닝 페이지 v3
  * - MarketFilter (통합/KR/US) 지원
  * - 스크리닝 결과 상위 20개 + 스크롤
  * - 뉴스 원문 링크 지원
@@ -69,7 +69,7 @@ function renderThemes(themes) {
 
         const newsHtml = newsItems.length > 0
             ? `<div class="mt-2 pt-2 border-t" style="border-color:rgba(99,102,241,0.08)">
-                <div class="text-xs text-gray-500 mb-1">관련 뉴스 ${theme.news_count || newsItems.length}건</div>
+                <div class="text-xs text-gray-500 mb-1">관련 뉴스 ${newsItems.length}건</div>
                 ${newsItems.slice(0, 5).map(item => {
                     const title = esc(item.title || item);
                     const url = item.url || "";
@@ -84,7 +84,7 @@ function renderThemes(themes) {
                 }).join('')}
                </div>`
             : `<div class="mt-2 pt-2 border-t" style="border-color:rgba(99,102,241,0.08)">
-                  <div class="text-xs text-gray-500">뉴스 ${theme.news_count || 0}건</div>
+                  <div class="text-xs text-gray-500">뉴스 0건</div>
                </div>`;
 
         return `<div class="card p-4 theme-card">
@@ -194,7 +194,7 @@ function renderUSThemes(themes) {
 
         const newsHtml = rawNews.length > 0
             ? `<div class="mt-2 pt-2 border-t" style="border-color:rgba(99,102,241,0.08)">
-                <div class="text-xs text-gray-500 mb-1">관련 뉴스 ${theme.news_count || rawNews.length}건</div>
+                <div class="text-xs text-gray-500 mb-1">관련 뉴스 ${rawNews.length}건</div>
                 ${rawNews.slice(0, 5).map(item => {
                     const title = esc(typeof item === 'string' ? item : (item.title || ''));
                     const url = (typeof item === 'object' && item.url) ? esc(item.url) : "";
@@ -209,7 +209,7 @@ function renderUSThemes(themes) {
                 }).join('')}
                </div>`
             : `<div class="mt-2 pt-2 border-t" style="border-color:rgba(99,102,241,0.08)">
-                  <div class="text-xs text-gray-500">뉴스 ${theme.news_count || 0}건</div>
+                  <div class="text-xs text-gray-500">뉴스 0건</div>
                </div>`;
 
         return `<div class="card p-4 theme-card">
