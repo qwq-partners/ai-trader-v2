@@ -1,5 +1,5 @@
 /**
- * AI Trader v2 - 테마/스크리닝 페이지 v3
+ * AI Trader v2 - 테마/스크리닝 페이지 v4
  * - MarketFilter (통합/KR/US) 지원
  * - 스크리닝 결과 상위 20개 + 스크롤
  * - 뉴스 원문 링크 지원
@@ -128,7 +128,7 @@ function renderScreening(results) {
         const reasons = (s.reasons || []).slice(0, 3).map(r => esc(r)).join(', ');
 
         return `<tr class="border-b hover:bg-dark-700/30" style="border-color:#31324420">
-            <td class="py-2 pr-3 font-medium text-white">${esc(s.symbol)} ${s.name ? `<span class="text-xs text-gray-500">${esc(s.name)}</span>` : ''}</td>
+            <td class="py-2 pr-3 font-medium text-white">${esc(s.name || s.symbol)}</td>
             <td class="py-2 pr-3 text-right mono">${formatNumber(s.price)}</td>
             <td class="py-2 pr-3 text-right mono ${changeCls}">${formatPct(s.change_pct)}</td>
             <td class="py-2 pr-3 text-right mono col-hide-mobile">${s.volume_ratio ? s.volume_ratio.toFixed(1) + 'x' : '--'}</td>
