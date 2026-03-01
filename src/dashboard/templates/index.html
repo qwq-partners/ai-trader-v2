@@ -232,11 +232,11 @@
         /* pie chart */
         .mc-chart { height:120px; flex-shrink:0; }
 
-        /* US bot status row */
-        .us-bot-row {
-            display:flex; align-items:center; gap:8px;
-            padding:4px 0 12px;
-        }
+        /* Operations body — unified padding for both KR/US sections */
+        .ops-body { padding:8px 22px 18px; }
+        .ops-sep  { border:none; border-top:1px solid var(--border-sub); margin:10px 0 8px; }
+        .muted-sep { color:var(--text-muted); margin:0 2px; }
+        .val-muted { color:var(--text-muted); }
 
         /* ═══════════════════════════
            RESPONSIVE
@@ -356,47 +356,23 @@
 
                 <hr class="mc-sep">
 
-                <!-- 5. Risk section -->
+                <!-- 5. Risk section — 4 rows + divider + 3 micro -->
                 <div class="mc-sub">리스크 현황</div>
-                <div class="mc-body" style="padding-top:6px;padding-bottom:18px;">
-                    <div class="mr" style="padding-bottom:4px;">
-                        <span class="mr-lbl">거래 가능</span>
-                        <span id="r-can-trade" class="badge badge-green">Yes</span>
-                    </div>
-                    <!-- Daily loss -->
-                    <div class="gr">
-                        <div class="gr-head">
-                            <span class="gr-lbl">일일 손실</span>
-                            <span class="gr-val mono"><span id="r-daily-loss">0%</span> / <span id="r-daily-loss-limit" style="color:var(--text-muted);">-5%</span></span>
-                        </div>
-                        <div class="gauge-bg"><div id="r-loss-gauge" class="gauge-fill bg-green-500" style="width:0%;"></div></div>
-                    </div>
-                    <!-- Trades -->
-                    <div class="gr">
-                        <div class="gr-head">
-                            <span class="gr-lbl">거래 횟수</span>
-                            <span class="gr-val mono"><span id="r-trades">0</span> / <span id="r-max-trades" style="color:var(--text-muted);">30</span></span>
-                        </div>
-                        <div class="gauge-bg"><div id="r-trades-gauge" class="gauge-fill bg-blue-500" style="width:0%;"></div></div>
-                    </div>
-                    <!-- Positions -->
-                    <div class="gr">
-                        <div class="gr-head">
-                            <span class="gr-lbl">포지션</span>
-                            <span class="gr-val mono"><span id="r-positions">0</span> / <span id="r-max-positions" style="color:var(--text-muted);">9</span></span>
-                        </div>
-                        <div class="gauge-bg"><div id="r-positions-gauge" class="gauge-fill bg-purple-500" style="width:0%;"></div></div>
-                    </div>
-                    <!-- Consecutive loss -->
-                    <div class="mr" style="padding-top:4px;">
-                        <span class="mr-lbl">연속 손실</span>
-                        <span id="r-consecutive" class="mono" style="font-size:.88rem;font-weight:600;">0</span>
-                    </div>
-                    <hr style="border:none;border-top:1px solid var(--border-sub);margin:10px 0 8px;">
-                    <div class="sm"><span class="sm-l">이벤트 처리</span><span id="r-events" class="sm-v">0</span></div>
+                <div class="mc-body ops-body">
+                    <div class="mr"><span class="mr-lbl">거래 가능</span><span id="r-can-trade" class="badge badge-green">Yes</span></div>
+                    <div class="mr"><span class="mr-lbl">일일 손실</span><span class="mr-val mono"><span id="r-daily-loss">0%</span> <span class="muted-sep">/</span> <span id="r-daily-loss-limit" class="val-muted">-5%</span></span></div>
+                    <div class="mr"><span class="mr-lbl">거래 횟수</span><span class="mr-val mono"><span id="r-trades">0</span> <span class="muted-sep">/</span> <span id="r-max-trades" class="val-muted">30</span></span></div>
+                    <div class="mr"><span class="mr-lbl">포지션</span><span class="mr-val mono"><span id="r-positions">0</span> <span class="muted-sep">/</span> <span id="r-max-positions" class="val-muted">9</span></span></div>
+                    <hr class="ops-sep">
+                    <div class="sm"><span class="sm-l">연속 손실</span><span id="r-consecutive" class="sm-v">0</span></div>
                     <div class="sm"><span class="sm-l">신호 생성</span><span id="r-signals" class="sm-v">0</span></div>
                     <div class="sm"><span class="sm-l">WS 구독</span><span id="r-ws-sub" class="sm-v">0</span></div>
                 </div>
+                <!-- JS compat: hidden gauge stubs -->
+                <span id="r-events" style="display:none;">0</span>
+                <span id="r-loss-gauge" style="display:none;"></span>
+                <span id="r-trades-gauge" style="display:none;"></span>
+                <span id="r-positions-gauge" style="display:none;"></span>
 
             </div><!-- /kr-market-card -->
 
@@ -449,35 +425,16 @@
 
                 <hr class="mc-sep">
 
-                <!-- 5. Bot status section (mirrors KR's risk section) -->
+                <!-- 5. Operations section — 4 rows + divider + 3 micro (identical structure to KR) -->
                 <div class="mc-sub">운영 현황</div>
-                <div class="mc-body" style="padding-top:6px;padding-bottom:18px;">
-                    <!-- Bot running status — mirrors KR "거래 가능" row -->
-                    <div class="mr" style="padding-bottom:4px;">
-                        <span class="mr-lbl">봇 상태</span>
-                        <span id="us-bot-status" style="font-size:.85rem;font-weight:600;">-</span>
-                    </div>
-                    <!-- Session info — mirrors KR "일일손실" row visually -->
-                    <div class="mr">
-                        <span class="mr-lbl">세션</span>
-                        <span id="us-bot-session" class="mono" style="font-size:.78rem;color:var(--text-secondary);">-</span>
-                    </div>
-                    <!-- Broker badge — mirrors KR "거래횟수" row -->
-                    <div class="mr">
-                        <span class="mr-lbl">브로커</span>
-                        <span id="us-bot-broker" class="mono" style="font-size:.78rem;color:var(--text-secondary);">-</span>
-                    </div>
-                    <!-- Placeholder row for alignment -->
-                    <div class="mr">
-                        <span class="mr-lbl">포지션</span>
-                        <span id="us-positions-count" class="mono" style="font-size:.88rem;font-weight:600;">0</span>
-                    </div>
-                    <hr style="border:none;border-top:1px solid var(--border-sub);margin:10px 0 8px;">
-                    <!-- Mirrors KR micro stats -->
+                <div class="mc-body ops-body">
+                    <div class="mr"><span class="mr-lbl">봇 상태</span><span id="us-bot-status" style="font-size:.85rem;font-weight:600;">-</span></div>
+                    <div class="mr"><span class="mr-lbl">세션</span><span id="us-bot-session" class="mr-val">-</span></div>
+                    <div class="mr"><span class="mr-lbl">브로커</span><span id="us-bot-broker" class="mr-val">-</span></div>
+                    <div class="mr"><span class="mr-lbl">포지션</span><span id="us-positions-count" class="mr-val mono">0</span></div>
+                    <hr class="ops-sep">
                     <div class="sm"><span class="sm-l">연결 상태</span><span id="us-conn-status" class="sm-v">-</span></div>
-                    <div class="sm"><span class="sm-l">모의/실계좌</span>
-                        <span id="us-asset-badge" class="sm-v" style="color:var(--us);">-</span>
-                    </div>
+                    <div class="sm"><span class="sm-l">모의/실계좌</span><span id="us-asset-badge" class="sm-v">-</span></div>
                     <div class="sm"><span class="sm-l">보유 자본금</span><span id="us-capital" class="sm-v mono">-</span></div>
                 </div>
 

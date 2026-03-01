@@ -807,7 +807,11 @@ function renderUSStatus(s) {
     set("us-bot-broker", brokerDisplay);
 
     // 연결 상태
-    set("us-conn-status", running ? "● 정상" : "● 대기");
+    const connEl = document.getElementById("us-conn-status");
+    if (connEl) {
+        connEl.textContent = running ? "● 정상" : "● 대기";
+        connEl.style.color = running ? "var(--acc-green)" : "var(--text-muted)";
+    }
 }
 
 function renderUSPortfolio(p) {
@@ -1070,7 +1074,7 @@ function updateRiskCard() {
     // 연속 손실
     if (consec) {
         consec.textContent = kr.consecutive_losses;
-        consec.className = 'mono' + (kr.consecutive_losses >= 3 ? ' tl' : '');
+        consec.style.color = kr.consecutive_losses >= 3 ? 'var(--acc-red)' : '';
     }
 }
 
