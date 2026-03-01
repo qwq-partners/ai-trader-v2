@@ -245,7 +245,7 @@ async function loadUSScreening() {
             tbody.textContent = '';
             const tr = document.createElement('tr');
             const td = document.createElement('td');
-            td.colSpan = 8;
+            td.colSpan = 9;
             td.style.cssText = 'padding:40px 0;text-align:center;color:var(--text-muted);font-size:0.85rem;';
             td.textContent = 'US 봇 오프라인 — 스크리닝 데이터 없음';
             tr.appendChild(td);
@@ -263,7 +263,7 @@ function renderUSScreening(results) {
         tbody.textContent = '';
         const tr = document.createElement('tr');
         const td = document.createElement('td');
-        td.colSpan = 8;
+        td.colSpan = 9;
         td.style.cssText = 'padding:40px 0;text-align:center;color:var(--text-muted);font-size:0.85rem;';
         td.textContent = 'US 스크리닝 결과 없음';
         tr.appendChild(td);
@@ -283,10 +283,27 @@ function renderUSScreening(results) {
 
     const rows = results.slice(0, TOP).map(s => {
         const changeCls = s.change_pct > 0 ? 'text-profit' : s.change_pct < 0 ? 'text-loss' : '';
-        const scoreBadge = s.score >= 80 ? 'badge-green' : s.score >= 60 ? 'badge-yellow' : 'badge-blue';
+        const totalScore = s.total_score || s.score || 0;
+        const scoreBadge = totalScore >= 100 ? 'badge-green' : totalScore >= 80 ? 'badge-yellow' : 'badge-blue';
         const flags = (s.flags || []).map(f =>
             `<span class="badge ${flagColors[f] || 'badge-blue'}" style="font-size:0.6rem;padding:2px 6px;">${esc(f)}</span>`
         ).join(' ');
+
+        // Finviz 기관 거래 컬럼
+        const fz = s.finviz_meta || {};
+        const instTrans = fz.inst_trans != null ? fz.inst_trans : null;
+        const instCls = instTrans >= 2 ? 'text-profit' : instTrans <= -2 ? 'text-loss' : 'text-gray-400';
+        const instStr = instTrans != null ? (instTrans >= 0 ? '+' : '') + instTrans.toFixed(2) + '%' : '--';
+
+        // 목표가 상승 여지
+        const upside = fz.target_upside != null ? fz.target_upside : null;
+        const upsideCls = upside >= 30 ? 'text-profit' : upside >= 10 ? 'text-gray-300' : 'text-gray-500';
+        const upsideStr = upside != null ? (upside >= 0 ? '+' : '') + upside.toFixed(1) + '%' : '--';
+
+        // 점수 표시: 기술점수 + Finviz 보너스 (보너스가 있으면 표시)
+        const bonus = s.finviz_bonus || 0;
+        const bonusStr = bonus !== 0 ? ` <span style="font-size:0.65rem;color:${bonus>0?'#34d399':'#f87171'}">${bonus>0?'+':''}${bonus.toFixed(0)}</span>` : '';
+        const scoreHtml = `<span class="badge ${scoreBadge}">${Number(totalScore).toFixed(0)}</span>${bonusStr}`;
 
         return `<tr class="border-b hover:bg-dark-700/30" style="border-color:#31324420">
             <td class="py-2 pr-3 font-medium text-white">${esc(s.symbol)}</td>
@@ -294,8 +311,9 @@ function renderUSScreening(results) {
             <td class="py-2 pr-3 text-right mono ${changeCls}">${formatPct(s.change_pct)}</td>
             <td class="py-2 pr-3 text-right mono col-hide-mobile">${s.vol_ratio ? Number(s.vol_ratio).toFixed(1) + 'x' : '--'}</td>
             <td class="py-2 pr-3 text-right mono col-hide-mobile">${s.rsi ? Number(s.rsi).toFixed(0) : '--'}</td>
-            <td class="py-2 pr-3 text-right mono col-hide-mobile">${s.pct_from_52w_high != null ? formatPct(s.pct_from_52w_high) : '--'}</td>
-            <td class="py-2 pr-3 text-right"><span class="badge ${scoreBadge}">${Number(s.score).toFixed(0)}</span></td>
+            <td class="py-2 pr-3 text-right mono col-hide-mobile ${instCls}">${instStr}</td>
+            <td class="py-2 pr-3 text-right mono col-hide-mobile ${upsideCls}">${upsideStr}</td>
+            <td class="py-2 pr-3 text-right">${scoreHtml}</td>
             <td class="py-2 text-xs col-hide-mobile">${flags || '--'}</td>
         </tr>`;
     }).join('');
