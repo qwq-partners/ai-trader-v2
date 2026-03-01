@@ -2,6 +2,32 @@
 
 ---
 
+## [2026-03-01] KR/US 카드 통일 포맷 — commit `9aacf1d`
+
+**수정 파일**: `src/dashboard/templates/index.html`, `src/dashboard/static/js/dashboard.js`
+
+### 통일된 카드 구조 (양쪽 동일)
+```
+헤더 (국기 + 마켓명 + 통화)
+총자산 (히어로 숫자)
+현금 (현금비중 바)  /  주식 평가  /  오늘 손익
+도넛 차트 (현금 vs 주식)
+──── 운영 현황 ────
+KR: 리스크 게이지 (거래가능/손실/횟수/포지션/연속손실)
+US: 봇상태/세션/브로커/포지션수 + 연결상태/모의여부/자본금
+```
+
+### JS 변경
+- `updateUSPieChart()`: US 전용 도넛 차트 (`us-pie-chart`) + 현금바 (`us-cash-bar`)
+- `renderUSPortfolio()`: `us-cash-pct`, `us-cash-bar`, `us-capital` 신규 필드
+- `renderUSStatus()`: `us-conn-status`, 브로커 표시명 매핑 (KIS 실계좌 등)
+- `renderUSPositions()`: `us-positions-full` 자동 show/hide (포지션 있을 때만)
+- `updatePortfolioCard()`: all 모드에서 KR 전용 데이터만 (혼합 표시 제거)
+- `updateRiskCard()`: KR 전용으로 단순화
+- `applyMarketFilter()`: `us-positions-full` 필터 연동
+
+---
+
 ## [2026-03-01] 실시간 탭 KR/US 마켓 분리 디자인 — commit `f96d43b`
 
 **수정 파일**: `src/dashboard/templates/index.html`, `src/dashboard/static/js/dashboard.js`, `src/dashboard/static/css/responsive.css`
