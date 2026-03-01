@@ -539,6 +539,7 @@ class DashboardDataCollector:
                 "score": theme.score,
                 "news_count": theme.news_count,
                 "news_titles": getattr(theme, 'news_titles', []),
+                "news_items": getattr(theme, 'news_items', []),   # [{title, url}] 원문 링크
                 "detected_at": theme.detected_at,
                 "last_updated": getattr(theme, 'last_updated', None),
             }))

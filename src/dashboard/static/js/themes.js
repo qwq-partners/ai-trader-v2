@@ -1,7 +1,28 @@
 /**
- * AI Trader v2 - 테마/스크리닝 페이지
+ * AI Trader v2 - 테마/스크리닝 페이지 v2
+ * - MarketFilter (통합/KR/US) 지원
+ * - 스크리닝 결과 상위 20개 + 스크롤
+ * - 뉴스 원문 링크 지원
  */
 
+// ── 마켓 필터 ──────────────────────────────────────────────────────────────
+function applyThemesMarketFilter(filter) {
+    const krSec = document.getElementById("kr-themes-section");
+    const usSec = document.getElementById("us-themes-section");
+    if (!krSec || !usSec) return;
+    if (filter === "all") {
+        krSec.style.display = "";
+        usSec.style.display = "";
+    } else if (filter === "us") {
+        krSec.style.display = "none";
+        usSec.style.display = "";
+    } else {
+        krSec.style.display = "";
+        usSec.style.display = "none";
+    }
+}
+
+// ── KR 테마 ────────────────────────────────────────────────────────────────
 async function loadThemes() {
     try {
         const themes = await api('/api/themes');
@@ -22,7 +43,6 @@ async function loadScreening() {
 
 function renderThemes(themes) {
     const grid = document.getElementById('themes-grid');
-
     if (!themes || themes.length === 0) {
         grid.innerHTML = '<div class="card p-6 text-center text-gray-500 col-span-full">감지된 테마 없음</div>';
         return;
@@ -42,6 +62,31 @@ function renderThemes(themes) {
 
         const timeStr = theme.detected_at ? formatTime(theme.detected_at) : '--';
 
+        // 뉴스: news_items(URL포함) 우선, 폴백 news_titles
+        const newsItems = theme.news_items && theme.news_items.length > 0
+            ? theme.news_items
+            : (theme.news_titles || []).map(t => ({ title: t, url: "" }));
+
+        const newsHtml = newsItems.length > 0
+            ? `<div class="mt-2 pt-2 border-t" style="border-color:rgba(99,102,241,0.08)">
+                <div class="text-xs text-gray-500 mb-1">관련 뉴스 ${theme.news_count || newsItems.length}건</div>
+                ${newsItems.slice(0, 5).map(item => {
+                    const title = esc(item.title || item);
+                    const url = item.url || "";
+                    return url
+                        ? `<div class="text-xs mb-0.5" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                             <a href="${esc(url)}" target="_blank" rel="noopener"
+                                style="color:var(--accent-blue);text-decoration:none;"
+                                title="${title}">• ${title}</a>
+                           </div>`
+                        : `<div class="text-xs text-gray-400 mb-0.5" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
+                               title="${title}">• ${title}</div>`;
+                }).join('')}
+               </div>`
+            : `<div class="mt-2 pt-2 border-t" style="border-color:rgba(99,102,241,0.08)">
+                  <div class="text-xs text-gray-500">뉴스 ${theme.news_count || 0}건</div>
+               </div>`;
+
         return `<div class="card p-4 theme-card">
             <div class="flex items-start justify-between mb-2">
                 <h3 class="font-semibold text-white">${esc(theme.name)}</h3>
@@ -53,16 +98,7 @@ function renderThemes(themes) {
             <div class="flex flex-wrap gap-1 mb-2">${keywords}</div>
             <div class="text-xs text-gray-500 mb-1">관련 종목</div>
             <div class="mb-2">${stocks || '<span class="text-xs text-gray-500">없음</span>'}</div>
-            ${(theme.news_titles && theme.news_titles.length > 0) ? `
-            <div class="mt-2 pt-2 border-t" style="border-color:rgba(99,102,241,0.08)">
-                <div class="text-xs text-gray-500 mb-1">관련 뉴스 ${theme.news_count || theme.news_titles.length}건</div>
-                ${theme.news_titles.slice(0, 5).map(t =>
-                    `<div class="text-xs text-gray-400 truncate mb-0.5" title="${esc(t)}">• ${esc(t)}</div>`
-                ).join('')}
-            </div>` : `
-            <div class="mt-2 pt-2 border-t" style="border-color:rgba(99,102,241,0.08)">
-                <div class="text-xs text-gray-500">뉴스 ${theme.news_count || 0}건</div>
-            </div>`}
+            ${newsHtml}
             <div class="flex justify-end text-xs text-gray-500 mt-1">
                 <span>${timeStr}</span>
             </div>
@@ -74,13 +110,19 @@ function renderThemes(themes) {
 
 function renderScreening(results) {
     const tbody = document.getElementById('screening-body');
+    const countEl = document.getElementById('screening-count');
 
     if (!results || results.length === 0) {
         tbody.innerHTML = '<tr><td colspan="6" class="py-8 text-center text-gray-500">스크리닝 결과 없음</td></tr>';
+        if (countEl) countEl.textContent = '';
         return;
     }
 
-    const rows = results.slice(0, 50).map(s => {
+    // 상위 20개만 표시
+    const TOP = 20;
+    if (countEl) countEl.textContent = `상위 ${Math.min(results.length, TOP)} / 전체 ${results.length}`;
+
+    const rows = results.slice(0, TOP).map(s => {
         const changeCls = s.change_pct > 0 ? 'text-profit' : s.change_pct < 0 ? 'text-loss' : '';
         const scoreBadge = s.score >= 80 ? 'badge-green' : s.score >= 60 ? 'badge-yellow' : 'badge-blue';
         const reasons = (s.reasons || []).slice(0, 3).map(r => esc(r)).join(', ');
@@ -91,18 +133,14 @@ function renderScreening(results) {
             <td class="py-2 pr-3 text-right mono ${changeCls}">${formatPct(s.change_pct)}</td>
             <td class="py-2 pr-3 text-right mono col-hide-mobile">${s.volume_ratio ? s.volume_ratio.toFixed(1) + 'x' : '--'}</td>
             <td class="py-2 pr-3 text-right"><span class="badge ${scoreBadge}">${s.score.toFixed(0)}</span></td>
-            <td class="py-2 text-xs text-gray-400 max-w-xs truncate col-hide-mobile">${reasons || '--'}</td>
+            <td class="py-2 text-xs text-gray-400 col-hide-mobile" style="max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${reasons || '--'}</td>
         </tr>`;
     }).join('');
 
     tbody.innerHTML = rows;
 }
 
-// ============================================================
-// US 테마
-// NOTE: 모든 동적 문자열은 esc() 함수로 XSS 이스케이프 처리됨
-// esc()는 common.js에서 document.createElement('div').textContent 사용
-// ============================================================
+// ── US 테마 ────────────────────────────────────────────────────────────────
 async function loadUSThemes() {
     try {
         const themes = await api('/api/us-proxy/api/us/themes');
@@ -110,8 +148,8 @@ async function loadUSThemes() {
     } catch (e) {
         console.warn('US 테마 로드 실패 (봇 오프라인?):', e);
         const grid = document.getElementById('us-themes-grid');
-        if (grid) grid.textContent = '';
         if (grid) {
+            grid.textContent = '';
             const msg = document.createElement('div');
             msg.className = 'theme-card';
             msg.style.cssText = 'text-align:center;color:var(--text-muted);padding:40px 20px;grid-column:1/-1;';
@@ -135,7 +173,6 @@ function renderUSThemes(themes) {
         return;
     }
 
-    // 테마 카드는 서버 데이터(Finnhub API)에서 오지만 모든 동적 값은 esc()로 이스케이프
     const cards = themes.map(theme => {
         const scoreColor = theme.score >= 80 ? '#34d399' : theme.score >= 60 ? '#fbbf24' : '#a78bfa';
         const scorePct = Math.min(theme.score, 100);
@@ -150,7 +187,30 @@ function renderUSThemes(themes) {
 
         const timeStr = theme.detected_at ? formatTime(theme.detected_at) : '--';
 
-        const headlines = (theme.news_headlines || []);
+        // US는 news_headlines / news_items 모두 지원
+        const rawNews = theme.news_items && theme.news_items.length > 0
+            ? theme.news_items
+            : (theme.news_headlines || []).map(t => ({ title: t, url: "" }));
+
+        const newsHtml = rawNews.length > 0
+            ? `<div class="mt-2 pt-2 border-t" style="border-color:rgba(99,102,241,0.08)">
+                <div class="text-xs text-gray-500 mb-1">관련 뉴스 ${theme.news_count || rawNews.length}건</div>
+                ${rawNews.slice(0, 5).map(item => {
+                    const title = esc(typeof item === 'string' ? item : (item.title || ''));
+                    const url = (typeof item === 'object' && item.url) ? esc(item.url) : "";
+                    return url
+                        ? `<div class="text-xs mb-0.5" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                             <a href="${url}" target="_blank" rel="noopener"
+                                style="color:var(--accent-blue);text-decoration:none;"
+                                title="${title}">• ${title}</a>
+                           </div>`
+                        : `<div class="text-xs text-gray-400 mb-0.5" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
+                               title="${title}">• ${title}</div>`;
+                }).join('')}
+               </div>`
+            : `<div class="mt-2 pt-2 border-t" style="border-color:rgba(99,102,241,0.08)">
+                  <div class="text-xs text-gray-500">뉴스 ${theme.news_count || 0}건</div>
+               </div>`;
 
         return `<div class="card p-4 theme-card">
             <div class="flex items-start justify-between mb-2">
@@ -163,16 +223,7 @@ function renderUSThemes(themes) {
             <div class="flex flex-wrap gap-1 mb-2">${keywords}</div>
             <div class="text-xs text-gray-500 mb-1">관련 종목</div>
             <div class="mb-2">${stocks || '<span class="text-xs text-gray-500">없음</span>'}</div>
-            ${headlines.length > 0 ? `
-            <div class="mt-2 pt-2 border-t" style="border-color:rgba(99,102,241,0.08)">
-                <div class="text-xs text-gray-500 mb-1">관련 뉴스 ${theme.news_count || headlines.length}건</div>
-                ${headlines.slice(0, 5).map(t =>
-                    `<div class="text-xs text-gray-400 truncate mb-0.5" title="${esc(t)}">• ${esc(t)}</div>`
-                ).join('')}
-            </div>` : `
-            <div class="mt-2 pt-2 border-t" style="border-color:rgba(99,102,241,0.08)">
-                <div class="text-xs text-gray-500">뉴스 ${theme.news_count || 0}건</div>
-            </div>`}
+            ${newsHtml}
             <div class="flex justify-end text-xs text-gray-500 mt-1">
                 <span>${esc(timeStr)}</span>
             </div>
@@ -182,9 +233,7 @@ function renderUSThemes(themes) {
     grid.innerHTML = cards;
 }
 
-// ============================================================
-// US 스크리닝
-// ============================================================
+// ── US 스크리닝 ────────────────────────────────────────────────────────────
 async function loadUSScreening() {
     try {
         const results = await api('/api/us-proxy/api/us/screening');
@@ -207,6 +256,7 @@ async function loadUSScreening() {
 
 function renderUSScreening(results) {
     const tbody = document.getElementById('us-screening-body');
+    const countEl = document.getElementById('us-screening-count');
     if (!tbody) return;
 
     if (!results || results.length === 0) {
@@ -218,20 +268,20 @@ function renderUSScreening(results) {
         td.textContent = 'US 스크리닝 결과 없음';
         tr.appendChild(td);
         tbody.appendChild(tr);
+        if (countEl) countEl.textContent = '';
         return;
     }
 
+    const TOP = 20;
+    if (countEl) countEl.textContent = `상위 ${Math.min(results.length, TOP)} / 전체 ${results.length}`;
+
     const flagColors = {
-        'VOL_SURGE': 'badge-yellow',
-        '52W_HIGH': 'badge-green',
-        'BREAKOUT': 'badge-green',
-        'MOMENTUM': 'badge-blue',
-        'OVERSOLD': 'badge-red',
-        'OVERBOUGHT': 'badge-purple',
+        'VOL_SURGE': 'badge-yellow', '52W_HIGH': 'badge-green',
+        'BREAKOUT': 'badge-green', 'MOMENTUM': 'badge-blue',
+        'OVERSOLD': 'badge-red', 'OVERBOUGHT': 'badge-purple',
     };
 
-    // 스크리닝 데이터는 서버 계산 결과이며 모든 동적 값은 esc()로 이스케이프
-    const rows = results.slice(0, 50).map(s => {
+    const rows = results.slice(0, TOP).map(s => {
         const changeCls = s.change_pct > 0 ? 'text-profit' : s.change_pct < 0 ? 'text-loss' : '';
         const scoreBadge = s.score >= 80 ? 'badge-green' : s.score >= 60 ? 'badge-yellow' : 'badge-blue';
         const flags = (s.flags || []).map(f =>
@@ -253,16 +303,28 @@ function renderUSScreening(results) {
     tbody.innerHTML = rows;
 }
 
-// 이벤트 — KR
+// ── 이벤트 바인딩 ──────────────────────────────────────────────────────────
 document.getElementById('btn-refresh-themes').addEventListener('click', loadThemes);
 document.getElementById('btn-refresh-screening').addEventListener('click', loadScreening);
-
-// 이벤트 — US
 document.getElementById('btn-refresh-us-themes').addEventListener('click', loadUSThemes);
 document.getElementById('btn-refresh-us-screening').addEventListener('click', loadUSScreening);
 
-// 초기화
+// ── 초기화 ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+    // 마켓 필터 렌더링
+    const filterBar = document.getElementById('themes-filter-bar');
+    if (filterBar && typeof MarketFilter !== 'undefined') {
+        MarketFilter.render(filterBar, (filter) => {
+            applyThemesMarketFilter(filter);
+        });
+        applyThemesMarketFilter(MarketFilter.get());
+    }
+
+    // 다른 탭에서 필터 변경 시 동기화
+    document.addEventListener('market_filter_change', (e) => {
+        applyThemesMarketFilter(e.detail.filter);
+    });
+
     loadThemes();
     loadScreening();
     loadUSThemes();
