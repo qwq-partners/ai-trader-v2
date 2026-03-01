@@ -2,6 +2,37 @@
 
 ---
 
+## [2026-03-01] 실시간 탭 KR/US 마켓 분리 디자인 — commit `f96d43b`
+
+**수정 파일**: `src/dashboard/templates/index.html`, `src/dashboard/static/js/dashboard.js`, `src/dashboard/static/css/responsive.css`
+
+### 레이아웃 변경
+- **markets-grid**: 🇰🇷 KR 카드(좌) | 🇺🇸 US 카드(우) 2열 나란히 배치
+- 기존: 포트폴리오 요약(혼합) + US 섹션(하단 별도)
+- 변경: 마켓별 전용 카드 + 리스크/포지션 내장
+
+### KR 카드 (market-card-kr)
+- 상단 cyan 라인 (한국 마켓 컬러)
+- 총자산 / 현금 / 주식평가 / 일일 손익 → 리스크(거래가능/게이지3개) → 엔진 통계 일체화
+- Pie chart 내장
+
+### US 카드 (market-card-us)
+- 상단 amber 라인 (미국 마켓 컬러)
+- 봇 상태 + TEST 배지 + us-stat-grid (2×2: 총자산/현금/주식평가/오늘손익)
+- 보유 포지션 테이블 카드 내장
+- us-stock-value 필드 추가 (JS에서 `total_value - cash` 계산)
+
+### 마켓 필터 연동
+- `applyMarketFilter()` 업데이트: `us-market-card`/`kr-market-card` 직접 제어
+- KR 전용 필터: US 카드 숨김, 단일 열 전환
+- US 전용 필터: KR 카드 숨김, 단일 열 전환
+
+### 반응형
+- 900px 이하: markets-grid 단일 열 스택
+- 480px 이하: 패딩 축소, US positions 불필요 컬럼 숨김
+
+---
+
 ## [2026-03-01] 신호 정밀도 5단계 개선 — commit `7af8978` (KR) / `3921277` (US)
 
 ### Step 1: SupplyScoreProvider — KR 5일 누적 수급 스코어
