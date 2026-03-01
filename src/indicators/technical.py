@@ -285,7 +285,7 @@ class TechnicalIndicators:
 
         # 3. MA200 상승 (change_60d > 0 으로 간접 확인)
         change_60d = indicators.get("change_60d", 0)
-        if change_60d and change_60d > 0:
+        if change_60d is not None and change_60d > 0:
             reasons.append(f"60일 상승 +{change_60d:.1f}%")
 
         # 4. 52주 저점 대비 +20% 이상 (KRX 시장 규모 고려, 30%→20% 완화)
@@ -335,7 +335,7 @@ class TechnicalIndicators:
 
         # BB 하단 체크 (없으면 RSI+MA 조건만으로 통과)
         reason = f"RSI(2)={rsi_2:.1f}, 가격>MA200"
-        if bb_lower and close < bb_lower:
+        if bb_lower is not None and close < bb_lower:
             reason += f", BB하단 이탈"
 
         return True, rsi_2, reason

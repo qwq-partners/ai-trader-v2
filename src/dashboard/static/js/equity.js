@@ -183,12 +183,8 @@ function renderEquityChart(snapshots) {
 
     const config = { displayModeBar: false, responsive: true };
 
-    if (!equityChartInitialized) {
-        Plotly.newPlot('equity-chart', [baseLine, trace], layout, config);
-        equityChartInitialized = true;
-    } else {
-        Plotly.react('equity-chart', [baseLine, trace], layout, config);
-    }
+    Plotly.react('equity-chart', [baseLine, trace], layout, config);
+    equityChartInitialized = true;
 }
 
 // ============================================================

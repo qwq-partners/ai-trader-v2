@@ -136,7 +136,7 @@ class RiskManager:
             is_large_cap = symbol in large_caps
 
         # 시가총액 기준 (1조 이상)
-        if market_cap and market_cap >= 10000:  # 1조 = 10000억
+        if market_cap is not None and market_cap >= 10000:  # 1조 = 10000억
             is_large_cap = True
 
         # 대형주는 손절폭 확대 (2.5% → 3.5%)
@@ -145,7 +145,7 @@ class RiskManager:
             logger.debug(f"[손절완화] {symbol} 대형주 → 손절폭 {stop_pct*100:.1f}%")
 
         # 변동성 기반 조정 (선택적)
-        if volatility and volatility > 5:
+        if volatility is not None and volatility > 5:
             # 변동성 높으면 손절폭 확대
             stop_pct = min(stop_pct * 1.5, 0.05)  # 최대 5%
 

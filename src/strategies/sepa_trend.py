@@ -238,19 +238,19 @@ class SEPATrendStrategy(BaseStrategy):
         pbr = ind.get("pbr", 0)
         roe = ind.get("roe", 0)
 
-        if per and 0 < per < 20:
+        if per is not None and 0 < per < 20:
             score += 2
-        elif per and 0 < per < 30:
+        elif per is not None and 0 < per < 30:
             score += 1
 
-        if pbr and 0 < pbr < 3:
+        if pbr is not None and 0 < pbr < 3:
             score += 2
-        elif pbr and 0 < pbr < 5:
+        elif pbr is not None and 0 < pbr < 5:
             score += 1
 
-        if roe and roe > 10:
+        if roe is not None and roe > 10:
             score += 6   # ROE에 집중 (수익성 좋은 회사의 추세가 더 강함)
-        elif roe and roe > 5:
+        elif roe is not None and roe > 5:
             score += 3
 
         # 4. 거래량 모멘텀 (10점) — 추세 확인: 거래량이 수반되지 않은 상승은 허상

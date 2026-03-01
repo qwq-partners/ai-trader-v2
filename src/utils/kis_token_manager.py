@@ -35,12 +35,19 @@ class KISTokenManager:
     """
 
     _instance: Optional["KISTokenManager"] = None
-    _lock: asyncio.Lock = asyncio.Lock()
+    _lock: Optional[asyncio.Lock] = None
 
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
+
+    @classmethod
+    def _get_lock(cls) -> asyncio.Lock:
+        """Lock lazy 초기화 (실행 시점 이벤트 루프에 바인딩)"""
+        if cls._lock is None:
+            cls._lock = asyncio.Lock()
+        return cls._lock
 
     def __init__(self):
         # 이미 초기화된 경우 스킵
@@ -91,7 +98,7 @@ class KISTokenManager:
 
         토큰이 없거나 만료 임박 시 자동 갱신합니다.
         """
-        async with self._lock:
+        async with self._get_lock():
             # 토큰이 유효하면 반환
             if self._is_token_valid():
                 return self._access_token
@@ -107,7 +114,7 @@ class KISTokenManager:
         Approval Key는 한 번 발급 후 세션 동안 유효합니다.
         (공식 문서상 유효기간이 명시되지 않아 6시간으로 설정)
         """
-        async with self._lock:
+        async with self._get_lock():
             # 키가 유효하면 반환
             if self._is_approval_valid():
                 return self._approval_key
@@ -118,7 +125,7 @@ class KISTokenManager:
 
     async def refresh_all(self) -> bool:
         """모든 토큰 강제 갱신"""
-        async with self._lock:
+        async with self._get_lock():
             token_ok = await self._issue_access_token()
             approval_ok = await self._issue_approval_key()
             return token_ok and approval_ok

@@ -147,7 +147,7 @@ class MeanReversionStrategy(BaseStrategy):
             return None
 
         # 3. 고점 대비 낙폭 체크 (52주 고가 미계산 시 스킵)
-        if high_52w and high_52w > 0:
+        if high_52w is not None and high_52w > 0:
             drawdown = (price - high_52w) / high_52w * 100
             if drawdown < -self.mr_config.max_drawdown_from_high:
                 logger.debug(f"[MeanReversion] {symbol} 낙폭 과대 ({drawdown:.1f}%)")

@@ -381,8 +381,8 @@ class TradingEngine:
             try:
                 # 실제 대기 주문 수 조회
                 pending = 0
-                if self.risk_manager and hasattr(self.risk_manager, '_pending_orders'):
-                    pending = len(self.risk_manager._pending_orders)
+                if self.risk_manager and hasattr(self.risk_manager, 'pending_count'):
+                    pending = self.risk_manager.pending_count
                 await self.emit(HeartbeatEvent(
                     source="engine",
                     uptime_seconds=self.stats.uptime_seconds,
@@ -734,7 +734,8 @@ class StrategyManager:
     def register_strategy(self, name: str, strategy):
         """전략 등록"""
         self.strategies[name] = strategy
-        self.enabled_strategies.append(name)
+        if name not in self.enabled_strategies:
+            self.enabled_strategies.append(name)
         logger.info(f"전략 등록: {name}")
 
     def enable_strategy(self, name: str):
@@ -869,6 +870,11 @@ class RiskManager:
         # 엔진에 핸들러 등록
         engine.register_handler(EventType.SIGNAL, self.on_signal)
         engine.register_handler(EventType.FILL, self.on_fill)
+
+    @property
+    def pending_count(self) -> int:
+        """현재 pending 주문 수 (Lock 없이 안전 조회)"""
+        return len(self._pending_orders)
 
     @property
     def _reserved_cash(self) -> Decimal:
@@ -1244,13 +1250,13 @@ class RiskManager:
         if self.engine.broker and hasattr(self.engine.broker, 'get_best_bid'):
             try:
                 bid = await self.engine.broker.get_best_bid(symbol)
-                if bid and bid > 0:
+                if bid is not None and bid > 0:
                     logger.info(f"[리스크] 매도 호가: {symbol} 매수1호가={bid:,.0f}")
                     return Decimal(str(bid))
             except Exception as e:
                 logger.warning(f"[리스크] 매수1호가 조회 실패: {symbol} - {e}")
         # 호가 조회 실패 시 event.price(현재가) 사용
-        if fallback_price and fallback_price > 0:
+        if fallback_price is not None and fallback_price > 0:
             return fallback_price
         return None
 

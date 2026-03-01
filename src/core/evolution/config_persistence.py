@@ -79,13 +79,16 @@ class EvolvedConfigManager:
             value: 값
             source: 출처 ("evolution" | "manual" | "rollback" | "dashboard")
         """
-        if component not in self._overrides:
-            self._overrides[component] = {}
-
         # YAML 직렬화 가능한 타입으로 변환
         if hasattr(value, 'item'):  # numpy scalar
             value = value.item()
 
+        # persist-first: 런타임 변경 전 백업, 저장 실패 시 롤백
+        import copy
+        backup = copy.deepcopy(self._overrides)
+
+        if component not in self._overrides:
+            self._overrides[component] = {}
         self._overrides[component][param] = value
 
         # 메타데이터 저장 (_meta 섹션)
@@ -97,8 +100,14 @@ class EvolvedConfigManager:
             "timestamp": datetime.now().isoformat(),
         }
 
-        self._save()
-        logger.info(f"[영속화] 저장: {component}.{param} = {value} (source={source})")
+        try:
+            self._save()
+            logger.info(f"[영속화] 저장: {component}.{param} = {value} (source={source})")
+        except Exception as e:
+            # 저장 실패 시 런타임 변경 롤백
+            self._overrides = backup
+            logger.error(f"[영속화] 저장 실패, 런타임 롤백: {component}.{param} - {e}")
+            raise
 
     def remove_override(self, component: str, param: str):
         """

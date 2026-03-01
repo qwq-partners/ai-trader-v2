@@ -2,6 +2,40 @@
 
 ---
 
+## [2026-03-02] 전체 코드 리뷰 이슈 수정 (P0 4건 + P1 6건 + P2 6건)
+
+**수정 파일**:
+- `src/core/types.py` — 수수료 하드코딩 → FeeConfig 참조, TradeResult.pnl_pct falsy 수정
+- `src/strategies/sepa_trend.py` — PER/PBR/ROE falsy 패턴 (`if per and`) → `is not None`
+- `src/strategies/momentum.py` — RSI/MA falsy 패턴 수정 (generate_signal + calculate_score)
+- `src/strategies/mean_reversion.py` — high_52w falsy 패턴 수정
+- `src/risk/manager.py` — market_cap, volatility falsy 패턴 수정
+- `src/core/engine.py` — pending_count 프로퍼티 추가 (Lock 보호), bid/fallback_price falsy 수정, StrategyManager 중복등록 방지
+- `src/execution/broker/kis_broker.py` — `timeout=10` → `aiohttp.ClientTimeout(total=10)`
+- `src/dashboard/static/js/equity.js` — `Plotly.newPlot` → `Plotly.react` 통일
+- `src/utils/kis_token_manager.py` — asyncio.Lock 클래스 변수 → lazy init (`_get_lock()`)
+- `src/utils/config.py` — `_deep_merge` shallow copy → `copy.deepcopy`
+- `src/core/evolution/config_persistence.py` — persist-first 패턴 (저장 실패 시 런타임 롤백)
+- `src/indicators/technical.py` — change_60d, bb_lower falsy 패턴 수정
+
+### P0 수정 (4건)
+- **수수료 하드코딩 제거**: `Position.unrealized_pnl_net`에서 FeeConfig 직접 참조 (SSOT 유지)
+- **falsy 패턴 전면 수정**: sepa_trend(PER/PBR/ROE), momentum(RSI/MA), risk/manager(market_cap/volatility)
+
+### P1 수정 (6건)
+- aiohttp timeout 숫자 리터럴 → ClientTimeout
+- Plotly.newPlot → Plotly.react 통일 (메모리 릭 방지)
+- heartbeat에서 _pending_orders 직접 접근 → pending_count 프로퍼티
+- asyncio.Lock 클래스 변수 → lazy init (이벤트 루프 불일치 방지)
+- TradeResult.pnl_pct falsy 수정
+- engine.py bid/fallback_price falsy 수정
+
+### P2 수정 (6건)
+- config.py _deep_merge deepcopy, config_persistence persist-first, StrategyManager 중복등록 방지
+- technical.py/mean_reversion.py 추가 falsy 패턴 수정
+
+---
+
 ## [2026-03-01] 환율/금리 모니터링 추가 + 데이터 품질 개선
 
 **수정 파일**:

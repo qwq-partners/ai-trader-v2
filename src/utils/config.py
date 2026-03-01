@@ -4,6 +4,7 @@ AI Trading Bot v2 - 설정 관리
 YAML 설정 파일 로드 및 환경변수 처리
 """
 
+import copy
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -139,7 +140,7 @@ def load_dotenv(dotenv_path: Optional[str] = None):
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
     """딕셔너리 deep merge (override가 base를 덮어씀)"""
-    result = dict(base)
+    result = copy.deepcopy(base)
     for key, value in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
             result[key] = _deep_merge(result[key], value)

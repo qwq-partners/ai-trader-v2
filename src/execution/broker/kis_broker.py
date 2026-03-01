@@ -596,7 +596,7 @@ class KISBroker(BaseBroker):
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 }
 
-                async with session.post(url, data=payload, headers=headers, timeout=10) as resp:
+                async with session.post(url, data=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status != 200:
                         logger.warning(f"nextrade API 오류: {resp.status}")
                         break

@@ -263,12 +263,10 @@ class Position:
         """
         if self.quantity == 0:
             return Decimal("0")
-        # 수수료 상수 — FeeConfig 기본값과 일치 유지 (fee_calculator.py 참조)
-        BUY_FEE_RATE  = Decimal("0.000140527")   # 매수 수수료 0.0140527%
-        SELL_FEE_RATE = Decimal("0.000130527")   # 매도 수수료 0.0130527%
-        SELL_TAX_RATE = Decimal("0.002")          # 증권거래세 0.20%
-        buy_fee  = self.cost_basis * BUY_FEE_RATE
-        sell_fee = self.market_value * (SELL_FEE_RATE + SELL_TAX_RATE)
+        from ..utils.fee_calculator import FeeConfig
+        _fc = FeeConfig()
+        buy_fee  = self.cost_basis * _fc.buy_commission_rate
+        sell_fee = self.market_value * _fc.total_sell_rate
         return self.unrealized_pnl - buy_fee - sell_fee
 
     @property
@@ -276,8 +274,8 @@ class Position:
         """미실현 순손익률 (수수료 포함, cost_basis + 매수수수료 대비)"""
         if self.cost_basis == 0:
             return 0.0
-        BUY_FEE_RATE = Decimal("0.000140527")  # FeeConfig 기본값과 일치
-        total_cost = self.cost_basis * (1 + BUY_FEE_RATE)
+        from ..utils.fee_calculator import FeeConfig
+        total_cost = self.cost_basis * (1 + FeeConfig().buy_commission_rate)
         return float(self.unrealized_pnl_net / total_cost * 100)
 
     @property
@@ -442,7 +440,7 @@ class TradeResult:
     @property
     def pnl_pct(self) -> float:
         """손익률 (%)"""
-        if not self.entry_price or self.entry_price == 0:
+        if self.entry_price is None or self.entry_price == 0:
             return 0.0
         return float(Decimal(str(self.exit_price - self.entry_price)) / Decimal(str(self.entry_price)) * 100)
 

@@ -172,15 +172,15 @@ class MomentumBreakoutStrategy(BaseStrategy):
             return None
 
         # RSI 과열 필터: 가짜 돌파 방어
-        rsi = indicators.get("rsi", 0)
-        if rsi and rsi > 75:
+        rsi = indicators.get("rsi")
+        if rsi is not None and rsi > 75:
             logger.debug(f"[Momentum] {symbol} RSI 과열 ({rsi:.1f} > 75) - 진입 제한")
             return None
 
         # MA 정배열 필터: MA5 > MA20 필수 (하락 추세 돌파는 가짜 돌파 위험)
-        ma5 = indicators.get("ma5", 0)
-        ma20 = indicators.get("ma20", 0)
-        if ma5 and ma20 and ma5 <= ma20:
+        ma5 = indicators.get("ma5")
+        ma20 = indicators.get("ma20")
+        if ma5 is not None and ma20 is not None and ma5 <= ma20:
             logger.debug(f"[Momentum] {symbol} MA 역배열 (MA5={ma5:.0f} <= MA20={ma20:.0f}) - 진입 제한")
             return None
 
@@ -324,10 +324,10 @@ class MomentumBreakoutStrategy(BaseStrategy):
             score += min(theme_score / 10, cfg.weight_theme)
 
         # 6. 과열 감점 — RSI 높을수록 가짜 돌파 위험
-        rsi = indicators.get("rsi", 0)
-        if rsi and rsi >= 70:
+        rsi = indicators.get("rsi")
+        if rsi is not None and rsi >= 70:
             score -= 15  # RSI 70+ 강한 감점
-        elif rsi and rsi >= 65:
+        elif rsi is not None and rsi >= 65:
             score -= 8   # RSI 65~70 중간 감점
 
         return max(min(score, 100.0), 0.0)
