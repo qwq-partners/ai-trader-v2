@@ -2,6 +2,14 @@
 
 ---
 
+## [2026-03-01] 테마 탭 개선 — commits `1ea8365`, `6c0a34e`
+
+- 뉴스 건수 불일치 수정: `news_count`(LLM 추정값) → `newsItems.length`(실제 표시 수) (KR/US 모두)
+- KR 스크리닝 결과: 심볼+종목명 → 종목명만 표시 (`s.name || s.symbol` 폴백)
+- themes.js v2→v4 (캐시 버스팅)
+
+---
+
 ## [2026-03-01] US 테마/스크리닝 대시보드 통합
 
 **수정 파일**: `src/dashboard/templates/themes.html`, `src/dashboard/static/js/themes.js`
