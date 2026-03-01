@@ -513,6 +513,11 @@ class DashboardDataCollector:
         # 종목명 캐시 구축
         name_cache = self._build_name_cache()
 
+        # KNOWN_STOCKS 역매핑 폴백 (코드→이름)
+        if not hasattr(self, '_known_stocks_reverse'):
+            from ..signals.sentiment.theme_detector import KNOWN_STOCKS
+            self._known_stocks_reverse = {v: k for k, v in KNOWN_STOCKS.items()}
+
         themes = []
         raw_themes = getattr(detector, '_themes', {})
         if isinstance(raw_themes, dict):
@@ -522,8 +527,9 @@ class DashboardDataCollector:
             # 관련종목을 종목명으로 변환 (코드 → 종목명)
             related_stocks_with_names = []
             for symbol in theme.related_stocks:
-                name = name_cache.get(symbol, symbol)
-                # 종목명이 있으면 종목명만, 없으면 코드만 표시
+                name = name_cache.get(symbol)
+                if not name or name == symbol:
+                    name = self._known_stocks_reverse.get(symbol, symbol)
                 related_stocks_with_names.append(name)
 
             themes.append(_serialize({
@@ -532,6 +538,7 @@ class DashboardDataCollector:
                 "related_stocks": related_stocks_with_names,
                 "score": theme.score,
                 "news_count": theme.news_count,
+                "news_titles": getattr(theme, 'news_titles', []),
                 "detected_at": theme.detected_at,
                 "last_updated": getattr(theme, 'last_updated', None),
             }))

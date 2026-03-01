@@ -182,6 +182,50 @@
                 </table>
             </div>
         </div>
+        <!-- US Market Themes -->
+        <div class="animate-in delay-1" style="margin-top: 32px; margin-bottom: 24px;">
+            <div style="display: flex; align-items: center; gap: 24px; margin-bottom: 16px;">
+                <h2 style="font-size: 1.25rem; font-weight: 700; color: #fff; margin: 0;">
+                    US 시장 테마
+                    <span class="badge badge-blue" style="margin-left: 8px; font-size: 0.65rem; vertical-align: middle;">US</span>
+                </h2>
+                <button id="btn-refresh-us-themes" class="btn-ghost">새로고침</button>
+            </div>
+            <div id="us-themes-grid" class="grid-auto" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;">
+                <div class="theme-card" style="text-align: center; color: var(--text-muted); padding: 40px 20px; grid-column: 1 / -1;">US 테마 데이터 로딩 중...</div>
+            </div>
+        </div>
+
+        <!-- US Screening Results -->
+        <div class="card card-inner animate-in delay-2" style="padding: 24px;">
+            <div style="display: flex; align-items: center; gap: 24px; margin-bottom: 16px;">
+                <div class="card-header" style="border: none; padding: 0; margin: 0;">
+                    <span class="dot" style="background: var(--accent-purple); box-shadow: 0 0 8px var(--accent-purple);"></span>
+                    US 스크리닝 결과
+                    <span class="badge badge-blue" style="margin-left: 8px; font-size: 0.6rem;">US</span>
+                </div>
+                <button id="btn-refresh-us-screening" class="btn-ghost" style="font-size: 0.72rem; padding: 4px 12px;">새로고침</button>
+            </div>
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; text-align: left; border-collapse: collapse;">
+                    <thead>
+                        <tr style="border-bottom: 1px solid var(--border-subtle);">
+                            <th style="padding: 0 12px 10px 0;">종목</th>
+                            <th style="padding: 0 12px 10px 0; text-align: right;">현재가</th>
+                            <th style="padding: 0 12px 10px 0; text-align: right;">1D%</th>
+                            <th class="col-hide-mobile" style="padding: 0 12px 10px 0; text-align: right;">거래량비</th>
+                            <th class="col-hide-mobile" style="padding: 0 12px 10px 0; text-align: right;">RSI</th>
+                            <th class="col-hide-mobile" style="padding: 0 12px 10px 0; text-align: right;">52W고점</th>
+                            <th style="padding: 0 12px 10px 0; text-align: right;">점수</th>
+                            <th class="col-hide-mobile" style="padding: 0 0 10px 0;">플래그</th>
+                        </tr>
+                    </thead>
+                    <tbody id="us-screening-body">
+                        <tr><td colspan="8" style="padding: 40px 0; text-align: center; color: var(--text-muted); font-size: 0.85rem;">US 스크리닝 데이터 로딩 중...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </main>
 
     <script src="/static/js/common.js?v=2"></script>

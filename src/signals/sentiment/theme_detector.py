@@ -68,6 +68,7 @@ class ThemeInfo:
     score: float = 0.0
     detected_at: datetime = field(default_factory=datetime.now)
     last_updated: datetime = field(default_factory=datetime.now)
+    news_titles: List[str] = field(default_factory=list)  # 관련 뉴스 제목 (최대 5개)
 
     def to_theme(self) -> Theme:
         """Theme 객체로 변환"""
@@ -967,12 +968,22 @@ class ThemeDetector:
                 if theme_name != raw_name:
                     logger.info(f"[ThemeDetector] 테마명 정규화: '{raw_name}' → '{theme_name}'")
 
+                # 키워드 매칭으로 관련 뉴스 제목 수집 (최대 5개)
+                theme_kws = THEME_KEYWORDS.get(theme_name, [theme_name])
+                matched_titles = []
+                for article in news_articles:
+                    if any(kw in article.title for kw in theme_kws):
+                        matched_titles.append(article.title)
+                    if len(matched_titles) >= 5:
+                        break
+
                 if theme_name in self._themes:
                     # 기존 테마 업데이트
                     theme = self._themes[theme_name]
                     theme.news_count = theme_data.get("news_count", 0)
                     theme.score = theme_data.get("score", 0)
                     theme.last_updated = datetime.now()
+                    theme.news_titles = matched_titles
                 else:
                     # 새 테마 추가
                     related_stocks = DEFAULT_THEME_STOCKS.get(theme_name, [])
@@ -983,6 +994,7 @@ class ThemeDetector:
                         related_stocks=related_stocks,
                         news_count=theme_data.get("news_count", 0),
                         score=theme_data.get("score", 0),
+                        news_titles=matched_titles,
                     )
 
             if self._stock_sentiments:

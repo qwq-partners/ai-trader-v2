@@ -2,6 +2,36 @@
 
 ---
 
+## [2026-03-01] US 테마/스크리닝 대시보드 통합
+
+**수정 파일**: `src/dashboard/templates/themes.html`, `src/dashboard/static/js/themes.js`
+
+### 내용
+- `themes.html`: US 시장 테마 그리드 + US 스크리닝 테이블 HTML 섹션 추가 (US 배지 포함)
+- `themes.js`: `loadUSThemes()`, `renderUSThemes()`, `loadUSScreening()`, `renderUSScreening()` 추가
+  - 프록시 경유 `/api/us-proxy/api/us/themes`, `/api/us-proxy/api/us/screening` 호출
+  - US 봇 오프라인 시 graceful fallback (빈 상태 표시)
+  - 스크리닝 플래그 배지 컬러링 (VOL_SURGE/52W_HIGH/BREAKOUT/MOMENTUM/OVERSOLD/OVERBOUGHT)
+  - 모든 동적 문자열 `esc()` XSS 이스케이프 적용
+
+---
+
+## [2026-03-01] 테마 탭 개선: 종목명 표시 + 뉴스 간략 표시
+
+**수정 파일**: `src/signals/sentiment/theme_detector.py`, `src/dashboard/data_collector.py`, `src/dashboard/static/js/themes.js`
+
+### 종목명 표시 개선
+- `data_collector.get_themes()`에서 종목코드→종목명 변환 실패 시 `KNOWN_STOCKS` 역매핑 폴백 추가
+- 기존 pykrx 마스터 캐시 미스 시에도 대표 종목명 정상 표시
+
+### 뉴스 간략 표시
+- `ThemeInfo` 데이터클래스에 `news_titles: List[str]` 필드 추가 (최대 5개)
+- `detect_themes()`에서 테마 키워드 매칭으로 관련 뉴스 제목 자동 수집
+- API 응답(`/api/themes`)에 `news_titles` 필드 포함
+- 대시보드 테마 카드 하단에 뉴스 제목 목록 렌더링 (기존 "뉴스 N건" 대체)
+
+---
+
 ## [2026-02-28] KR WebSocket 장외 해제 + US 스크리너 대시보드 통합
 
 ### Feature 1: KR WebSocket 장외 해제
