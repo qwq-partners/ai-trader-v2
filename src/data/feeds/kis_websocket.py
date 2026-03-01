@@ -129,6 +129,9 @@ class KISWebSocketFeed:
         self._token_manager = get_token_manager()
         self._approval_key: Optional[str] = None
 
+        # 장외 연결 제어
+        self._should_connect: bool = True
+
         # 통계
         self._message_count = 0
         self._price_data_count = 0
@@ -207,6 +210,7 @@ class KISWebSocketFeed:
 
     async def disconnect(self):
         """WebSocket 연결 해제"""
+        self._should_connect = False
         self._running = False
         self._connected = False
 
@@ -222,6 +226,12 @@ class KISWebSocketFeed:
             await self._session.close()
 
         logger.info("WebSocket 연결 해제")
+
+    def enable_reconnect(self):
+        """장 시작 전 재연결 허용 (run 루프가 자동으로 connect 재시도)"""
+        self._should_connect = True
+        self._running = True
+        self._reconnect_count = 0
 
     async def _get_approval_key(self) -> Optional[str]:
         """WebSocket 인증 키 발급 (토큰 매니저 사용)"""
@@ -588,7 +598,15 @@ class KISWebSocketFeed:
 
     async def run(self):
         """메시지 수신 루프"""
-        while self._running:
+        while True:
+            # 장외 시간 — 연결 시도하지 않고 대기
+            if not self._should_connect:
+                await asyncio.sleep(10)
+                continue
+
+            if not self._running:
+                break
+
             try:
                 if not self._connected:
                     success = await self.connect()
@@ -625,7 +643,7 @@ class KISWebSocketFeed:
                 logger.exception(f"WebSocket 수신 오류: {e}")
 
             # 재연결 (지수 백오프, 무제한 재시도)
-            if self._running:
+            if self._running and self._should_connect:
                 self._connected = False
                 self._reconnect_count += 1
 

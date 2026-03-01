@@ -2195,8 +2195,16 @@ class TradingBot(SchedulerMixin):
                     last_session = current
                     logger.info(f"[세션] {current.value} 감지")
 
-                    # WebSocket 세션 설정
+                    # WebSocket 세션 설정 + 장외 연결 해제/복원
                     if self.ws_feed:
+                        if current == MarketSession.CLOSED:
+                            if self.ws_feed.is_connected:
+                                logger.info("[WS] 장 종료 — WebSocket 연결 해제")
+                                await self.ws_feed.disconnect()
+                        elif current in (MarketSession.PRE_MARKET, MarketSession.REGULAR):
+                            if not self.ws_feed._should_connect:
+                                logger.info(f"[WS] {current.value} — WebSocket 재연결 허용")
+                                self.ws_feed.enable_reconnect()
                         self.ws_feed.set_session(current)
 
                     # 엔진에 세션 이벤트 발행

@@ -14,6 +14,7 @@ let lastPositions = [];
 // 마켓별 데이터 캐시 (필터 전환 시 즉시 반영용)
 let cachedKRPortfolio = null;
 let cachedUSPortfolio = null;
+let cachedUSSignals = null;
 let cachedKRRisk = null;
 
 // ============================================================
@@ -725,15 +726,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function loadUSData() {
     try {
-        const [status, portfolio, positions] = await Promise.all([
+        const [status, portfolio, positions, signals] = await Promise.all([
             fetch("/api/us-proxy/api/us/status").then(r => r.json()).catch(() => ({ offline: true })),
             fetch("/api/us-proxy/api/us/portfolio").then(r => r.json()).catch(() => ({ offline: true })),
             fetch("/api/us-proxy/api/us/positions").then(r => r.json()).catch(() => []),
+            fetch("/api/us-proxy/api/us/signals").then(r => r.ok ? r.json() : []).catch(() => []),
         ]);
         renderUSStatus(status);
         renderUSPortfolio(portfolio);
         renderUSPositions(positions);
+        renderUSSignals(signals);
         cachedUSPortfolio = portfolio;
+        cachedUSSignals = signals;
         updatePortfolioCard();
     } catch (e) {
         console.warn("[US] 데이터 로드 실패:", e);
@@ -813,6 +817,49 @@ function renderUSPositions(positions) {
             '<td style="padding:8px 10px 8px 0;" class="mono">$' + (p.market_value||0).toLocaleString("en-US",{minimumFractionDigits:2}) + '</td>' +
         '</tr>';
     }).join("");
+}
+
+function renderUSSignals(signals) {
+    const container = document.getElementById("us-signals-section");
+    if (!container) return;
+    if (!signals || signals.length === 0) {
+        container.textContent = "";
+        return;
+    }
+    const items = signals.slice(0, 20);
+    const rows = items.map(s => {
+        const time = esc((s.timestamp || "").slice(11, 19));
+        const isBuy = (s.side || "").toLowerCase() === "buy";
+        const badgeCls = isBuy ? "badge-red" : "badge-blue";
+        const badgeText = isBuy ? "매수" : "매도";
+        const score = s.score != null ? Number(s.score).toFixed(0) : "-";
+        return '<tr style="border-bottom:1px solid var(--border-subtle);">' +
+            '<td style="padding:6px 10px 6px 0;" class="mono" title="' + esc(s.timestamp) + '">' + time + '</td>' +
+            '<td style="padding:6px 10px 6px 0;font-weight:600;" class="mono">' + esc(s.symbol) + '</td>' +
+            '<td style="padding:6px 10px 6px 0;font-size:0.78rem;color:var(--text-secondary);">' + esc(s.strategy || "-") + '</td>' +
+            '<td style="padding:6px 10px 6px 0;" class="mono">' + esc(score) + '</td>' +
+            '<td style="padding:6px 10px 6px 0;"><span class="badge ' + badgeCls + '">' + badgeText + '</span></td>' +
+            '<td style="padding:6px 0;font-size:0.75rem;color:var(--text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + esc(s.reason) + '">' + esc(s.reason || "") + '</td>' +
+        '</tr>';
+    }).join("");
+
+    // 모든 동적 값은 esc()로 이스케이프됨 (XSS 방지)
+    container.innerHTML =
+        '<div class="card" style="padding:16px 20px;">' +
+            '<div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:10px;font-weight:600;">🇺🇸 스크리닝 시그널 <span class="mono" style="font-size:0.7rem;color:var(--text-muted);margin-left:6px;">' + items.length + '건</span></div>' +
+            '<div style="overflow-x:auto;max-height:320px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(99,102,241,0.15) transparent;">' +
+            '<table style="width:100%;text-align:left;border-collapse:collapse;">' +
+                '<thead><tr style="border-bottom:1px solid var(--border-subtle);">' +
+                    '<th style="padding:0 10px 8px 0;font-size:0.7rem;color:var(--text-muted);font-weight:500;">시간</th>' +
+                    '<th style="padding:0 10px 8px 0;font-size:0.7rem;color:var(--text-muted);font-weight:500;">종목</th>' +
+                    '<th style="padding:0 10px 8px 0;font-size:0.7rem;color:var(--text-muted);font-weight:500;">전략</th>' +
+                    '<th style="padding:0 10px 8px 0;font-size:0.7rem;color:var(--text-muted);font-weight:500;">점수</th>' +
+                    '<th style="padding:0 10px 8px 0;font-size:0.7rem;color:var(--text-muted);font-weight:500;">방향</th>' +
+                    '<th style="padding:0 0 8px 0;font-size:0.7rem;color:var(--text-muted);font-weight:500;">사유</th>' +
+                '</tr></thead>' +
+                '<tbody>' + rows + '</tbody>' +
+            '</table></div>' +
+        '</div>';
 }
 
 // ============================================================

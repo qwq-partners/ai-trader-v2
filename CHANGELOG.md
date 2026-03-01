@@ -2,6 +2,30 @@
 
 ---
 
+## [2026-02-28] KR WebSocket 장외 해제 + US 스크리너 대시보드 통합
+
+### Feature 1: KR WebSocket 장외 해제
+
+**수정 파일**: `src/data/feeds/kis_websocket.py`, `scripts/run_trader.py`
+
+- **장외 시간 연결 해제**: 장 종료(`CLOSED`) 시 WebSocket 연결 자동 끊김 → 불필요한 재연결 시도/로그 방지
+- `_should_connect` 플래그 추가: `disconnect()`에서 `False`, `enable_reconnect()`에서 `True`
+- `run()` 루프: `_should_connect=False`이면 10초 대기 (reconnect 시도 안 함)
+- `_session_check_loop()`: `CLOSED` → `disconnect()`, `PRE_MARKET`/`REGULAR` → `enable_reconnect()`
+- 기존 세션 변경 시 `set_session()` 호출은 유지 (구독 재구성용)
+
+### Feature 2: US 스크리너 대시보드 통합
+
+**수정 파일**: `src/dashboard/static/js/dashboard.js`, `src/dashboard/templates/index.html`
+
+- **US 시그널 테이블**: US 봇(8081)의 `/api/us/signals` 데이터를 KR 대시보드에 표시
+- `loadUSData()`에 signals fetch 추가 (기존 프록시 `/api/us-proxy/` 활용)
+- `renderUSSignals()` 함수: 시간/종목/전략/점수/방향/사유 6컬럼, 최대 20건 (esc() XSS 방지)
+- `cachedUSSignals` 캐시 변수 추가
+- `index.html`: `#us-signals-section` div (US 포지션 테이블 아래)
+
+---
+
 ## [2026-02-28] 대시보드 마켓 필터 통합 — 포트폴리오/리스크 카드 필터 반영
 
 **수정 파일**: `src/dashboard/static/js/dashboard.js`, `src/dashboard/templates/index.html`
