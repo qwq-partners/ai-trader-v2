@@ -788,6 +788,8 @@ function renderUSPortfolio(p) {
     }
     set("us-total-value", "$" + (p.total_value || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
     set("us-cash", "$" + (p.cash || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+    const stockVal = (p.total_value || 0) - (p.cash || 0);
+    set("us-stock-value", "$" + Math.max(0, stockVal).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
     const pnl = p.daily_pnl || 0;
     const pnlEl = document.getElementById("us-daily-pnl");
     if (pnlEl) {
@@ -1164,24 +1166,32 @@ function _setRiskGaugesVisible(visible) {
 }
 
 function applyMarketFilter(filter) {
-    const usSec = document.getElementById("us-summary-section");
-    const krSec = document.getElementById("kr-positions-section");
-    const extSec = document.getElementById("external-accounts-section");
-    if (!usSec) return;
-    if (filter === "all") {
-        usSec.style.display = "block";
-        if (krSec) krSec.style.display = "block";
-        if (extSec) extSec.style.removeProperty("display");
-    } else if (filter === "us") {
-        usSec.style.display = "block";
-        if (krSec) krSec.style.display = "none";
-        if (extSec) extSec.style.display = "none";
-    } else {
-        usSec.style.display = "none";
-        if (krSec) krSec.style.display = "block";
-        if (extSec) extSec.style.removeProperty("display");
+    // 새 레이아웃: us-market-card / kr-market-card 직접 제어
+    const usCard  = document.getElementById("us-market-card");
+    const krCard  = document.getElementById("kr-market-card");
+    const krSec   = document.getElementById("kr-positions-section");
+    const extSec  = document.getElementById("external-accounts-section");
+    // 구 us-summary-section은 빈 컨테이너 — 항상 숨김
+    const usSec   = document.getElementById("us-summary-section");
+    if (usSec) usSec.style.display = "none";
+
+    const showUS = filter === "all" || filter === "us";
+    const showKR = filter === "all" || filter === "kr";
+
+    if (usCard) usCard.style.display = showUS ? "" : "none";
+    if (krCard) krCard.style.display = showKR ? "" : "none";
+    if (krSec)  krSec.style.display  = showKR ? "" : "none";
+    if (extSec) {
+        if (showKR) extSec.style.removeProperty("display");
+        else extSec.style.display = "none";
     }
-    // 포트폴리오/리스크 카드 갱신
+
+    // markets-grid: 필터에 따라 단일 열 / 2열
+    const grid = document.querySelector(".markets-grid");
+    if (grid) {
+        grid.style.gridTemplateColumns = (showUS && showKR) ? "1fr 1fr" : "1fr";
+    }
+
     updatePortfolioCard();
     updateRiskCard();
 }
