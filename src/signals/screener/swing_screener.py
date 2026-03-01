@@ -39,6 +39,9 @@ class SwingScreener:
         self._stock_master = stock_master
         self._indicators = TechnicalIndicators()
         self._kospi_closes: List[float] = []  # 벤치마크 KOSPI 종가 (MRS용)
+        # 5일 수급 스코어 (싱글턴 — 스캔 사이클마다 재생성하지 않도록 인스턴스 변수)
+        from ...data.providers.supply_score_provider import SupplyScoreProvider
+        self._supply5d = SupplyScoreProvider()
 
     async def run_full_scan(self) -> List[SwingCandidate]:
         """
@@ -86,7 +89,7 @@ class SwingScreener:
             logger.warning(f"[스윙스크리너] VCP 탐지 실패 (무시): {e}")
 
         # 5단계: 전략적 오버레이 (3계층 전략적 신호)
-        scored = self._apply_strategic_overlay(scored)
+        scored = await self._apply_strategic_overlay(scored)
 
         # 점수 순 정렬
         scored.sort(key=lambda c: c.score, reverse=True)
@@ -636,7 +639,7 @@ class SwingScreener:
 
                 c.indicators["lci"] = round(lci, 3)
 
-    def _apply_strategic_overlay(
+    async def _apply_strategic_overlay(
         self, candidates: List[SwingCandidate]
     ) -> List[SwingCandidate]:
         """5단계: 3계층 전략적 신호로 점수 보정
@@ -653,11 +656,20 @@ class SwingScreener:
             recommended = {s.symbol: s for s in outlook.recommended_stocks}
             logger.info(f"[스윙스크리너] 전문가 추천 {len(recommended)}종목 로드")
 
-        # 2) 수급 추세 로드
+        # 2) 수급 추세 로드 (SupplyTrendDetector — 심층 20일, ~80종목)
         supply_trends = self._load_supply_trends()
         trending = {s.symbol: s for s in supply_trends}
         if trending:
             logger.info(f"[스윙스크리너] 수급 추세 {len(trending)}종목 로드")
+
+        # 2b) 5일 수급 스코어 (SupplyScoreProvider — 전종목 커버)
+        supply5d = self._supply5d
+        try:
+            await supply5d.ensure_loaded()
+            logger.info(f"[스윙스크리너] 5일수급 준비: {len(supply5d._loaded_dates)}일치")
+        except Exception as _e:
+            logger.warning(f"[스윙스크리너] 5일수급 로드 실패: {_e}")
+            supply5d = None
 
         # 3) VCP 후보 로드
         vcp_candidates = self._load_vcp_candidates()
@@ -694,7 +706,7 @@ class SwingScreener:
                 )
                 layers_matched += 1
 
-            # Layer 2: 수급 추세 보너스
+            # Layer 2: 수급 추세 보너스 (SupplyTrendDetector — 심층 20일)
             if sym in trending:
                 trend = trending[sym]
                 bonus = min(int(trend.score * 0.2), 20)  # 최대 +20
@@ -703,6 +715,21 @@ class SwingScreener:
                     f"수급추세 {trend.foreign_streak}일외국인+{trend.inst_streak}일기관"
                 )
                 layers_matched += 1
+            elif supply5d and supply5d.is_ready:
+                # SupplyTrendDetector 미수록 종목 → 5일 수급 스코어로 보완
+                bonus5d = supply5d.get_bonus(sym, max_bonus=15.0)
+                if bonus5d >= 5.0:
+                    meta5d = supply5d.get_meta(sym)
+                    candidate.score += bonus5d
+                    f_streak = meta5d.get("foreign_streak", 0)
+                    i_streak = meta5d.get("inst_streak", 0)
+                    desc = (
+                        f"5일수급 외{f_streak}일+기{i_streak}일"
+                        + (" 가속" if meta5d.get("is_accelerating") else "")
+                    )
+                    candidate.reasons.append(desc)
+                    if bonus5d >= 10.0:
+                        layers_matched += 1  # 강한 신호만 계층 카운트
 
             # Layer 3: VCP 패턴 보너스
             if sym in vcp_map:

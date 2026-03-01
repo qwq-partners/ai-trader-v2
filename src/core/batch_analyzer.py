@@ -552,7 +552,7 @@ class BatchAnalyzer:
                     skipped += 1
                     continue
 
-                # 진입 범위 체크
+                # 진입 범위 체크 (상단: 갭업 슬리피지)
                 if current_price > sig.max_entry_price:
                     logger.info(
                         f"[배치분석] {sig.symbol} 진입 스킵: "
@@ -560,6 +560,21 @@ class BatchAnalyzer:
                     )
                     skipped += 1
                     continue
+
+                # 갭다운 체크 (하단: 개장 급락 시 당일 추가 하락 위험)
+                if sig.entry_price > 0:
+                    gap_pct = (current_price - sig.entry_price) / sig.entry_price * 100
+                    gap_down_threshold = self._config.get("batch", {}).get(
+                        "gap_down_skip_pct", -2.0
+                    )  # 기본 -2%: 전일 종가 대비 2% 이상 갭다운 시 진입 보류
+                    if gap_pct < gap_down_threshold:
+                        logger.info(
+                            f"[배치분석] {sig.symbol} 갭다운 스킵: "
+                            f"{gap_pct:+.1f}% (기준 {gap_down_threshold:+.1f}%) "
+                            f"전일종가={sig.entry_price:,.0f} 현재={current_price:,.0f}"
+                        )
+                        skipped += 1
+                        continue
 
                 # 이미 보유 중인 종목 스킵
                 if sig.symbol in self._engine.portfolio.positions:

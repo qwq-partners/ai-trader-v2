@@ -349,6 +349,20 @@ class SchedulerMixin:
                             except Exception as e:
                                 logger.error(f"[자산추적] 스냅샷 저장 실패: {e}")
 
+                        # 5일 누적 수급 스코어 갱신 (장 마감 후 1일 1회)
+                        if not getattr(self, '_last_supply5d_date', None) == today:
+                            try:
+                                from src.data.providers.supply_score_provider import SupplyScoreProvider
+                                sp = SupplyScoreProvider()
+                                await sp.ensure_loaded(force_refresh_today=True)
+                                self._last_supply5d_date = today
+                                logger.info(
+                                    f"[수급5일] 갱신 완료: "
+                                    f"{len(sp._loaded_dates)}일치 데이터"
+                                )
+                            except Exception as _sp_e:
+                                logger.warning(f"[수급5일] 갱신 실패: {_sp_e}")
+
                         # KIS 체결 기반 PnL 보정 (17:00)
                         if not getattr(self, '_last_kis_sync_date', None) == today:
                             try:
@@ -1098,8 +1112,11 @@ class SchedulerMixin:
                                             except Exception:
                                                 pass
 
-                                    stop_price = rt_price * (1 - min(atr_pct, 6.0) / 100)
-                                    target_price = rt_price * (1 + min(atr_pct * 1.5, 9.0) / 100)
+                                    # ATR 1.5x 동적 손절 (최소 2%, 최대 8%), 1:2 리스크:리워드
+                                    stop_pct   = min(max(atr_pct * 1.5, 2.0), 8.0)
+                                    target_pct = min(max(stop_pct * 2.0, 4.0), 15.0)
+                                    stop_price   = rt_price * (1 - stop_pct   / 100)
+                                    target_price = rt_price * (1 + target_pct / 100)
 
                                     signal = Signal(
                                         symbol=stock.symbol,
@@ -1286,8 +1303,11 @@ class SchedulerMixin:
                                             _ib_atr = float(_r.split("ATR:")[1].replace("%)", "").strip())
                                         except Exception:
                                             pass
-                                _ib_stop   = _ib_rt_price * (1 - min(_ib_atr, 6.0) / 100)
-                                _ib_target = _ib_rt_price * (1 + min(_ib_atr * 1.5, 9.0) / 100)
+                                # ATR 1.5x 동적 손절 (최소 2%, 최대 8%), 1:2 리스크:리워드
+                                _ib_stop_pct   = min(max(_ib_atr * 1.5, 2.0), 8.0)
+                                _ib_target_pct = min(max(_ib_stop_pct * 2.0, 4.0), 15.0)
+                                _ib_stop   = _ib_rt_price * (1 - _ib_stop_pct   / 100)
+                                _ib_target = _ib_rt_price * (1 + _ib_target_pct / 100)
 
                                 _ib_signal = Signal(
                                     symbol=_ib_stock.symbol,
@@ -1368,7 +1388,38 @@ class SchedulerMixin:
             llm = get_llm_manager()
             reasons_text = " | ".join(stock.reasons[:5]) if stock.reasons else "없음"
 
-            prompt = f"""장중 주식 진입 검증 (한국 주식, {datetime.now().strftime('%H:%M')} 기준)
+            # ── 시장 레짐 감지 (전문가 패널 캐시 우선, 없으면 ETF 대리) ──────
+            regime = "neutral"
+            try:
+                from src.signals.strategic.expert_panel import ExpertPanel
+                _panel = ExpertPanel()
+                _outlook = _panel.load_outlook()
+                if _outlook:
+                    regime = _outlook.market_regime  # "bullish" | "neutral" | "bearish"
+            except Exception:
+                pass
+
+            # 레짐별 질문 및 통과 기준 설정
+            if regime == "bullish":
+                _q_block = """1. 수급 품질: 외국인/기관 매수 근거가 명확한가? (스마트머니 유입 신호)
+2. 추세 지속성: 신고가 접근 / 섹터 상대강도 강세 근거가 있는가?
+3. 리스크 부재: 과열·고점소진·공시 리스크 없는가?"""
+                _pass_rule = "q1=Y이고 (q2=Y 또는 q3=Y)이면 pass"
+                _sys_note = "강세장 기준: 수급+추세 또는 수급+리스크 2항목 이상 통과 시 pass."
+            elif regime == "bearish":
+                _q_block = """1. 하방 방어성: 약세장에서도 외국인/기관이 지속 매집 중이고, 섹터가 시장 대비 강한가?
+2. 수급 지속성: 외국인 또는 기관 순매수가 3일 이상 연속이며 단발성이 아닌가?
+3. 리스크 부재: "섹터쏠림감점", "섹터하위", "과열", "고점소진" 등 부정 태그가 없는가?"""
+                _pass_rule = "q1=Y AND q2=Y AND q3=Y 모두 통과해야 pass (약세장 엄격 기준)"
+                _sys_note = "약세장 기준: 3항목 모두 Y여야 pass. 하나라도 N이면 false."
+            else:  # neutral
+                _q_block = """1. 수급 품질: 선정 근거에 외국인/기관 매수 관련 내용이 있고 스마트머니 유입 근거가 있는가?
+2. 추세 건전성: 지속 매집 패턴(섹터상대강도, 모멘텀지속, 신고가)이며 단기 급등 꺾임 징후가 없는가?
+3. 리스크 부재: "섹터쏠림감점", "과열" 같은 부정 태그가 없고 진입 위험 요소가 없는가?"""
+                _pass_rule = "q1=Y이고 q2=Y 또는 q3=Y이면 pass"
+                _sys_note = "중립장 기준: 수급(q1) 필수 + 추세/리스크 중 1개 이상 통과."
+
+            prompt = f"""장중 주식 진입 검증 (한국 주식, {datetime.now().strftime('%H:%M')} 기준, 시장레짐={regime})
 
 종목: {stock.name} ({stock.symbol})
 현재가: {rt_price:,}원 | 등락: {rt_change:+.1f}% | 스크리닝점수: {stock.score:.0f}점
@@ -1376,12 +1427,9 @@ class SchedulerMixin:
 
 아래 3가지 항목을 Y/N으로만 판단하세요 (선정 근거 텍스트 기반):
 
-1. 수급 품질: 선정 근거에 "외국인매수" 또는 "기관매수" 또는 "수급" 관련 내용이 있고,
-   단순 "거래량 N배" 급등만이 아닌 스마트머니 유입 근거가 있는가?
-2. 추세 건전성: 선정 근거가 지속 매집 패턴(섹터상대강도, 모멘텀지속, 신고가)을 나타내며,
-   단기 급등 후 꺾임(고점소진, 저항) 징후가 없는가?
-3. 리스크 부재: 선정 근거에 "섹터하위종목", "섹터쏠림감점", "과열" 같은 부정적 태그가
-   없고, 진입 위험을 높이는 요소가 보이지 않는가?
+{_q_block}
+
+통과 기준: {_pass_rule}
 
 응답 형식 (JSON만):
 {{"q1": "Y", "q2": "Y", "q3": "Y", "pass": true}}"""
@@ -1389,9 +1437,9 @@ class SchedulerMixin:
             result = await asyncio.wait_for(
                 llm.complete_json(
                     prompt=prompt,
-                    system="당신은 한국 주식 장중 진입 검증 전문가입니다. 선정 근거 텍스트만 보고 3가지 체크리스트를 평가해 JSON으로만 응답하세요.",
+                    system=f"당신은 한국 주식 장중 진입 검증 전문가입니다. {_sys_note} 선정 근거 텍스트만 보고 JSON으로만 응답하세요.",
                     task=LLMTask.QUICK_ANALYSIS,
-                    max_tokens=100,
+                    max_tokens=120,
                 ),
                 timeout=timeout_sec,
             )
@@ -1400,15 +1448,21 @@ class SchedulerMixin:
                 logger.debug(f"[LLM검증] {stock.symbol} 응답 없음 → pass")
                 return True
 
-            passed = result.get("pass", True)
             q1 = result.get("q1", "Y")
             q2 = result.get("q2", "Y")
             q3 = result.get("q3", "Y")
+
+            # 레짐별 통과 판정 (LLM 응답의 "pass"도 참고하되, 규칙 우선)
+            if regime == "bearish":
+                passed = (q1 == "Y" and q2 == "Y" and q3 == "Y")
+            else:  # bullish, neutral
+                passed = (q1 == "Y" and (q2 == "Y" or q3 == "Y"))
+
             logger.info(
-                f"[LLM검증] {stock.symbol} {stock.name}: "
-                f"모멘텀={q1} 수급={q2} 타이밍={q3} → {'✅통과' if passed else '❌탈락'}"
+                f"[LLM검증] {stock.symbol} {stock.name} [{regime}]: "
+                f"q1={q1} q2={q2} q3={q3} → {'✅통과' if passed else '❌탈락'}"
             )
-            return bool(passed)
+            return passed
 
         except asyncio.TimeoutError:
             logger.debug(f"[LLM검증] {stock.symbol} 타임아웃 → pass")
