@@ -2,6 +2,24 @@
 
 ---
 
+## [2026-03-02] 엔진 복기 P0 이슈 수정 (2건)
+
+**수정 파일**:
+- `scripts/run_trader.py` — Order.reason 설정 누락 수정, `_exit_reasons.pop()` → `.get()` (부분체결 대응), KIS sync 전략 복원 메모리 캐시 폴백
+- `scripts/bot_schedulers.py` — `_sync_portfolio()`에서 신규 포지션 전략 메모리 캐시 복원
+
+### P0-1: unknown exit_type 버그
+- **원인**: 매도 주문 생성 시 `Order(reason=...)` 누락 → `Fill.reason` 빈 문자열 → 저널에 "unknown" 기록
+- **원인2**: `_exit_reasons.pop()`이 첫 부분체결에서 reason 소모 → 후속 체결분 "unknown"
+- **수정**: Order 생성 시 `reason=reason` 추가, `.pop()` → `.get()`으로 변경, 전량 체결 시에만 정리
+
+### P0-2: KIS sync 전략 복원 실패
+- **원인**: KIS API 포지션에 전략 정보 없음 → DB 폴백만 의존 → DB 미연결 시 strategy=None
+- **수정**: `_symbol_strategy` 메모리 캐시를 3차 폴백으로 추가 (DB 조회 실패/미연결 시)
+- **적용 위치**: `_restore_position_metadata()` + `_sync_portfolio()`
+
+---
+
 ## [2026-03-02] 전체 코드 리뷰 이슈 수정 (P0 4건 + P1 6건 + P2 6건)
 
 **수정 파일**:

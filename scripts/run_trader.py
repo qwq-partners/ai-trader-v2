@@ -831,6 +831,14 @@ class TradingBot(SchedulerMixin):
     async def _restore_position_metadata(self, positions: dict):
         """DB에서 포지션 전략/진입시간 복원 (KIS API에는 없는 정보)"""
         if not self.trade_journal or not hasattr(self.trade_journal, 'pool') or not self.trade_journal.pool:
+            # DB 미사용 시 메모리 캐시에서 전략 복원 시도
+            restored = 0
+            for sym, pos in positions.items():
+                if not pos.strategy and sym in self._symbol_strategy:
+                    pos.strategy = self._symbol_strategy[sym]
+                    restored += 1
+            if restored:
+                logger.info(f"[메타복원] DB 미사용 → 메모리 캐시에서 {restored}개 전략 복원")
             return
         try:
             rows = await self.trade_journal.pool.fetch(
@@ -852,8 +860,13 @@ class TradingBot(SchedulerMixin):
                     if not pos.entry_time and entry_time:
                         pos.entry_time = entry_time
                     restored += 1
+                # DB에 없으면 메모리 캐시에서 복원
+                elif not pos.strategy and sym in self._symbol_strategy:
+                    pos.strategy = self._symbol_strategy[sym]
+                    restored += 1
+                    logger.debug(f"[메타복원] {sym} 전략 메모리 캐시 복원: {pos.strategy}")
             if restored:
-                logger.info(f"[메타복원] {restored}개 포지션 전략/진입시간 DB 복원")
+                logger.info(f"[메타복원] {restored}개 포지션 전략/진입시간 복원")
         except Exception as e:
             logger.warning(f"[메타복원] DB 조회 실패: {e}")
 
@@ -1242,9 +1255,10 @@ class TradingBot(SchedulerMixin):
                     order_type=OrderType.LIMIT if is_auction else OrderType.MARKET,
                     quantity=quantity,
                     price=current_price if is_auction else None,
+                    reason=reason,
                 )
 
-                # 청산 사유 저장 (체결 시 journal에 전달하기 위해)
+                # 청산 사유 저장 (폴백용, Order.reason이 우선)
                 self._exit_reasons[symbol] = reason
 
                 # ExitManager 전용 pending 선등록 (중복 매도 방지, submit await 중 race condition 차단)
@@ -1839,9 +1853,13 @@ class TradingBot(SchedulerMixin):
                     if hasattr(self.strategy_manager, '_indicators'):
                         indicators = self.strategy_manager._indicators.get(fill.symbol, {})
 
-                    # 청산 타입 결정: ExitManager에서 저장한 사유 우선, 없으면 fill에서 추론
-                    reason = getattr(fill, 'reason', '') or self._exit_reasons.pop(fill.symbol, '') or ''
+                    # 청산 타입 결정: fill.reason 우선, 없으면 _exit_reasons 폴백 (get으로 보존)
+                    reason = getattr(fill, 'reason', '') or self._exit_reasons.get(fill.symbol, '') or ''
                     exit_type = self._infer_exit_type(reason)
+
+                    # 전량 체결 시에만 _exit_reasons 정리 (부분체결 시 보존)
+                    if fill.symbol not in self.engine.portfolio.positions:
+                        self._exit_reasons.pop(fill.symbol, None)
 
                     # exit_reason에 상세 사유 포함
                     if not reason:

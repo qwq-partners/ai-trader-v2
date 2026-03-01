@@ -1674,6 +1674,9 @@ class SchedulerMixin:
 
                 for symbol in new_symbols:
                     pos = kis_positions[symbol]
+                    # DB 복원 실패 시 메모리 캐시에서 전략 복원
+                    if not pos.strategy and symbol in self._symbol_strategy:
+                        pos.strategy = self._symbol_strategy[symbol]
                     portfolio.positions[symbol] = pos
                     logger.info(
                         f"[동기화] 포지션 추가: {symbol} {pos.name} "
