@@ -857,7 +857,7 @@ function renderUSPositions(positions) {
     const cntEl  = document.getElementById("us-positions-count");
     const cnt    = (positions || []).length;
     if (cntEl) cntEl.textContent = cnt;
-    if (fullSec) fullSec.style.display = cnt > 0 ? "" : "none";
+    // US 포지션 섹션은 항상 표시 (KR 포지션 섹션과 동일하게)
     if (!tbody) return;
     if (!positions || positions.length === 0) {
         tbody.innerHTML = '<tr><td colspan="6" style="padding:20px 0;text-align:center;color:var(--text-muted);font-size:0.82rem;">보유 종목 없음</td></tr>';
@@ -1098,9 +1098,8 @@ function applyMarketFilter(filter) {
     if (usCard)  usCard.style.display  = showUS ? "" : "none";
     if (krCard)  krCard.style.display  = showKR ? "" : "none";
     if (krSec)   krSec.style.display   = showKR ? "" : "none";
-    // us-positions-full: 포지션이 있을 때만 표시 (renderUSPositions에서 제어)
-    // 여기선 마켓 필터만 반영
-    if (usPosF && !showUS) usPosF.style.display = "none";
+    // us-positions-full: US 마켓 표시 여부에 따라 제어 (KR positions-section과 동일 방식)
+    if (usPosF) usPosF.style.display = showUS ? "" : "none";
     if (extSec) {
         if (showKR) extSec.style.removeProperty("display");
         else extSec.style.display = "none";
