@@ -935,7 +935,11 @@ function renderUSRisk(risk) {
         canTrade.className = 'badge ' + (risk.can_trade ? 'badge-green' : 'badge-red');
     }
     // 일일 손실
-    set('us-daily-loss', formatPct(risk.daily_loss_pct));
+    const usDailyLossEl = document.getElementById('us-daily-loss');
+    if (usDailyLossEl) {
+        usDailyLossEl.textContent = formatPct(risk.daily_loss_pct);
+        usDailyLossEl.style.color = risk.daily_loss_pct < 0 ? 'var(--acc-red)' : '';
+    }
     set('us-daily-loss-limit', '-' + risk.daily_loss_limit_pct + '%');
     // 거래 횟수
     set('us-trades', risk.daily_trades);
@@ -1089,7 +1093,10 @@ function updateRiskCard() {
         canTrade.className = 'badge ' + (kr.can_trade ? 'badge-green' : 'badge-red');
     }
     // 일일 손실
-    if (dailyLoss) dailyLoss.textContent = formatPct(kr.daily_loss_pct);
+    if (dailyLoss) {
+        dailyLoss.textContent = formatPct(kr.daily_loss_pct);
+        dailyLoss.style.color = kr.daily_loss_pct < 0 ? 'var(--acc-red)' : '';
+    }
     if (dailyLossLim) dailyLossLim.textContent = '-' + kr.daily_loss_limit_pct + '%';
     if (lossGauge) {
         const lossPct = Math.min(Math.abs(kr.daily_loss_pct) / kr.daily_loss_limit_pct * 100, 100);
