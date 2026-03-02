@@ -29,6 +29,7 @@ pandas-ta>=0.3.14b
 
 # === 시각화 (선택) ===
 matplotlib>=3.8.0
+squarify>=0.4.4
 plotly>=5.18.0
 
 # === HTTP/WebSocket ===
