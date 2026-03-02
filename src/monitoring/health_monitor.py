@@ -200,15 +200,15 @@ class HealthMonitor:
         return results
 
     async def _check_memory(self) -> CheckResult:
-        """메모리 사용량: RSS > 500MB 경고"""
+        """메모리 사용량: RSS > 1024MB 경고"""
         try:
             import psutil
             process = psutil.Process()
             rss_mb = process.memory_info().rss / (1024 * 1024)
-            if rss_mb > 500:
+            if rss_mb > 1024:
                 return CheckResult(
                     "memory", "warning", False,
-                    f"메모리 {rss_mb:.0f}MB (500MB 초과)", value=rss_mb,
+                    f"메모리 {rss_mb:.0f}MB (1GB 초과)", value=rss_mb,
                 )
             return CheckResult("memory", "info", True, f"메모리 {rss_mb:.0f}MB", value=rss_mb)
         except ImportError:

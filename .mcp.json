@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "kis-trading": {
+      "command": "/home/user/kis-mcp/run-mcp.sh",
+      "args": []
+    }
+  }
+}
