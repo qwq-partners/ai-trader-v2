@@ -2060,6 +2060,77 @@ class SchedulerMixin:
         except Exception as e:
             logger.error(f"[배치스케줄러] 스케줄러 오류: {e}")
 
+    async def _supply_demand_cache_loop(self):
+        """수급 데이터 캐시 저장 루프 — 장중 30분마다 갱신.
+
+        KIS fetch_foreign_institution 결과를 supply_demand_YYYYMMDD.json으로 저장.
+        → 다음날 08:20 아침 스캔에서 swing_screener LCI 계산에 사용.
+
+        설계 원칙:
+        - 09:01~15:30 사이에 30분 간격으로 KIS 수급 조회
+        - 재시작 직후에도 장중이면 즉시 1회 시도 (재시작 빈번해도 안전)
+        - 하루에 한 번이 아닌 여러 번 갱신 → 장중 최신 데이터 유지
+        - 최소 20종목 이상일 때만 저장 (장전 0종목 데이터로 캐시 덮어쓰기 방지)
+        """
+        import json as _json
+        from pathlib import Path as _Path
+
+        _MIN_SYMBOLS = 20  # 저장 허용 최소 종목 수
+        _last_save_ts: float = 0.0  # 마지막 저장 시각
+        _INTERVAL_SEC = 1800  # 30분
+
+        while self.running:
+            try:
+                now = datetime.now()
+                today_str = now.strftime("%Y%m%d")
+                in_market = (now.hour == 9 and now.minute >= 1) or (9 < now.hour < 15) or (now.hour == 15 and now.minute <= 30)
+                import time as _time
+                elapsed = _time.time() - _last_save_ts
+
+                if in_market and elapsed >= _INTERVAL_SEC and self.kis_market_data:
+                    try:
+                        fi_results = await asyncio.gather(
+                            self.kis_market_data.fetch_foreign_institution(market="0001", investor="1"),
+                            self.kis_market_data.fetch_foreign_institution(market="0002", investor="1"),
+                            self.kis_market_data.fetch_foreign_institution(market="0001", investor="2"),
+                            self.kis_market_data.fetch_foreign_institution(market="0002", investor="2"),
+                            return_exceptions=True,
+                        )
+                        sd: dict = {}
+                        for res in fi_results[:2]:
+                            if isinstance(res, list):
+                                for item in res:
+                                    s = item.get("symbol", "")
+                                    if s not in sd:
+                                        sd[s] = {"foreign_net_buy": 0, "inst_net_buy": 0}
+                                    sd[s]["foreign_net_buy"] += item.get("net_buy_qty", 0)
+                        for res in fi_results[2:]:
+                            if isinstance(res, list):
+                                for item in res:
+                                    s = item.get("symbol", "")
+                                    if s not in sd:
+                                        sd[s] = {"foreign_net_buy": 0, "inst_net_buy": 0}
+                                    sd[s]["inst_net_buy"] += item.get("net_buy_qty", 0)
+
+                        if len(sd) >= _MIN_SYMBOLS:
+                            cache_path = _Path.home() / ".cache" / "ai_trader" / f"supply_demand_{today_str}.json"
+                            cache_path.parent.mkdir(parents=True, exist_ok=True)
+                            cache_path.write_text(_json.dumps(sd))
+                            _last_save_ts = _time.time()
+                            logger.info(
+                                f"[수급캐시] 저장: {today_str} ({len(sd)}종목) "
+                                f"— 내일 08:20 LCI 폴백용"
+                            )
+                        else:
+                            logger.debug(f"[수급캐시] {len(sd)}종목 < {_MIN_SYMBOLS} 기준 미달, 저장 스킵")
+                    except Exception as e:
+                        logger.warning(f"[수급캐시] 수집/저장 오류: {e}")
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.debug(f"[수급캐시] 루프 오류: {e}")
+            await asyncio.sleep(60)
+
     async def _pending_cleanup_loop(self):
         """교착 pending 독립 정리 루프 (60초 주기).
 

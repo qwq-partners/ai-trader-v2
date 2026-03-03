@@ -2023,6 +2023,9 @@ class TradingBot(SchedulerMixin):
             # 2-2. 교착 pending 독립 정리 루프 (60초 주기, price event 무관)
             tasks.append(asyncio.create_task(self._pending_cleanup_loop(), name="pending_cleanup"))
 
+            # 2-3. 수급 캐시 저장 루프 (장중 30분마다, 내일 아침 스캔 LCI 폴백용)
+            tasks.append(asyncio.create_task(self._supply_demand_cache_loop(), name="supply_demand_cache"))
+
             # 3. 테마 탐지 루프 실행
             if self.theme_detector:
                 tasks.append(asyncio.create_task(self._run_theme_detection(), name="theme_detector"))
