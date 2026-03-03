@@ -422,6 +422,10 @@ class SwingScreener:
             except Exception as e:
                 logger.warning(f"[스윙스크리너] 수급 데이터 조회 실패: {e}")
 
+        # KIS 성공 시 캐시 저장 (다음날 08:20 아침 스캔 폴백용)
+        if supply_demand:
+            self._save_supply_demand_cache(supply_demand)
+
         # pykrx 전일 수급 폴백: KIS API 0종목 시 (프리장 등)
         if not supply_demand:
             try:
@@ -433,6 +437,12 @@ class SwingScreener:
                     )
             except Exception as e:
                 logger.warning(f"[스윙스크리너] pykrx 전일 수급 조회 실패: {e}")
+
+        # 캐시 파일 폴백: KIS + pykrx 모두 실패 시 (프리장 08:20, KRX 차단 등)
+        if not supply_demand:
+            cached = self._load_supply_demand_cache()
+            if cached:
+                supply_demand = cached
 
         # ── 후보별 수급 데이터 주입 ──
         for candidate in candidates:
@@ -548,6 +558,48 @@ class SwingScreener:
         except Exception as e:
             self._kospi_closes = []
             logger.warning(f"[스윙스크리너] KOSPI 벤치마크 로드 오류: {e}")
+
+    def _save_supply_demand_cache(self, data: Dict[str, Dict[str, int]]) -> None:
+        """수급 데이터를 날짜별 캐시 파일로 저장 (KIS API 성공 시)."""
+        import json
+        from pathlib import Path
+        from datetime import datetime
+        try:
+            cache_dir = Path.home() / ".cache" / "ai_trader"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            date_str = datetime.now().strftime("%Y%m%d")
+            cache_path = cache_dir / f"supply_demand_{date_str}.json"
+            cache_path.write_text(json.dumps(data))
+            logger.debug(f"[스윙스크리너] 수급 캐시 저장: {date_str} ({len(data)}종목)")
+        except Exception as e:
+            logger.debug(f"[스윙스크리너] 수급 캐시 저장 실패: {e}")
+
+    def _load_supply_demand_cache(self) -> Dict[str, Dict[str, int]]:
+        """가장 최근 수급 캐시 로드 (최대 7일 탐색).
+
+        KIS + pykrx 모두 실패 시 (장전 08:20, KRX 차단 등) 사용.
+        전 거래일 장중에 저장된 캐시를 읽어 LCI 계산에 활용.
+        """
+        import json
+        from pathlib import Path
+        from datetime import datetime, timedelta
+        cache_dir = Path.home() / ".cache" / "ai_trader"
+        for days_ago in range(1, 8):
+            target = (datetime.now() - timedelta(days=days_ago)).strftime("%Y%m%d")
+            cache_path = cache_dir / f"supply_demand_{target}.json"
+            if cache_path.exists():
+                try:
+                    data = json.loads(cache_path.read_text())
+                    if data:
+                        logger.info(
+                            f"[스윙스크리너] 수급 캐시 로드: {target} ({len(data)}종목) "
+                            f"← KIS/pykrx 모두 실패로 폴백"
+                        )
+                        return data
+                except Exception as e:
+                    logger.debug(f"[스윙스크리너] 수급 캐시 로드 실패 ({target}): {e}")
+        logger.warning("[스윙스크리너] 수급 캐시 없음 → LCI=None (폴백 불가)")
+        return {}
 
     def _fetch_prev_day_supply_pykrx(self) -> Dict[str, Dict[str, int]]:
         """pykrx로 전일 외국인/기관 순매수 데이터 조회 (동기 함수, asyncio.to_thread 필요)
