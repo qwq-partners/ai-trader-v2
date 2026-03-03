@@ -459,12 +459,13 @@
 
         <!-- ═══ SYSTEM HEALTH ═══ -->
         <div id="health-checks-card" class="card ai d2" style="padding:20px 22px;margin-bottom:16px;display:none;">
-            <div class="card-header">
+            <div id="health-checks-header" class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleHealthChecks()">
                 <span class="dot-h dot" id="health-dot" style="background:var(--acc-green);box-shadow:0 0 8px var(--acc-green);width:6px;height:6px;"></span>
                 시스템 헬스
                 <span id="health-checks-badge" style="margin-left:auto;font-size:.7rem;color:var(--acc-green);font-family:'JetBrains Mono',monospace;background:rgba(52,211,153,.08);padding:3px 10px;border-radius:6px;border:1px solid rgba(52,211,153,.12);">정상</span>
+                <span id="health-checks-chevron" style="margin-left:8px;font-size:.85rem;color:var(--text-muted);transition:transform .2s;display:inline-block;">▾</span>
             </div>
-            <div id="health-checks-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px;"></div>
+            <div id="health-checks-grid" style="display:none;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px;margin-top:12px;"></div>
         </div>
 
         <!-- ═══ PENDING ORDERS ═══ -->

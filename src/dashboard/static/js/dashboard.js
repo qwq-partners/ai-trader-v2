@@ -349,11 +349,20 @@ function renderPendingOrders(orders) {
 // 헬스체크 카드 렌더링
 // ============================================================
 
+function toggleHealthChecks() {
+    const grid = document.getElementById('health-checks-grid');
+    const chevron = document.getElementById('health-checks-chevron');
+    const isCollapsed = grid.style.display === 'none';
+    grid.style.display = isCollapsed ? 'grid' : 'none';
+    if (chevron) chevron.style.transform = isCollapsed ? 'rotate(180deg)' : 'rotate(0deg)';
+}
+
 function renderHealthChecks(checks, failedOnly) {
     const card = document.getElementById('health-checks-card');
     const grid = document.getElementById('health-checks-grid');
     const badge = document.getElementById('health-checks-badge');
     const dot = document.getElementById('health-dot');
+    const chevron = document.getElementById('health-checks-chevron');
 
     if (!checks || checks.length === 0) {
         card.style.display = 'none';
@@ -427,6 +436,16 @@ function renderHealthChecks(checks, failedOnly) {
     }).join('');
 
     grid.innerHTML = items;
+
+    // critical 이상이면 자동 펼침
+    if (hasCritical && grid.style.display === 'none') {
+        grid.style.display = 'grid';
+        if (chevron) chevron.style.transform = 'rotate(180deg)';
+    }
+    // 이미 펼쳐진 상태면 display:grid 유지 (콘텐츠 업데이트만)
+    if (grid.style.display !== 'none') {
+        grid.style.display = 'grid';
+    }
 }
 
 // ============================================================
@@ -449,11 +468,14 @@ function renderExternalAccounts(accounts) {
         const s = acct.summary || {};
         const positions = acct.positions || [];
         const hasError = !!acct.error;
+        const isUSD = acct.currency === 'USD';
+        const fmt = isUSD ? formatUSD : formatCurrency;
+        const fmtPnl = isUSD ? (n => formatUSD(n, 2)) : formatPnl;
 
         // 계좌 요약
         const totalEquity = s.total_equity || 0;
         const stockValue = s.stock_value || 0;
-        const deposit = s.deposit || 0;
+        const deposit = s.deposit;
         const unrealizedPnl = s.unrealized_pnl || 0;
         const purchaseAmt = s.purchase_amount || 0;
         const pnlPct = purchaseAmt > 0 ? (unrealizedPnl / purchaseAmt * 100) : 0;
@@ -463,13 +485,15 @@ function renderExternalAccounts(accounts) {
         if (positions.length > 0) {
             posRows = positions.map(p => {
                 const cls = pnlClass(p.pnl);
+                const qtyDisplay = Number.isInteger(p.qty) ? p.qty : Number(p.qty).toFixed(4);
+                const fmtPrice = isUSD ? formatUSD : formatNumber;
                 return `<tr style="border-bottom:1px solid var(--border-subtle);">
                     <td class="py-1 pr-3" style="font-size:0.82rem; font-weight:500; color:var(--text-primary); white-space:nowrap;">${esc(p.name || p.symbol)} <span style="color:var(--text-muted); font-size:0.68rem;">${esc(p.symbol)}</span></td>
-                    <td class="py-1 pr-3 text-right mono" style="font-size:0.82rem;">${formatNumber(p.current_price)}</td>
-                    <td class="py-1 pr-3 text-right mono" style="font-size:0.82rem; color:var(--text-secondary);">${formatNumber(p.avg_price)}</td>
-                    <td class="py-1 pr-3 text-right mono" style="font-size:0.82rem;">${p.qty}</td>
-                    <td class="py-1 pr-3 text-right mono" style="font-size:0.82rem;">${formatCurrency(p.eval_amt)}</td>
-                    <td class="py-1 pr-3 text-right mono ${cls}" style="font-size:0.82rem;">${formatPnl(p.pnl)}</td>
+                    <td class="py-1 pr-3 text-right mono" style="font-size:0.82rem;">${fmtPrice(p.current_price, isUSD ? 2 : 0)}</td>
+                    <td class="py-1 pr-3 text-right mono" style="font-size:0.82rem; color:var(--text-secondary);">${fmtPrice(p.avg_price, isUSD ? 2 : 0)}</td>
+                    <td class="py-1 pr-3 text-right mono" style="font-size:0.82rem;">${qtyDisplay}</td>
+                    <td class="py-1 pr-3 text-right mono" style="font-size:0.82rem;">${fmt(p.eval_amt)}</td>
+                    <td class="py-1 pr-3 text-right mono ${cls}" style="font-size:0.82rem;">${fmtPnl(p.pnl)}</td>
                     <td class="py-1 text-right mono ${cls}" style="font-size:0.82rem; font-weight:600;">${formatPct(p.pnl_pct)}</td>
                 </tr>`;
             }).join('');
@@ -477,11 +501,16 @@ function renderExternalAccounts(accounts) {
             posRows = '<tr><td colspan="7" style="padding:20px 0; text-align:center; color:var(--text-muted); font-size:0.82rem;">보유 종목 없음</td></tr>';
         }
 
+        // 예수금 표시 (해외계좌는 deposit=null일 수 있음)
+        const depositDisplay = deposit !== null && deposit !== undefined ? fmt(deposit) : '--';
+
         return `<div class="card" style="padding: 24px; margin-bottom: 16px;">
             <div class="card-header">
                 <span class="dot" style="background: var(--accent-purple); box-shadow: 0 0 8px var(--accent-purple);"></span>
                 ${esc(acct.name)} 계좌
                 <span style="margin-left: 8px; font-size: 0.68rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; letter-spacing: 0;">${esc(acct.cano)}</span>
+                ${isUSD ? '<span class="badge badge-blue" style="margin-left:8px;">USD</span>' : ''}
+                ${s.cached ? '<span class="badge badge-yellow" style="margin-left:8px;" title="' + esc(s.cached_at || '') + '">캐시</span>' : ''}
                 ${hasError ? '<span class="badge badge-red" style="margin-left:auto;">오류</span>' : `<span style="margin-left:auto; font-size:0.7rem; color:var(--text-muted); font-family:\'JetBrains Mono\',monospace; background:var(--bg-elevated); padding:3px 10px; border-radius:6px; border:1px solid var(--border-subtle);">${positions.length}종목</span>`}
             </div>
 
@@ -489,19 +518,19 @@ function renderExternalAccounts(accounts) {
             <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:16px;">
                 <div>
                     <div style="font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">총자산</div>
-                    <div class="mono" style="font-size:0.95rem; font-weight:600; color:var(--text-primary);">${formatCurrency(totalEquity)}</div>
+                    <div class="mono" style="font-size:0.95rem; font-weight:600; color:var(--text-primary);">${fmt(totalEquity)}</div>
                 </div>
                 <div>
                     <div style="font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">예수금</div>
-                    <div class="mono" style="font-size:0.95rem; font-weight:500; color:var(--text-secondary);">${formatCurrency(deposit)}</div>
+                    <div class="mono" style="font-size:0.95rem; font-weight:500; color:var(--text-secondary);">${depositDisplay}</div>
                 </div>
                 <div>
                     <div style="font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">주식평가</div>
-                    <div class="mono" style="font-size:0.95rem; font-weight:500; color:var(--text-secondary);">${formatCurrency(stockValue)}</div>
+                    <div class="mono" style="font-size:0.95rem; font-weight:500; color:var(--text-secondary);">${fmt(stockValue)}</div>
                 </div>
                 <div>
                     <div style="font-size:0.68rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px;">평가손익</div>
-                    <div class="mono ${pnlClass(unrealizedPnl)}" style="font-size:0.95rem; font-weight:600;">${formatPnl(unrealizedPnl)} <span style="font-size:0.72rem;">(${formatPct(pnlPct)})</span></div>
+                    <div class="mono ${pnlClass(unrealizedPnl)}" style="font-size:0.95rem; font-weight:600;">${fmtPnl(unrealizedPnl)} <span style="font-size:0.72rem;">(${formatPct(pnlPct)})</span></div>
                 </div>
             </div>
 
@@ -767,19 +796,61 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function loadUSData() {
     try {
-        const [status, portfolio, positions, signals, risk] = await Promise.all([
+        const [status, portfolio, positions, signals, risk, extOvs] = await Promise.all([
             fetch("/api/us-proxy/api/us/status").then(r => r.json()).catch(() => ({ offline: true })),
             fetch("/api/us-proxy/api/us/portfolio").then(r => r.json()).catch(() => ({ offline: true })),
             fetch("/api/us-proxy/api/us/positions").then(r => r.json()).catch(() => []),
             fetch("/api/us-proxy/api/us/signals").then(r => r.ok ? r.json() : []).catch(() => []),
             fetch("/api/us-proxy/api/us/risk").then(r => r.json()).catch(() => null),
+            fetch("/api/accounts/overseas").then(r => r.json()).catch(() => ({ positions: [], summary: {} })),
         ]);
+
+        // 외부 계좌 해외 포지션을 US 포지션에 병합
+        const mergedPositions = [...(positions || [])];
+        if (extOvs.positions && extOvs.positions.length > 0) {
+            for (const p of extOvs.positions) {
+                mergedPositions.push({
+                    symbol: p.symbol,
+                    name: p.name,
+                    strategy: 'IRP',
+                    current_price: p.current_price,
+                    avg_price: p.avg_price,
+                    quantity: p.qty,
+                    market_value: p.eval_amt,
+                    pnl: p.pnl,
+                    pnl_pct: p.pnl_pct,
+                    entry_time: null,
+                    stage: null,
+                });
+            }
+        }
+
+        // 외부 계좌 해외 자산을 US 포트폴리오에 병합
+        // 총자산 = 주문가능금액(deposit) + 주식평가금액(stock_value)
+        const mergedPortfolio = { ...portfolio };
+        const ovsSummary = extOvs.summary || {};
+        const ovsStockValue = ovsSummary.stock_value || 0;
+        const ovsDeposit = ovsSummary.deposit || 0;
+        const ovsTotal = ovsDeposit + ovsStockValue;
+
+        if (!mergedPortfolio.offline && !mergedPortfolio.error) {
+            mergedPortfolio.total_value = (mergedPortfolio.total_value || 0) + ovsTotal;
+            mergedPortfolio.cash = (mergedPortfolio.cash || 0) + ovsDeposit;
+        } else if (ovsTotal > 0) {
+            // US 엔진 오프라인이지만 IRP 해외 데이터는 있음
+            mergedPortfolio.offline = false;
+            mergedPortfolio.error = false;
+            mergedPortfolio.total_value = ovsTotal;
+            mergedPortfolio.cash = ovsDeposit;
+            mergedPortfolio.daily_pnl = 0;
+        }
+
         renderUSStatus(status);
-        renderUSPortfolio(portfolio);
-        renderUSPositions(positions);
+        renderUSPortfolio(mergedPortfolio);
+        renderUSPositions(mergedPositions);
         renderUSSignals(signals);
         renderUSRisk(risk);
-        cachedUSPortfolio = portfolio;
+        cachedUSPortfolio = mergedPortfolio;
         cachedUSSignals = signals;
         updatePortfolioCard();
     } catch (e) {
