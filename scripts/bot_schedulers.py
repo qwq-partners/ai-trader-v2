@@ -2060,6 +2060,25 @@ class SchedulerMixin:
         except Exception as e:
             logger.error(f"[배치스케줄러] 스케줄러 오류: {e}")
 
+    async def _pending_cleanup_loop(self):
+        """교착 pending 독립 정리 루프 (60초 주기).
+
+        price event 없이도 장전/장중/장후 관계없이 stale pending을 주기적으로 해제.
+        CLOSED 세션에는 실행하지 않음 (불필요한 KIS API 호출 방지).
+        """
+        await asyncio.sleep(30)  # 초기 대기 (봇 초기화 완료 후 시작)
+        while self.running:
+            try:
+                session = self._get_current_session()
+                if session != MarketSession.CLOSED:
+                    if hasattr(self, '_cleanup_stale_pending'):
+                        await self._cleanup_stale_pending()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.debug(f"[pending 정리] 오류: {e}")
+            await asyncio.sleep(60)
+
     async def _run_log_cleanup(self):
         """
         로그/캐시 정리 스케줄러

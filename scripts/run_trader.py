@@ -1123,6 +1123,62 @@ class TradingBot(SchedulerMixin):
         except Exception as e:
             logger.error(f"시세 데이터 처리 오류 ({event.symbol}): {e}")
 
+    async def _cleanup_stale_pending(self):
+        """교착 pending 정리 — price event 없이도 독립 실행 가능.
+
+        타임아웃:
+          - 장전 (09:00 미만): 5분  ← 기존 30분에서 단축 (REST/WS 모두 실패 시 조기 해제)
+          - 정규장 이후:       3분
+        """
+        if not self._exit_pending_timestamps:
+            return
+
+        now_time = datetime.now()
+        # 장전에도 5분이면 충분: REST/WS 가격 수신 불가 상태에서 교착 조기 해제
+        stale_minutes = 5 if now_time.hour < 9 else 3
+        stale_cutoff = now_time - timedelta(minutes=stale_minutes)
+        stale = [s for s, t in self._exit_pending_timestamps.items() if t < stale_cutoff]
+
+        for s in stale:
+            # KIS 미체결 주문 먼저 취소 (살아있는 주문 → 장 시작 시 중복 체결 방지)
+            if self.broker and hasattr(self.broker, 'cancel_all_for_symbol'):
+                try:
+                    cancelled = await self.broker.cancel_all_for_symbol(s)
+                    if cancelled:
+                        logger.info(f"[청산 pending] {s} KIS 주문 {cancelled}건 취소 완료")
+                except Exception as e:
+                    logger.warning(f"[청산 pending] {s} KIS 주문 취소 실패: {e}")
+            self._exit_pending_symbols.discard(s)
+            self._exit_pending_timestamps.pop(s, None)
+            # RiskManager pending도 동기화 해제 (매도 영구 차단 방지)
+            if self.engine.risk_manager:
+                await self.engine.risk_manager.clear_pending(s)
+            # ExitManager stage 롤백 (stale timeout = 주문 실패로 간주)
+            if self.exit_manager:
+                self.exit_manager.rollback_stage(s)
+            logger.warning(
+                f"[청산 pending] {s} 타임아웃 해제 ({stale_minutes}분 초과, "
+                f"RiskManager+ExitManager 동기화)"
+            )
+
+        # 엔진 RiskManager에서 이미 해제된 종목 → _exit_pending_symbols 동기화
+        if self._exit_pending_symbols and self.engine.risk_manager:
+            orphaned = [s for s in list(self._exit_pending_symbols)
+                        if s not in self.engine.risk_manager._pending_orders]
+            for s in orphaned:
+                if self.broker and hasattr(self.broker, 'cancel_all_for_symbol'):
+                    try:
+                        cancelled = await self.broker.cancel_all_for_symbol(s)
+                        if cancelled:
+                            logger.info(f"[청산 pending] {s} 고아 KIS 주문 {cancelled}건 취소 완료")
+                    except Exception:
+                        pass
+                self._exit_pending_symbols.discard(s)
+                self._exit_pending_timestamps.pop(s, None)
+                if self.exit_manager:
+                    self.exit_manager.rollback_stage(s)
+                logger.warning(f"[청산 pending] {s} 동기화 해제 (RiskManager에 없음 → 고아 pending 정리)")
+
     async def _check_exit_signal(self, symbol: str, current_price: Decimal):
         """분할 익절/손절 신호 확인"""
         if not self.exit_manager or not self.broker:
@@ -1135,50 +1191,8 @@ class TradingBot(SchedulerMixin):
             logger.info("[엔진] 자동 재개: 일시정지 타이머 만료")
 
         try:
-            # stale pending 클린업 (장중 3분 / 장전 30분 이상 체결 미확인 시 양쪽 pending 모두 해제)
-            if self._exit_pending_timestamps:
-                now_time = datetime.now()
-                # 장전(~09:00)에는 체결 자체가 불가능 → 장 시작까지 대기 (30분)
-                stale_minutes = 30 if now_time.hour < 9 else 3
-                stale_cutoff = now_time - timedelta(minutes=stale_minutes)
-                stale = [s for s, t in self._exit_pending_timestamps.items() if t < stale_cutoff]
-                for s in stale:
-                    # KIS 미체결 주문 먼저 취소 (살아있는 주문 → 장 시작 시 중복 체결 방지)
-                    if self.broker and hasattr(self.broker, 'cancel_all_for_symbol'):
-                        try:
-                            cancelled = await self.broker.cancel_all_for_symbol(s)
-                            if cancelled:
-                                logger.info(f"[청산 pending] {s} KIS 주문 {cancelled}건 취소 완료")
-                        except Exception as e:
-                            logger.warning(f"[청산 pending] {s} KIS 주문 취소 실패: {e}")
-                    self._exit_pending_symbols.discard(s)
-                    self._exit_pending_timestamps.pop(s, None)
-                    # RiskManager pending도 동기화 해제 (매도 영구 차단 방지)
-                    if self.engine.risk_manager:
-                        await self.engine.risk_manager.clear_pending(s)
-                    # ExitManager stage 롤백 (stale timeout = 주문 실패로 간주)
-                    if self.exit_manager:
-                        self.exit_manager.rollback_stage(s)
-                    logger.warning(f"[청산 pending] {s} 타임아웃 해제 ({stale_minutes}분 초과, RiskManager+ExitManager 동기화)")
-
-            # 엔진 RiskManager에서 이미 해제된 종목은 _exit_pending_symbols에서도 동기화 해제
-            if self._exit_pending_symbols and self.engine.risk_manager:
-                orphaned = [s for s in self._exit_pending_symbols
-                            if s not in self.engine.risk_manager._pending_orders]
-                for s in orphaned:
-                    # KIS 미체결 주문 취소 (고아 pending = KIS에 살아있는 주문 가능)
-                    if self.broker and hasattr(self.broker, 'cancel_all_for_symbol'):
-                        try:
-                            cancelled = await self.broker.cancel_all_for_symbol(s)
-                            if cancelled:
-                                logger.info(f"[청산 pending] {s} 고아 KIS 주문 {cancelled}건 취소 완료")
-                        except Exception:
-                            pass
-                    self._exit_pending_symbols.discard(s)
-                    self._exit_pending_timestamps.pop(s, None)
-                    if self.exit_manager:
-                        self.exit_manager.rollback_stage(s)
-                    logger.warning(f"[청산 pending] {s} 동기화 해제 (RiskManager에 없음 → 고아 pending 정리)")
+            # stale pending 클린업 (_pending_cleanup_loop에서도 독립 실행되므로 여기선 위임)
+            await self._cleanup_stale_pending()
 
             # 이미 매도 주문이 진행 중이면 중복 방지 (ExitManager + 전략 SELL 양방향)
             if symbol in self._exit_pending_symbols:
@@ -2005,6 +2019,9 @@ class TradingBot(SchedulerMixin):
             # 2-1. REST 시세 피드 (WS와 병행 — 스크리닝 종목 시세용)
             if self.broker:
                 tasks.append(asyncio.create_task(self._run_rest_price_feed(), name="rest_price_feed"))
+
+            # 2-2. 교착 pending 독립 정리 루프 (60초 주기, price event 무관)
+            tasks.append(asyncio.create_task(self._pending_cleanup_loop(), name="pending_cleanup"))
 
             # 3. 테마 탐지 루프 실행
             if self.theme_detector:
