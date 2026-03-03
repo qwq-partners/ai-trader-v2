@@ -1064,6 +1064,190 @@ class KISBroker(BaseBroker):
             logger.error(f"외부 계좌 조회 오류 ({cano}): {e}")
             return positions, summary
 
+    # 해외 계좌 캐시 디렉토리
+    _OVERSEAS_CACHE_DIR = Path.home() / ".cache" / "ai_trader"
+
+    def _save_overseas_cache(
+        self, cano: str, positions: List[Dict], summary: Dict
+    ) -> None:
+        """해외 계좌 조회 결과를 파일에 캐시 (API 실패 시 폴백용)"""
+        try:
+            self._OVERSEAS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            cache_path = self._OVERSEAS_CACHE_DIR / f"ext_overseas_{cano}.json"
+            cache_data = {
+                "positions": positions,
+                "summary": summary,
+                "updated_at": datetime.now().isoformat(),
+            }
+            cache_path.write_text(
+                json.dumps(cache_data, ensure_ascii=False), encoding="utf-8"
+            )
+        except Exception as e:
+            logger.debug(f"해외 캐시 저장 실패 ({cano}): {e}")
+
+    def _load_overseas_cache(
+        self, cano: str
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """캐시된 해외 계좌 데이터 로드 (API 실패 폴백)"""
+        try:
+            cache_path = self._OVERSEAS_CACHE_DIR / f"ext_overseas_{cano}.json"
+            if not cache_path.exists():
+                return [], {}
+            cache_data = json.loads(cache_path.read_text(encoding="utf-8"))
+            positions = cache_data.get("positions", [])
+            summary = cache_data.get("summary", {})
+            updated = cache_data.get("updated_at", "")
+            if positions or summary:
+                summary["cached"] = True
+                summary["cached_at"] = updated
+                logger.info(f"해외 캐시 로드: {cano} ({len(positions)}종목, 갱신 {updated})")
+            return positions, summary
+        except Exception as e:
+            logger.debug(f"해외 캐시 로드 실패 ({cano}): {e}")
+            return [], {}
+
+    async def get_overseas_positions_for_account(
+        self, cano: str, acnt_prdt_cd: str
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """외부 계좌 해외주식 잔고 조회 (TTTS3012R + TTTS3007R)
+
+        API 실패 시 마지막 성공 캐시를 반환합니다.
+
+        Returns:
+            (positions_list, summary_dict)
+            - positions_list: [{symbol, name, qty, avg_price, current_price,
+                                eval_amt, pnl, pnl_pct}]
+            - summary_dict: {total_equity, stock_value, deposit,
+                             unrealized_pnl, purchase_amount}
+        """
+        if not self.is_connected:
+            if not await self.connect():
+                return self._load_overseas_cache(cano)
+
+        positions: List[Dict[str, Any]] = []
+        summary: Dict[str, Any] = {}
+
+        try:
+            tr_id = "TTTS3012R" if self.config.env == "prod" else "VTTS3012R"
+            url = f"{self.config.base_url}/uapi/overseas-stock/v1/trading/inquire-balance"
+
+            params = {
+                "CANO": cano,
+                "ACNT_PRDT_CD": acnt_prdt_cd,
+                "OVRS_EXCG_CD": "NASD",
+                "TR_CRCY_CD": "USD",
+                "CTX_AREA_FK200": "",
+                "CTX_AREA_NK200": "",
+            }
+
+            data = await self._api_get(url, tr_id, params)
+
+            rt_cd = data.get("rt_cd", "")
+            if str(rt_cd) != "0":
+                # API 실패 → 캐시 폴백
+                msg = data.get("msg1", "")
+                logger.info(f"외부 해외계좌 API 응답 비정상 ({cano}): rt_cd={rt_cd}, msg={msg} → 캐시 폴백")
+                return self._load_overseas_cache(cano)
+
+            # output1: 종목별 보유 내역
+            output1 = data.get("output1", []) or []
+            stock_value = 0.0
+            purchase_amount = 0.0
+
+            for item in output1:
+                if not isinstance(item, dict):
+                    continue
+                # 소수점 주식(fractional) 지원
+                qty_raw = item.get("ovrs_cblc_qty", "0") or "0"
+                try:
+                    qty = float(qty_raw)
+                except (ValueError, TypeError):
+                    qty = 0.0
+                if qty <= 0:
+                    continue
+
+                avg_price = float(item.get("pchs_avg_pric", "0") or "0")
+                current_price = float(item.get("now_pric2", "0") or "0")
+                pnl = float(item.get("frcr_evlu_pfls_amt", "0") or "0")
+                pnl_pct = float(item.get("evlu_pfls_rt", "0") or "0")
+
+                # avg_price 이상값 방어
+                if avg_price <= 0 and current_price > 0 and abs(pnl_pct) < 99.9:
+                    avg_price = current_price / (1 + pnl_pct / 100)
+
+                eval_amt = qty * current_price
+                stock_value += eval_amt
+                purchase_amount += qty * avg_price
+
+                positions.append({
+                    "symbol": item.get("ovrs_pdno", "").strip(),
+                    "name": item.get("ovrs_item_name", "").strip(),
+                    "qty": qty,
+                    "avg_price": avg_price,
+                    "current_price": current_price,
+                    "eval_amt": eval_amt,
+                    "pnl": pnl,
+                    "pnl_pct": pnl_pct,
+                })
+
+            # output2: 계좌 요약
+            output2 = data.get("output2", {})
+            if isinstance(output2, list):
+                output2 = output2[0] if output2 else {}
+            total_pnl = float(output2.get("ovrs_tot_pfls", "0") or "0")
+
+            # 주문가능 USD 조회 (inquire-psamount, TTTS3007R)
+            deposit_usd: Optional[float] = None
+            try:
+                ps_tr_id = "TTTS3007R" if self.config.env == "prod" else "VTTS3007R"
+                ps_url = f"{self.config.base_url}/uapi/overseas-stock/v1/trading/inquire-psamount"
+                ps_params = {
+                    "CANO": cano,
+                    "ACNT_PRDT_CD": acnt_prdt_cd,
+                    "OVRS_EXCG_CD": "NASD",
+                    "OVRS_ORD_UNPR": "1",
+                    "ITEM_CD": "AAPL",
+                }
+                ps_data = await self._api_get(ps_url, ps_tr_id, ps_params)
+                if ps_data.get("rt_cd") == "0":
+                    ps_output = ps_data.get("output", {})
+                    if isinstance(ps_output, list):
+                        ps_output = ps_output[0] if ps_output else {}
+                    deposit_usd = float(ps_output.get("ord_psbl_frcr_amt", "0") or "0")
+            except Exception as e:
+                logger.debug(f"외부 해외계좌 주문가능금액 조회 실패 ({cano}): {e}")
+
+            total_equity = stock_value + (deposit_usd or 0)
+
+            summary = {
+                "total_equity": total_equity,
+                "stock_value": stock_value,
+                "deposit": deposit_usd,
+                "unrealized_pnl": total_pnl,
+                "purchase_amount": purchase_amount,
+            }
+
+            # API 성공 + 실제 데이터 있으면 캐시 갱신
+            if positions or (deposit_usd is not None and deposit_usd > 0):
+                self._save_overseas_cache(cano, positions, summary)
+                logger.info(
+                    f"외부 해외계좌 조회 완료: {cano} ({len(positions)}종목, "
+                    f"평가 ${stock_value:,.2f}, 예수금 ${deposit_usd or 0:,.2f})"
+                )
+                return positions, summary
+
+            # API 성공이지만 0건 → 일시적 빈 응답일 수 있으므로 캐시 폴백
+            cached_pos, cached_sum = self._load_overseas_cache(cano)
+            if cached_pos or cached_sum:
+                logger.info(f"외부 해외계좌 API 0건 응답 → 캐시 폴백 ({cano})")
+                return cached_pos, cached_sum
+
+            return positions, summary
+
+        except Exception as e:
+            logger.error(f"외부 해외계좌 조회 오류 ({cano}): {e} → 캐시 폴백")
+            return self._load_overseas_cache(cano)
+
     async def get_account_balance(self) -> Dict[str, Any]:
         """
         계좌 잔고 조회

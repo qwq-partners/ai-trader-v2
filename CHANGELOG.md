@@ -2,6 +2,37 @@
 
 ---
 
+## [2026-03-03] KR 대시보드 — 외부 계좌 해외주식을 US 섹션에 통합
+
+**수정 파일**:
+- `src/execution/broker/kis_broker.py`: `get_overseas_positions_for_account()` 추가 — TTTS3012R(잔고) + TTTS3007R(주문가능금액) API, 캐시 폴백
+- `src/dashboard/data_collector.py`: `get_ext_overseas_positions()` 메서드 추가 — US 섹션 통합용 별도 조회
+- `src/dashboard/api.py`: `/api/accounts/overseas` 엔드포인트 추가
+- `src/dashboard/static/js/common.js`: `formatUSD()` 유틸리티 함수 추가
+- `src/dashboard/static/js/dashboard.js`: `loadUSData()`에서 IRP 해외 포지션을 US 마켓카드 + 포지션 테이블에 병합
+
+**동작**:
+- `loadUSData()` 시 `/api/accounts/overseas`도 병렬 호출
+- IRP 해외 포지션 → US 보유 포지션 테이블에 strategy='IRP'로 추가
+- IRP 해외 자산/예수금 → US 마켓카드의 총자산/현금에 합산
+- US 엔진 오프라인이어도 IRP 해외 데이터가 있으면 US 카드에 표시
+- 외부 계좌(IRP) 카드에는 국내주식만 표시 (해외 카드 제거)
+- **캐시 폴백**: API 성공 시 `~/.cache/ai_trader/ext_overseas_{cano}.json` 저장, API 실패/0건 시 캐시 로드
+
+---
+
+## [2026-03-03] US 엔진 systemd + 토큰 공유 안정화
+
+**대상**: `ai-trader-us` 리포지토리
+
+**수정 (중요)**:
+- `ai-trader-us.service`: ExecStop 복원 (`-/bin/kill`), MemoryMax 512M→1G, RestartSec 30→90초
+- `kis_auth.py:get_access_token()`: 발급 실패 시 60초 대기 후 캐시 리로드 재시도 (KR/US 토큰 공유 충돌 방지)
+- `kis_us_broker.py:connect()`: 토큰 실패 시 60초 대기 재시도 (RuntimeError 방지)
+- `kis_us_broker.py:_get_balance_settle()`: 신규 추가 — TTTS3012R 빈 응답 시 CTRP6504R 폴백 (기존 AttributeError 크래시 수정)
+
+---
+
 ## [2026-03-02] US 엔진 코드 리뷰 + 엔진 복기 (P0 3건 + P1 5건 + 운영 개선 1건)
 
 **대상**: `ai-trader-us` 리포지토리

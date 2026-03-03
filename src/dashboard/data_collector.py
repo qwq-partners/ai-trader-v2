@@ -1040,6 +1040,7 @@ class DashboardDataCollector:
 
             result = []
             for name, cano, acnt_prdt_cd in ext_accounts:
+                # 국내주식 (기존)
                 try:
                     positions, summary = await broker.get_positions_for_account(
                         cano, acnt_prdt_cd
@@ -1063,6 +1064,53 @@ class DashboardDataCollector:
             self._ext_accounts_cache = result
             self._ext_accounts_cache_ts = now
             return result
+
+    async def get_ext_overseas_positions(self) -> dict:
+        """외부 계좌 해외주식 조회 — US 섹션 통합용
+
+        Returns:
+            {
+                "positions": [{symbol, name, qty, avg_price, current_price,
+                               eval_amt, pnl, pnl_pct}],
+                "summary": {total_equity, stock_value, deposit,
+                            unrealized_pnl, purchase_amount},
+                "cached": bool,
+            }
+        """
+        bot = self.bot
+        ext_accounts = getattr(bot, '_external_accounts', [])
+        broker = getattr(bot, 'broker', None)
+        if not ext_accounts or not broker:
+            return {"positions": [], "summary": {}}
+
+        all_positions = []
+        merged_summary = {
+            "total_equity": 0, "stock_value": 0, "deposit": 0,
+            "unrealized_pnl": 0, "purchase_amount": 0,
+        }
+        cached = False
+
+        for name, cano, acnt_prdt_cd in ext_accounts:
+            try:
+                ovs_pos, ovs_sum = await broker.get_overseas_positions_for_account(
+                    cano, acnt_prdt_cd
+                )
+                if ovs_pos or ovs_sum:
+                    all_positions.extend(ovs_pos)
+                    for key in merged_summary:
+                        val = ovs_sum.get(key)
+                        if val is not None:
+                            merged_summary[key] += val
+                    if ovs_sum.get("cached"):
+                        cached = True
+            except Exception as e:
+                logger.warning(f"해외주식 조회 실패 {name}(****{cano[-4:]}): {e}")
+
+        return {
+            "positions": all_positions,
+            "summary": merged_summary,
+            "cached": cached,
+        }
 
     # ----------------------------------------------------------
     # 자산 히스토리 (Equity History)

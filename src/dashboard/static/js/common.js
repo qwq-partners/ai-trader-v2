@@ -106,6 +106,14 @@ function formatCurrency(n) {
     return formatNumber(n, 0);
 }
 
+function formatUSD(n, decimals = 2) {
+    if (n === null || n === undefined || isNaN(n)) return '--';
+    return '$' + Number(n).toLocaleString('en-US', {
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals,
+    });
+}
+
 function formatPct(n, decimals = 2) {
     if (n === null || n === undefined || isNaN(n)) return '--';
     const prefix = n > 0 ? '+' : '';

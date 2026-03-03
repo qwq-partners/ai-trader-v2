@@ -36,6 +36,7 @@ def setup_api_routes(app: web.Application, data_collector):
     app.router.add_get("/api/equity-curve", handler.get_equity_curve)
     app.router.add_get("/api/health-checks", handler.get_health_checks)
     app.router.add_get("/api/accounts/positions", handler.get_external_accounts)
+    app.router.add_get("/api/accounts/overseas", handler.get_ext_overseas)
     app.router.add_get("/api/equity-history", handler.get_equity_history)
     app.router.add_get("/api/equity-history/positions", handler.get_equity_history_positions)
     app.router.add_get("/api/daily-review", handler.get_daily_review)
@@ -142,6 +143,9 @@ class APIHandler:
 
     async def get_external_accounts(self, request: web.Request) -> web.Response:
         return web.json_response(await self.dc.get_external_accounts())
+
+    async def get_ext_overseas(self, request: web.Request) -> web.Response:
+        return web.json_response(await self.dc.get_ext_overseas_positions())
 
     async def get_equity_history(self, request: web.Request) -> web.Response:
         date_from = request.query.get("from")

@@ -825,24 +825,19 @@ async function loadUSData() {
             }
         }
 
-        // 외부 계좌 해외 자산을 US 포트폴리오에 병합
-        // 총자산 = 주문가능금액(deposit) + 주식평가금액(stock_value)
+        // IRP 해외 자산으로 US 포트폴리오 구성
+        // 총자산 = 주문가능달러(deposit) + 주식평가금액(stock_value)
+        // US 엔진과 IRP가 동일 계좌이므로 합산 아닌 대체
         const mergedPortfolio = { ...portfolio };
         const ovsSummary = extOvs.summary || {};
         const ovsStockValue = ovsSummary.stock_value || 0;
         const ovsDeposit = ovsSummary.deposit || 0;
-        const ovsTotal = ovsDeposit + ovsStockValue;
 
-        if (!mergedPortfolio.offline && !mergedPortfolio.error) {
-            mergedPortfolio.total_value = (mergedPortfolio.total_value || 0) + ovsTotal;
-            mergedPortfolio.cash = (mergedPortfolio.cash || 0) + ovsDeposit;
-        } else if (ovsTotal > 0) {
-            // US 엔진 오프라인이지만 IRP 해외 데이터는 있음
+        if (ovsStockValue > 0 || ovsDeposit > 0) {
             mergedPortfolio.offline = false;
             mergedPortfolio.error = false;
-            mergedPortfolio.total_value = ovsTotal;
+            mergedPortfolio.total_value = ovsDeposit + ovsStockValue;
             mergedPortfolio.cash = ovsDeposit;
-            mergedPortfolio.daily_pnl = 0;
         }
 
         renderUSStatus(status);
